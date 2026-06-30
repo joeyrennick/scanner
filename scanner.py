@@ -1,5 +1,6 @@
 from config import TICKERS_FILE, OUTPUT_FILE
 from data.market_data import download_price_data
+from indicators.atr import add_atr
 from indicators.moving_averages import add_moving_averages
 from indicators.relative_strength import calculate_relative_strength
 from scoring.score_engine import calculate_score

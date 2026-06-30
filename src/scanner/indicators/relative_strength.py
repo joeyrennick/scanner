@@ -1,4 +1,4 @@
-from config import LOOKBACK_DAYS
+from scanner.config import LOOKBACK_DAYS
 
 def percent_change(data):
     close = data["Close"]

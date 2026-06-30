@@ -5,7 +5,7 @@ from scanner.models.stock_analysis import StockAnalysis
 from scanner.indicators.volume import add_volume_indicators
 from scanner.indicators.moving_averages import add_moving_averages
 from scanner.indicators.relative_strength import calculate_relative_strength
-from scanner.scoring.score_engine import calculate_score
+from scanner.scoring.score_engine import calculate_score_breakdown
 import pandas as pd
 
 def load_tickers(filename):
@@ -31,7 +31,15 @@ def analyze_ticker(ticker, spy_data):
     relative_volume = latest["RelativeVolume"].item()
 
     rs = calculate_relative_strength(data, spy_data)
-    score = calculate_score(price, ma20, ma50, ma200, rs)
+    score_breakdown = calculate_score_breakdown(
+            price=price,
+            ma20=ma20,
+            ma50=ma50,
+            ma200=ma200,
+            relative_strength=rs,
+            relative_volume=relative_volume,
+            atr14=atr14,
+        )
 
     return StockAnalysis(
         ticker=ticker,
@@ -40,7 +48,7 @@ def analyze_ticker(ticker, spy_data):
         ma50=ma50,
         ma200=ma200,
         relative_strength=rs,
-        score=score,
+        score_breakdown=score_breakdown,
         atr14=atr14,
         avg_volume_20=avg_volume_20,
         relative_volume=relative_volume

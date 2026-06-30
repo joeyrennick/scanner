@@ -7,6 +7,7 @@ from scanner.indicators.volume import add_volume_indicators
 from scanner.indicators.moving_averages import add_moving_averages
 from scanner.indicators.relative_strength import calculate_relative_strength
 from scanner.scoring.score_engine import calculate_score_breakdown
+from scanner.utils.logger import setup_logging
 import pandas as pd
 
 def load_tickers(filename):
@@ -14,13 +15,14 @@ def load_tickers(filename):
         return [line.strip().upper() for line in file if line.strip()]
 
 def main():
+    logger = setup_logging()
     tickers = load_tickers(TICKERS_FILE)
     spy = download_price_data("SPY")
     results = []
     analyzer = MarketAnalyzer()
 
     for ticker in tickers:
-        print(f"Analyzing {ticker}...")
+        logger.info(f"Analyzing {ticker}...")
         r = analyzer.analyze(ticker, spy)
         if r:
             results.append(r)
@@ -28,7 +30,7 @@ def main():
     df = pd.DataFrame([result.to_dict() for result in results]).sort_values(by="Score", ascending=False)
     print(df)
     df.to_csv(OUTPUT_FILE, index=False)
-    print(f"Saved to {OUTPUT_FILE}")
+    logger.info(f"Saved to {OUTPUT_FILE}")
 
 if __name__ == "__main__":
     main()

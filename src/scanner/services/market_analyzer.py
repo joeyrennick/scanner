@@ -6,11 +6,13 @@ from scanner.indicators.volume import add_volume_indicators
 from scanner.models.market_data import MarketData
 from scanner.models.stock_analysis import StockAnalysis
 from scanner.scoring.score_engine import calculate_score_breakdown
+import logging
 
 
 class MarketAnalyzer:
-
+    logger = logging.getLogger("scanner")
     def analyze(self, ticker: str, spy_return: float) -> StockAnalysis:
+        self.logger.info(f"Downloading {ticker}")
         data = download_price_data(ticker)
 
         data = add_moving_averages(data)
@@ -33,6 +35,7 @@ class MarketAnalyzer:
             relative_volume=market_data.relative_volume,
             atr14=market_data.atr14,
         )
+        self.logger.info(f"Finished analyzing {ticker}")
 
         return StockAnalysis(
             ticker=market_data.ticker,

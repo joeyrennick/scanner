@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from scanner.scoring.score_engine import ScoreBreakdown
+from scanner.models.strategy_result import StrategyResult
 
 
 @dataclass
@@ -14,6 +15,7 @@ class StockAnalysis:
     avg_volume_20: float
     relative_volume: float
     score_breakdown: ScoreBreakdown
+    strategy_results: list[StrategyResult]
 
     def to_dict(self) -> dict:
         return {
@@ -32,4 +34,11 @@ class StockAnalysis:
             "Volume Score": self.score_breakdown.volume_score,
             "Volatility Score": self.score_breakdown.volatility_score,
             "Score": self.score_breakdown.total_score,
+            "Pullback Strategy": "YES" if self.strategy_triggered("Pullback Strategy") else "NO"
         }
+    
+    def strategy_triggered(self, strategy_name: str) -> bool:
+        return any(
+            result.name == strategy_name and result.triggered
+            for result in self.strategy_results
+        )

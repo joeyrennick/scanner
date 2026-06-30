@@ -6,6 +6,7 @@ from scanner.indicators.volume import add_volume_indicators
 from scanner.models.market_data import MarketData
 from scanner.models.stock_analysis import StockAnalysis
 from scanner.scoring.score_engine import calculate_score_breakdown
+from scanner.strategies.strategy_engine import StrategyEngine
 import logging
 
 
@@ -37,6 +38,11 @@ class MarketAnalyzer:
         )
         self.logger.info(f"Finished analyzing {ticker}")
 
+        strategy_results = StrategyEngine().evaluate(
+            market_data=market_data,
+            relative_strength=rs,
+        )
+
         return StockAnalysis(
             ticker=market_data.ticker,
             price=market_data.price,
@@ -48,4 +54,5 @@ class MarketAnalyzer:
             avg_volume_20=market_data.avg_volume_20,
             relative_volume=market_data.relative_volume,
             score_breakdown=score_breakdown,
+            strategy_results=strategy_results
         )

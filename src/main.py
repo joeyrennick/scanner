@@ -1,5 +1,6 @@
 from scanner.config import TICKERS_FILE, OUTPUT_FILE
 from scanner.data.market_data import download_price_data
+from scanner.indicators.atr import add_atr
 from scanner.models.stock_analysis import StockAnalysis
 from scanner.indicators.moving_averages import add_moving_averages
 from scanner.indicators.relative_strength import calculate_relative_strength
@@ -16,25 +17,28 @@ def analyze_ticker(ticker, spy_data):
         return None
 
     data = add_moving_averages(data)
+    data = add_atr(data)
     latest = data.iloc[-1]
 
     price = latest["Close"].item()
     ma20 = latest["MA20"].item()
     ma50 = latest["MA50"].item()
     ma200 = latest["MA200"].item()
+    atr14 = latest["ATR14"].item()
 
     rs = calculate_relative_strength(data, spy_data)
     score = calculate_score(price, ma20, ma50, ma200, rs)
 
     return StockAnalysis(
-    ticker=ticker,
-    price=price,
-    ma20=ma20,
-    ma50=ma50,
-    ma200=ma200,
-    relative_strength=rs,
-    score=score,
-)
+        ticker=ticker,
+        price=price,
+        ma20=ma20,
+        ma50=ma50,
+        ma200=ma200,
+        relative_strength=rs,
+        score=score,
+        atr14=atr14
+    )
 
 def main():
     tickers = load_tickers(TICKERS_FILE)

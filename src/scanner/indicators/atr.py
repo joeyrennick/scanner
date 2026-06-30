@@ -1,11 +1,21 @@
+import pandas as pd
+
+
 def add_atr(data, window=14):
     data = data.copy()
 
-    high_low = data["High"] - data["Low"]
-    high_close = (data["High"] - data["Close"].shift()).abs()
-    low_close = (data["Low"] - data["Close"].shift()).abs()
+    high = data["High"]
+    low = data["Low"]
+    close = data["Close"]
 
-    true_range = high_low.combine(high_close, max).combine(low_close, max)
+    high_low = high - low
+    high_close = (high - close.shift()).abs()
+    low_close = (low - close.shift()).abs()
+
+    true_range = pd.concat(
+        [high_low, high_close, low_close],
+        axis=1
+    ).max(axis=1)
 
     data["ATR14"] = true_range.rolling(window=window).mean()
 

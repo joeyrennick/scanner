@@ -11,6 +11,8 @@ class StockAnalysis:
     relative_strength: float
     atr14: float
     score: int
+    avg_volume_20: float
+    relative_volume: float
 
     def to_dict(self) -> dict:
         return {
@@ -23,4 +25,6 @@ class StockAnalysis:
             "ATR14": round(self.atr14, 2),
             "Stop 2ATR": round(self.price - (2 * self.atr14), 2),
             "Score": self.score,
+            "Avg Volume 20": f"{self.avg_volume_20:,.0f}",
+            "Relative Volume": round(self.relative_volume, 2)
         }

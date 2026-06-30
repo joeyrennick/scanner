@@ -1,4 +1,4 @@
-from scanner.config import TICKERS_FILE, OUTPUT_FILE
+from scanner.config.settings import settings
 from scanner.data.market_data import download_price_data
 from scanner.indicators.atr import add_atr
 from scanner.services.market_analyzer import MarketAnalyzer
@@ -16,8 +16,8 @@ def load_tickers(filename):
 
 def main():
     logger = setup_logging()
-    tickers = load_tickers(TICKERS_FILE)
-    spy = download_price_data("SPY")
+    tickers = load_tickers(settings.tickers_file)
+    spy = download_price_data(settings.benchmark_ticker)
     results = []
     analyzer = MarketAnalyzer()
 
@@ -29,8 +29,8 @@ def main():
 
     df = pd.DataFrame([result.to_dict() for result in results]).sort_values(by="Score", ascending=False)
     print(df)
-    df.to_csv(OUTPUT_FILE, index=False)
-    logger.info(f"Saved to {OUTPUT_FILE}")
+    df.to_csv(settings.output_file, index=False)
+    logger.info(f"Saved results to {settings.output_file}")
 
 if __name__ == "__main__":
     main()

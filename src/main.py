@@ -1,5 +1,6 @@
 from scanner.config import TICKERS_FILE, OUTPUT_FILE
 from scanner.data.market_data import download_price_data
+from scanner.models.stock_analysis import StockAnalysis
 from scanner.indicators.moving_averages import add_moving_averages
 from scanner.indicators.relative_strength import calculate_relative_strength
 from scanner.scoring.score_engine import calculate_score
@@ -25,15 +26,15 @@ def analyze_ticker(ticker, spy_data):
     rs = calculate_relative_strength(data, spy_data)
     score = calculate_score(price, ma20, ma50, ma200, rs)
 
-    return {
-        "Ticker": ticker,
-        "Price": round(price,2),
-        "20MA": round(ma20,2),
-        "50MA": round(ma50,2),
-        "200MA": round(ma200,2),
-        "Relative Strength": round(rs,2),
-        "Score": score
-    }
+    return StockAnalysis(
+    ticker=ticker,
+    price=price,
+    ma20=ma20,
+    ma50=ma50,
+    ma200=ma200,
+    relative_strength=rs,
+    score=score,
+)
 
 def main():
     tickers = load_tickers(TICKERS_FILE)
@@ -46,7 +47,7 @@ def main():
         if r:
             results.append(r)
 
-    df = pd.DataFrame(results).sort_values(by="Score", ascending=False)
+    df = pd.DataFrame([result.to_dict() for result in results]).sort_values(by="Score", ascending=False)
     print(df)
     df.to_csv(OUTPUT_FILE, index=False)
     print(f"Saved to {OUTPUT_FILE}")

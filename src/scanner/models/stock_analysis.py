@@ -39,7 +39,13 @@ class StockAnalysis:
             "Pullback: Near 20MA ≤ 3%": self.strategy_check("Pullback Strategy", "Near 20MA ≤ 3%"),
             "Pullback: Relative Volume ≥ 1": self.strategy_check("Pullback Strategy", "Relative Volume ≥ 1"),
             "Pullback: Relative Strength > 0": self.strategy_check("Pullback Strategy", "Relative Strength > 0"),
-            "Pullback Strategy": "YES" if self.strategy_triggered("Pullback Strategy") else "NO"
+            "Pullback Strategy": "YES" if self.strategy_triggered("Pullback Strategy") else "NO",
+            "Breakout: Near 52W High": self.strategy_check("Breakout Strategy", "Near 52-Week High"),
+            "Breakout: Price > 50MA": self.strategy_check("Breakout Strategy", "Price > 50MA"),
+            "Breakout: Price > 200MA": self.strategy_check("Breakout Strategy", "Price > 200MA"),
+            "Breakout: Relative Volume ≥ 1.2": self.strategy_check("Breakout Strategy", "Relative Volume ≥ 1.2"),
+            "Breakout: Relative Strength > 0": self.strategy_check("Breakout Strategy", "Relative Strength > 0"),
+            "Breakout Strategy": self.strategy_triggered("Breakout Strategy")
         }
     
     def strategy_triggered(self, strategy_name: str) -> bool:
@@ -52,5 +58,12 @@ class StockAnalysis:
         for result in self.strategy_results:
             if result.name == strategy_name:
                 return "YES" if result.checks.get(check_name, False) else "NO"
+
+        return "NO"
+    
+    def strategy_triggered(self, strategy_name: str) -> str:
+        for result in self.strategy_results:
+            if result.name == strategy_name:
+                return "YES" if result.triggered else "NO"
 
         return "NO"

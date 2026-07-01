@@ -2,6 +2,7 @@ from scanner.models.market_data import MarketData
 from scanner.models.strategy_result import StrategyResult
 from scanner.strategies.base_strategy import BaseStrategy
 from scanner.strategies.pullback_strategy import PullbackStrategy
+from scanner.strategies.breakout_strategy import BreakoutStrategy
 
 
 class StrategyEngine:
@@ -9,6 +10,7 @@ class StrategyEngine:
     def __init__(self, strategies: list[BaseStrategy] | None = None):
         self.strategies = strategies or [
             PullbackStrategy(),
+            BreakoutStrategy(),
         ]
 
     def evaluate(

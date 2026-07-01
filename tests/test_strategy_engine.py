@@ -14,6 +14,7 @@ def create_market_data(
 ):
     history = pd.DataFrame({
         "Close": [price],
+        "High": [price],
         "MA20": [ma20],
         "MA50": [ma50],
         "MA200": [ma200],

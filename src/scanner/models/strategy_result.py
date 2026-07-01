@@ -7,3 +7,4 @@ class StrategyResult:
     triggered: bool
     score: int
     reason: str
+    checks: dict[str, bool]

@@ -18,7 +18,7 @@ class StockAnalysis:
     strategy_results: list[StrategyResult]
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "Ticker": self.ticker,
             "Price": round(self.price, 2),
             "20MA": round(self.ma20, 2),
@@ -34,19 +34,17 @@ class StockAnalysis:
             "Volume Score": self.score_breakdown.volume_score,
             "Volatility Score": self.score_breakdown.volatility_score,
             "Score": self.score_breakdown.total_score,
-            "Pullback: Price > 200MA": self.strategy_check("Pullback Strategy", "Price > 200MA"),
-            "Pullback: 50MA > 200MA": self.strategy_check("Pullback Strategy", "50MA > 200MA"),
-            "Pullback: Near 20MA ≤ 3%": self.strategy_check("Pullback Strategy", "Near 20MA ≤ 3%"),
-            "Pullback: Relative Volume ≥ 1": self.strategy_check("Pullback Strategy", "Relative Volume ≥ 1"),
-            "Pullback: Relative Strength > 0": self.strategy_check("Pullback Strategy", "Relative Strength > 0"),
-            "Pullback Strategy": "YES" if self.strategy_triggered("Pullback Strategy") else "NO",
-            "Breakout: Near 52W High": self.strategy_check("Breakout Strategy", "Near 52-Week High"),
-            "Breakout: Price > 50MA": self.strategy_check("Breakout Strategy", "Price > 50MA"),
-            "Breakout: Price > 200MA": self.strategy_check("Breakout Strategy", "Price > 200MA"),
-            "Breakout: Relative Volume ≥ 1.2": self.strategy_check("Breakout Strategy", "Relative Volume ≥ 1.2"),
-            "Breakout: Relative Strength > 0": self.strategy_check("Breakout Strategy", "Relative Strength > 0"),
-            "Breakout Strategy": self.strategy_triggered("Breakout Strategy")
         }
+            
+        for strategy_result in self.strategy_results:
+            strategy_name = strategy_result.name.replace(" Strategy", "")
+
+            for check_name, passed in strategy_result.checks.items():
+                data[f"{strategy_name}: {check_name}"] = "YES" if passed else "NO"
+
+            data[strategy_result.name] = "YES" if strategy_result.triggered else "NO"
+
+        return data
     
     def strategy_triggered(self, strategy_name: str) -> bool:
         return any(

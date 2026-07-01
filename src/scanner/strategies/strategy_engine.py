@@ -3,12 +3,14 @@ from scanner.models.strategy_result import StrategyResult
 from scanner.strategies.base_strategy import BaseStrategy
 from scanner.strategies.pullback_strategy import PullbackStrategy
 from scanner.strategies.breakout_strategy import BreakoutStrategy
+from scanner.strategies.minervini_trend_template import MinerviniTrendTemplate
 
 
 class StrategyEngine:
 
     def __init__(self, strategies: list[BaseStrategy] | None = None):
         self.strategies = strategies or [
+            MinerviniTrendTemplate(),
             PullbackStrategy(),
             BreakoutStrategy(),
         ]

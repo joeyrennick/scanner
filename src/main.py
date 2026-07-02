@@ -51,10 +51,18 @@ def main():
                 logger.warning(f"[{completed}/{len(tickers)}] Skipping {ticker}: {e}")
 
 
+    ENTRY_STRATEGIES = {
+        "Pullback Strategy",
+        "Breakout Strategy",
+    }
+
     trade_candidates = [
         result
         for result in results
-        if any(strategy.triggered for strategy in result.strategy_results)
+        if any(
+            strategy.triggered and strategy.name in ENTRY_STRATEGIES
+            for strategy in result.strategy_results
+        )
     ]
 
     if trade_candidates:

@@ -16,8 +16,8 @@ class Backtester:
         hold_days: int = 5,
     ) -> BacktestResult:
         trades = []
-        
-        for index in range(min_history_days, len(history) - hold_days -1):
+
+        for index in range(min_history_days, len(history) - hold_days - 1):
             historical_slice = history.iloc[: index + 1]
 
             market_data = MarketData(
@@ -33,6 +33,7 @@ class Backtester:
             if result.triggered:
                 entry_index = index + 1
                 exit_index = entry_index + hold_days
+
                 entry_price = history.iloc[entry_index]["Close"]
                 exit_price = history.iloc[exit_index]["Close"]
 
@@ -41,7 +42,7 @@ class Backtester:
 
                 if hasattr(exit_price, "item"):
                     exit_price = exit_price.item()
-                    
+
                 trades.append(
                     Trade(
                         ticker=ticker,

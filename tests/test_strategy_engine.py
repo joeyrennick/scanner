@@ -1,9 +1,11 @@
+from scanner.strategies.pullback_strategy import PullbackStrategy
 from scanner.strategies.strategy_engine import StrategyEngine
 from tests.market_data_factory import create_market_data
 
 
 def test_pullback_strategy_triggers():
-    engine = StrategyEngine()
+    engine = StrategyEngine(strategies=[PullbackStrategy()])
+
     market_data = create_market_data(
         start_price=100,
         ma20=126,
@@ -23,7 +25,7 @@ def test_pullback_strategy_triggers():
 
 
 def test_pullback_strategy_does_not_trigger_when_below_200ma():
-    engine = StrategyEngine()
+    engine = StrategyEngine(strategies=[PullbackStrategy()])
 
     market_data = create_market_data(
         start_price=75,

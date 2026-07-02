@@ -1,10 +1,19 @@
 import argparse
+import pandas as pd
+import os
 
 from scanner.backtesting.backtest_optimizer import BacktestOptimizer
 from scanner.backtesting.backtest_reporter import BacktestReporter
 from scanner.backtesting.backtest_service import BacktestService
 from scanner.strategies.strategy_registry import StrategyRegistry
 
+def export_trades(result, output_file: str):
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+
+    df = pd.DataFrame([trade.to_dict() for trade in result.trades])
+    df.to_csv(output_file, index=False)
+
+    print(f"Exported {len(result.trades)} trades to {output_file}")
 
 def main():
     parser = argparse.ArgumentParser()
@@ -20,6 +29,10 @@ def main():
     parser.add_argument("--hold-days", type=int, default=5)
     parser.add_argument("--compare-hold-days", nargs="+", type=int)
     parser.add_argument("--optimize-hold-days", action="store_true")
+    parser.add_argument(
+        "--export-trades",
+        help="Path to export individual backtest trades as CSV.",
+    )
 
     args = parser.parse_args()
 
@@ -69,6 +82,10 @@ def main():
         )
 
         reporter.print_result(result, args.hold_days)
+
+        if args.export_trades:
+            export_trades(result, args.export_trades)
+
 
 
 if __name__ == "__main__":

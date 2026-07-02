@@ -3,6 +3,7 @@ from scanner.backtesting.backtester import Backtester
 from scanner.indicators.relative_strength import calculate_relative_strength
 from scanner.services.market_data_service import MarketDataService
 from scanner.universe.universe_provider import UniverseProvider
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 class BacktestService:
@@ -43,28 +44,40 @@ class BacktestService:
 
         all_trades = []
         skipped = []
+        max_workers = 20
 
-        print(f"Backtesting {len(tickers)} stocks...")
+        def run_one(ticker: str):
+            history = self.market_data_service.get_history(ticker, period="5y")
+            relative_strength = calculate_relative_strength(history, benchmark)
 
-        for index, ticker in enumerate(tickers, start=1):
-            print(f"[{index}/{len(tickers)}] {ticker}")
+            return Backtester().run(
+                ticker=ticker,
+                history=history,
+                strategy=strategy,
+                relative_strength=relative_strength,
+                hold_days=hold_days,
+            )
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(run_one, ticker): ticker
+                for ticker in tickers
+            }
 
-            try:
-                history = self.market_data_service.get_history(ticker, period="5y")
-                relative_strength = calculate_relative_strength(history, benchmark)
+            completed = 0
 
-                result = Backtester().run(
-                    ticker=ticker,
-                    history=history,
-                    strategy=strategy,
-                    relative_strength=relative_strength,
-                    hold_days=hold_days,
-                )
+            for future in as_completed(futures):
+                completed += 1
+                ticker = futures[future]
 
-                all_trades.extend(result.trades)
+                try:
+                    result = future.result()
+                    all_trades.extend(result.trades)
+                    print(f"[{completed}/{len(tickers)}] Finished {ticker}")
 
-            except Exception as e:
-                skipped.append((ticker, str(e)))
+                except Exception as e:
+                    skipped.append((ticker, str(e)))
+                    print(f"[{completed}/{len(tickers)}] Skipped {ticker}: {e}")
 
         print(f"Skipped: {len(skipped)}")
 

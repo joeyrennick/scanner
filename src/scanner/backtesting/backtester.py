@@ -43,12 +43,27 @@ class Backtester:
                 if hasattr(exit_price, "item"):
                     exit_price = exit_price.item()
 
+                entry_label = history.index[entry_index]
+                exit_label = history.index[exit_index]
+
+                entry_date = (
+                    entry_label.date()
+                    if hasattr(entry_label, "date")
+                    else entry_label
+                )
+
+                exit_date = (
+                    exit_label.date()
+                    if hasattr(exit_label, "date")
+                    else exit_label
+                )
+                
                 trades.append(
                     Trade(
                         ticker=ticker,
                         strategy_name=strategy.name,
-                        entry_index=entry_index,
-                        exit_index=exit_index,
+                        entry_date=entry_date,
+                        exit_date=exit_date,
                         entry_price=entry_price,
                         exit_price=exit_price,
                     )

@@ -1,10 +1,12 @@
 from scanner.models.market_data import MarketData
 from scanner.models.strategy_result import StrategyResult
 from scanner.strategies.base_strategy import BaseStrategy
+from scanner.strategies.strategy_category import StrategyCategory
 
 
 class MinerviniTrendTemplate(BaseStrategy):
     name = "Minervini Trend Template"
+    category = StrategyCategory.FILTER
 
     def evaluate(
         self,
@@ -36,6 +38,7 @@ class MinerviniTrendTemplate(BaseStrategy):
 
         return StrategyResult(
             name=self.name,
+            category=self.category,
             triggered=triggered,
             score=30 if triggered else 0,
             reason=(

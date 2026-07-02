@@ -1,9 +1,12 @@
 from dataclasses import dataclass
 
+from scanner.strategies.strategy_category import StrategyCategory
 
-@dataclass(frozen=True)
+
+@dataclass
 class StrategyResult:
     name: str
+    category: StrategyCategory
     triggered: bool
     score: int
     reason: str

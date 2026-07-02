@@ -7,6 +7,7 @@ from scanner.config.settings import settings
 from scanner.data.market_data import download_price_data
 from scanner.services.market_analyzer import MarketAnalyzer
 from scanner.universe.universe_provider import UniverseProvider
+from scanner.strategies.strategy_category import StrategyCategory
 from scanner.utils.logger import setup_logging
 
 
@@ -51,16 +52,11 @@ def main():
                 logger.warning(f"[{completed}/{len(tickers)}] Skipping {ticker}: {e}")
 
 
-    ENTRY_STRATEGIES = {
-        "Pullback Strategy",
-        "Breakout Strategy",
-    }
-
     trade_candidates = [
         result
         for result in results
         if any(
-            strategy.triggered and strategy.name in ENTRY_STRATEGIES
+            strategy.triggered and strategy.category == StrategyCategory.ENTRY
             for strategy in result.strategy_results
         )
     ]

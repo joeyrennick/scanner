@@ -1,15 +1,17 @@
 from scanner.models.market_data import MarketData
 from scanner.models.strategy_result import StrategyResult
 from scanner.strategies.base_strategy import BaseStrategy
+from scanner.strategies.strategy_category import StrategyCategory
 
 
 class PullbackStrategy(BaseStrategy):
     name = "Pullback Strategy"
+    category = StrategyCategory.ENTRY
 
     def evaluate(
-    self,
-    market_data: MarketData,
-    relative_strength: float,
+        self,
+        market_data: MarketData,
+        relative_strength: float,
     ) -> StrategyResult:
         checks = {
             "Price > 200MA": market_data.price > market_data.ma200,
@@ -23,6 +25,7 @@ class PullbackStrategy(BaseStrategy):
 
         return StrategyResult(
             name=self.name,
+            category=self.category,
             triggered=triggered,
             score=20 if triggered else 0,
             reason=(

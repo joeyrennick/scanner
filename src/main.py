@@ -63,7 +63,7 @@ def main():
 
     if trade_candidates:
         df = pd.DataFrame([result.to_dict() for result in trade_candidates])
-        df = df.sort_values(by="Score", ascending=False)
+        df = df.sort_values(by="Composite Score", ascending=False)
     else:
         logger.info("No trade candidates found.")
         df = pd.DataFrame()

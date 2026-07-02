@@ -1,6 +1,7 @@
 from dataclasses import dataclass
-from scanner.scoring.score_engine import ScoreBreakdown
+
 from scanner.models.strategy_result import StrategyResult
+from scanner.scoring.score_engine import ScoreBreakdown
 
 
 @dataclass
@@ -20,6 +21,10 @@ class StockAnalysis:
     def to_dict(self) -> dict:
         data = {
             "Ticker": self.ticker,
+            "Triggered Strategies": self.triggered_entry_strategies(),
+            "Technical Score": self.score_breakdown.total_score,
+            "Strategy Score": self.strategy_score(),
+            "Composite Score": self.composite_score(),
             "Price": round(self.price, 2),
             "20MA": round(self.ma20, 2),
             "50MA": round(self.ma50, 2),
@@ -33,9 +38,8 @@ class StockAnalysis:
             "RS Score": self.score_breakdown.relative_strength_score,
             "Volume Score": self.score_breakdown.volume_score,
             "Volatility Score": self.score_breakdown.volatility_score,
-            "Score": self.score_breakdown.total_score,
         }
-            
+
         for strategy_result in self.strategy_results:
             strategy_name = strategy_result.name.replace(" Strategy", "")
 
@@ -45,23 +49,22 @@ class StockAnalysis:
             data[strategy_result.name] = "YES" if strategy_result.triggered else "NO"
 
         return data
-    
-    def strategy_triggered(self, strategy_name: str) -> bool:
-        return any(
-            result.name == strategy_name and result.triggered
+
+    def triggered_entry_strategies(self) -> str:
+        triggered = [
+            result.name.replace(" Strategy", "")
             for result in self.strategy_results
+            if result.triggered and result.category.value == "entry"
+        ]
+
+        return ", ".join(triggered) if triggered else "None"
+
+    def strategy_score(self) -> int:
+        return sum(
+            result.score
+            for result in self.strategy_results
+            if result.triggered and result.category.value == "entry"
         )
-    
-    def strategy_check(self, strategy_name: str, check_name: str) -> str:
-        for result in self.strategy_results:
-            if result.name == strategy_name:
-                return "YES" if result.checks.get(check_name, False) else "NO"
 
-        return "NO"
-    
-    def strategy_triggered(self, strategy_name: str) -> str:
-        for result in self.strategy_results:
-            if result.name == strategy_name:
-                return "YES" if result.triggered else "NO"
-
-        return "NO"
+    def composite_score(self) -> int:
+        return self.score_breakdown.total_score + self.strategy_score()

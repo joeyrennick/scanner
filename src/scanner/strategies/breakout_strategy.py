@@ -13,12 +13,8 @@ class BreakoutStrategy(BaseStrategy):
         market_data: MarketData,
         relative_strength: float,
     ) -> StrategyResult:
-        high_52_week = market_data.history["High"].tail(252).max().item()
-
-        near_52_week_high = market_data.price >= high_52_week * 0.97
-
         checks = {
-            "Near 52-Week High": near_52_week_high,
+            "Near 52-Week High": market_data.percent_below_52_week_high <= 3,
             "Price > 50MA": market_data.price > market_data.ma50,
             "Price > 200MA": market_data.price > market_data.ma200,
             "Relative Volume ≥ 1.2": market_data.relative_volume >= 1.2,

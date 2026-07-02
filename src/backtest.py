@@ -5,14 +5,7 @@ from scanner.backtesting.backtest_reporter import BacktestReporter
 from scanner.backtesting.backtester import Backtester
 from scanner.indicators.relative_strength import calculate_relative_strength
 from scanner.services.market_data_service import MarketDataService
-from scanner.strategies.pullback_strategy import PullbackStrategy
-
-
-def get_strategy(strategy_name: str):
-    if strategy_name == "pullback":
-        return PullbackStrategy()
-
-    raise ValueError(f"Unsupported strategy: {strategy_name}")
+from scanner.strategies.strategy_registry import StrategyRegistry
 
 
 def main():
@@ -31,7 +24,7 @@ def main():
     benchmark = market_data_service.get_history("SPY", period="5y")
 
     relative_strength = calculate_relative_strength(history, benchmark)
-    strategy = get_strategy(args.strategy)
+    strategy = StrategyRegistry.get(args.strategy)
     reporter = BacktestReporter()
 
     if args.optimize_hold_days:

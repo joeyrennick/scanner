@@ -1,20 +1,14 @@
 from scanner.models.market_data import MarketData
 from scanner.models.strategy_result import StrategyResult
 from scanner.strategies.base_strategy import BaseStrategy
-from scanner.strategies.breakout_strategy import BreakoutStrategy
-from scanner.strategies.minervini_trend_template import MinerviniTrendTemplate
-from scanner.strategies.pullback_strategy import PullbackStrategy
 from scanner.strategies.strategy_category import StrategyCategory
+from scanner.strategies.strategy_registry import StrategyRegistry
 
 
 class StrategyEngine:
 
     def __init__(self, strategies: list[BaseStrategy] | None = None):
-        self.strategies = strategies or [
-            MinerviniTrendTemplate(),
-            PullbackStrategy(),
-            BreakoutStrategy(),
-        ]
+        self.strategies = strategies or StrategyRegistry.all()
 
     def evaluate(
         self,
@@ -27,12 +21,7 @@ class StrategyEngine:
             relative_strength=relative_strength,
         )
 
-        failed_required_filter = any(
-            not result.triggered
-            for result in filter_results
-        )
-
-        if failed_required_filter:
+        if any(not result.triggered for result in filter_results):
             return filter_results
 
         entry_results = self._evaluate_by_category(

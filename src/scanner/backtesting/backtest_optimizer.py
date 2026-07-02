@@ -1,26 +1,23 @@
-from scanner.backtesting.backtester import Backtester
-
-
 class BacktestOptimizer:
+
+    def __init__(self, service):
+        self.service = service
 
     def optimize_hold_days(
         self,
-        ticker: str,
-        history,
+        ticker: str | None,
+        universe: str | None,
         strategy,
-        relative_strength: float,
         min_hold_days: int = 1,
         max_hold_days: int = 30,
     ):
         results = []
 
         for hold_days in range(min_hold_days, max_hold_days + 1):
-
-            result = Backtester().run(
+            result = self.service.run(
                 ticker=ticker,
-                history=history,
+                universe=universe,
                 strategy=strategy,
-                relative_strength=relative_strength,
                 hold_days=hold_days,
             )
 

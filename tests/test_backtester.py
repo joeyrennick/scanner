@@ -22,6 +22,6 @@ def test_backtester_creates_trades_from_pullback_triggers():
 
     assert result.ticker == "TEST"
     assert result.strategy_name == "Pullback Strategy"
-    assert result.total_trades > 0
-    assert result.average_return > 0
-    assert result.win_rate > 0
+    assert result.statistics.total_trades > 0
+    assert result.statistics.average_return > 0
+    assert result.statistics.win_rate > 0

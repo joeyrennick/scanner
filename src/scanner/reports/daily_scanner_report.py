@@ -13,6 +13,10 @@ class DailyScannerReport:
     report_date: date
     portfolio_equity_curve_path: str | None = None
     portfolio_report_path: str | None = None
+    account_size: float | None = None
+    risk_per_trade_percent: float | None = None
+    suggested_hold_days: int = 5
+    reward_risk_multiple: float = 2.0
 
     def __post_init__(self):
         self.watchlist_path = Path(self.watchlist_path)
@@ -30,6 +34,18 @@ class DailyScannerReport:
 
         if "Ticker" not in self.watchlist.columns:
             raise ValueError("Watchlist CSV is missing required column: Ticker")
+
+        if self.account_size is not None and self.account_size <= 0:
+            raise ValueError("account_size must be greater than zero")
+
+        if self.risk_per_trade_percent is not None and self.risk_per_trade_percent <= 0:
+            raise ValueError("risk_per_trade_percent must be greater than zero")
+
+        if self.suggested_hold_days <= 0:
+            raise ValueError("suggested_hold_days must be greater than zero")
+
+        if self.reward_risk_multiple <= 0:
+            raise ValueError("reward_risk_multiple must be greater than zero")
 
     def summary(self) -> dict:
         summary = {
@@ -153,6 +169,45 @@ class DailyScannerReport:
 
         return report
 
+    def manual_trade_checklist(self) -> pd.DataFrame:
+        required_columns = {"Ticker", "Price", "Stop 2ATR"}
+        missing_columns = required_columns - set(self.watchlist.columns)
+
+        if missing_columns:
+            return pd.DataFrame()
+
+        checklist = pd.DataFrame()
+        checklist["Ticker"] = self.watchlist["Ticker"]
+
+        if "Triggered Strategies" in self.watchlist.columns:
+            checklist["Triggered Strategy"] = self.watchlist["Triggered Strategies"]
+
+        checklist["Entry Area"] = self.watchlist["Price"]
+        checklist["Suggested Stop"] = self.watchlist["Stop 2ATR"]
+        checklist["Risk / Share"] = checklist["Entry Area"] - checklist["Suggested Stop"]
+        checklist["Suggested Exit"] = (
+            checklist["Entry Area"]
+            + (checklist["Risk / Share"] * self.reward_risk_multiple)
+        )
+        checklist["Reward/Risk"] = self.reward_risk_multiple
+        checklist["Suggested Hold Time"] = (
+            f"{self.suggested_hold_days} trading days"
+        )
+        checklist["Risk Budget"] = self._risk_budget()
+        checklist["Position Size Estimate"] = checklist["Risk / Share"].apply(
+            self._position_size_for_risk
+        )
+        checklist["Estimated Position Value"] = (
+            checklist["Position Size Estimate"] * checklist["Entry Area"]
+        )
+        checklist["Notes"] = ""
+
+        if "Composite Score" in self.watchlist.columns:
+            checklist["Composite Score"] = self.watchlist["Composite Score"]
+            checklist = checklist.sort_values(by="Composite Score", ascending=False)
+
+        return checklist
+
     def _build_html_report(self, output_path: Path) -> str:
         metric_cards = "\n".join(
             f"""
@@ -256,6 +311,7 @@ class DailyScannerReport:
             <h2>Watchlist Candidates</h2>
             {self._dataframe_to_html(self._report_table())}
         </section>
+        {self._manual_trade_checklist_section()}
         {self._portfolio_context_section(output_path)}
     </main>
 </body>
@@ -299,6 +355,19 @@ class DailyScannerReport:
         </section>
         """
 
+    def _manual_trade_checklist_section(self) -> str:
+        checklist = self.manual_trade_checklist()
+
+        if checklist.empty:
+            return ""
+
+        return f"""
+        <section>
+            <h2>Manual Trade Checklist</h2>
+            {self._dataframe_to_html(checklist)}
+        </section>
+        """
+
     @staticmethod
     def _dataframe_to_html(dataframe: pd.DataFrame) -> str:
         return dataframe.to_html(
@@ -314,6 +383,20 @@ class DailyScannerReport:
             return f"{value:.2f}"
 
         return str(value)
+
+    def _risk_budget(self) -> float | None:
+        if self.account_size is None or self.risk_per_trade_percent is None:
+            return None
+
+        return self.account_size * (self.risk_per_trade_percent / 100)
+
+    def _position_size_for_risk(self, risk_per_share: float) -> int | None:
+        risk_budget = self._risk_budget()
+
+        if risk_budget is None or risk_per_share <= 0:
+            return None
+
+        return int(risk_budget // risk_per_share)
 
     @staticmethod
     def _relative_path(target_path: Path, base_path: Path) -> str:

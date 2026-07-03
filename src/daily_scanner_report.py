@@ -25,6 +25,14 @@ def main():
         action="store_true",
         help="Save a dated copy of the watchlist CSV next to the report.",
     )
+    parser.add_argument(
+        "--portfolio-equity-curve",
+        help="Optional portfolio equity curve CSV to summarize in the daily report.",
+    )
+    parser.add_argument(
+        "--portfolio-report",
+        help="Optional detailed portfolio HTML report path to link from the daily report.",
+    )
 
     args = parser.parse_args()
     report_date = date.fromisoformat(args.date)
@@ -38,6 +46,8 @@ def main():
     report = DailyScannerReport(
         watchlist_path=args.watchlist,
         report_date=report_date,
+        portfolio_equity_curve_path=args.portfolio_equity_curve,
+        portfolio_report_path=args.portfolio_report,
     )
     report.generate_html_report(report_path)
 

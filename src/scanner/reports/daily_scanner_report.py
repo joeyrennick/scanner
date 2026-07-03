@@ -3,6 +3,7 @@ from datetime import date
 from html import escape
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 
@@ -10,10 +11,22 @@ import pandas as pd
 class DailyScannerReport:
     watchlist_path: str
     report_date: date
+    portfolio_equity_curve_path: str | None = None
+    portfolio_report_path: str | None = None
 
     def __post_init__(self):
         self.watchlist_path = Path(self.watchlist_path)
         self.watchlist = pd.read_csv(self.watchlist_path)
+        self.portfolio_equity_curve = None
+
+        if self.portfolio_equity_curve_path:
+            self.portfolio_equity_curve_path = Path(self.portfolio_equity_curve_path)
+            self.portfolio_equity_curve = pd.read_csv(self.portfolio_equity_curve_path)
+
+            if "Date" in self.portfolio_equity_curve.columns:
+                self.portfolio_equity_curve["Date"] = pd.to_datetime(
+                    self.portfolio_equity_curve["Date"]
+                )
 
         if "Ticker" not in self.watchlist.columns:
             raise ValueError("Watchlist CSV is missing required column: Ticker")
@@ -35,6 +48,52 @@ class DailyScannerReport:
 
         return summary
 
+    def portfolio_summary(self) -> dict:
+        if self.portfolio_equity_curve is None or self.portfolio_equity_curve.empty:
+            return {}
+
+        required_columns = {"Date", "Equity"}
+        missing_columns = required_columns - set(self.portfolio_equity_curve.columns)
+
+        if missing_columns:
+            missing = ", ".join(sorted(missing_columns))
+            raise ValueError(f"Portfolio equity curve is missing required columns: {missing}")
+
+        equity = self.portfolio_equity_curve["Equity"]
+        initial_equity = equity.iloc[0]
+        final_equity = equity.iloc[-1]
+        running_high = equity.cummax()
+        drawdown = ((equity - running_high) / running_high * 100).min()
+        returns = equity.pct_change().dropna()
+        sharpe_ratio = 0.0
+
+        if len(returns) > 1 and returns.std(ddof=1) != 0:
+            sharpe_ratio = returns.mean() / returns.std(ddof=1) * np.sqrt(252)
+
+        start_date = self.portfolio_equity_curve.iloc[0]["Date"]
+        end_date = self.portfolio_equity_curve.iloc[-1]["Date"]
+        years = (end_date - start_date).days / 365.25
+        cagr = 0.0
+
+        if years > 0 and final_equity > 0:
+            cagr = ((final_equity / initial_equity) ** (1 / years) - 1) * 100
+
+        summary = {
+            "Initial Equity": initial_equity,
+            "Final Equity": final_equity,
+            "Total Return": ((final_equity - initial_equity) / initial_equity) * 100,
+            "Max Drawdown": drawdown,
+            "CAGR": cagr,
+            "Sharpe Ratio": sharpe_ratio,
+        }
+
+        if "Open Positions" in self.portfolio_equity_curve.columns:
+            summary["Current Open Positions"] = self.portfolio_equity_curve.iloc[-1][
+                "Open Positions"
+            ]
+
+        return summary
+
     def archive_watchlist(self, output_dir: str) -> Path:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -45,7 +104,10 @@ class DailyScannerReport:
     def generate_html_report(self, output_path: str):
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(self._build_html_report(), encoding="utf-8")
+        output_path.write_text(
+            self._build_html_report(output_path=output_path),
+            encoding="utf-8",
+        )
 
     def _triggered_strategy_counts(self) -> dict[str, int]:
         counts = {}
@@ -91,7 +153,7 @@ class DailyScannerReport:
 
         return report
 
-    def _build_html_report(self) -> str:
+    def _build_html_report(self, output_path: Path) -> str:
         metric_cards = "\n".join(
             f"""
             <div class="metric">
@@ -194,10 +256,48 @@ class DailyScannerReport:
             <h2>Watchlist Candidates</h2>
             {self._dataframe_to_html(self._report_table())}
         </section>
+        {self._portfolio_context_section(output_path)}
     </main>
 </body>
 </html>
 """
+
+    def _portfolio_context_section(self, output_path: Path) -> str:
+        portfolio_summary = self.portfolio_summary()
+
+        if not portfolio_summary and not self.portfolio_report_path:
+            return ""
+
+        metric_cards = "\n".join(
+            f"""
+            <div class="metric">
+                <span>{escape(label)}</span>
+                <strong>{escape(self._format_metric(value))}</strong>
+            </div>
+            """
+            for label, value in portfolio_summary.items()
+        )
+        detailed_report = ""
+
+        if self.portfolio_report_path:
+            portfolio_report_href = self._relative_path(
+                target_path=Path(self.portfolio_report_path),
+                base_path=output_path.parent,
+            )
+            detailed_report = (
+                f'<p class="subtitle"><a href="{escape(portfolio_report_href)}">'
+                "Open detailed portfolio report</a></p>"
+            )
+
+        return f"""
+        <section>
+            <h2>Portfolio/Risk Context</h2>
+            {detailed_report}
+            <div class="metrics">
+                {metric_cards}
+            </div>
+        </section>
+        """
 
     @staticmethod
     def _dataframe_to_html(dataframe: pd.DataFrame) -> str:
@@ -214,3 +314,12 @@ class DailyScannerReport:
             return f"{value:.2f}"
 
         return str(value)
+
+    @staticmethod
+    def _relative_path(target_path: Path, base_path: Path) -> str:
+        try:
+            return str(target_path.resolve().relative_to(base_path.resolve()))
+        except ValueError:
+            import os
+
+            return os.path.relpath(target_path, start=base_path)

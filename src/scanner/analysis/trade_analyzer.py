@@ -1,4 +1,6 @@
+from html import escape
 from pathlib import Path
+import os
 
 import numpy as np
 import pandas as pd
@@ -219,10 +221,84 @@ class TradeAnalyzer:
         )
         return distribution
 
+    def plot_return_distribution(
+        self,
+        output_path: str,
+        bins: list[float] | None = None,
+    ):
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        matplotlib_cache = output_path.parent / ".matplotlib-cache"
+        font_cache = output_path.parent / ".cache"
+        matplotlib_cache.mkdir(parents=True, exist_ok=True)
+        font_cache.mkdir(parents=True, exist_ok=True)
+
+        os.environ.setdefault("MPLCONFIGDIR", str(matplotlib_cache))
+        os.environ.setdefault("XDG_CACHE_HOME", str(font_cache))
+
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        distribution = self.return_distribution(bins=bins)
+
+        fig, ax = plt.subplots(figsize=(11, 6))
+        bars = ax.bar(
+            distribution["Range"],
+            distribution["Trades"],
+            color="#2563eb",
+            edgecolor="#1f2937",
+            linewidth=0.8,
+        )
+
+        ax.set_title("Return Distribution")
+        ax.set_xlabel("Trade Return")
+        ax.set_ylabel("Trades")
+        ax.grid(axis="y", alpha=0.25)
+        ax.bar_label(bars, padding=3, fontsize=8)
+        plt.xticks(rotation=35, ha="right")
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=150)
+        plt.close(fig)
+
     def export_ticker_summary(self, output_path: str, min_trades: int = 1):
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         self.ticker_summary(min_trades=min_trades).to_csv(output_path, index=False)
+
+    def generate_html_report(
+        self,
+        output_path: str,
+        min_trades: int = 1,
+        top: int = 10,
+    ):
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        chart_path = output_path.with_name(
+            f"{output_path.stem}_return_distribution.png"
+        )
+        self.plot_return_distribution(chart_path)
+
+        summary = self.summary()
+        report_html = self._build_html_report(
+            title="Trade Analysis Report",
+            summary=summary,
+            chart_filename=chart_path.name,
+            top_by_average_return=self.rank_tickers_by_average_return(
+                min_trades=min_trades
+            ).head(top),
+            top_by_win_rate=self.rank_tickers_by_win_rate(min_trades=min_trades).head(
+                top
+            ),
+            monthly_summary=self.monthly_summary(),
+            weekday_summary=self.weekday_summary(),
+            return_distribution=self.return_distribution(),
+        )
+
+        output_path.write_text(report_html, encoding="utf-8")
 
     def _period_summary(self, trades: pd.DataFrame, period_column: str) -> pd.DataFrame:
         grouped = trades.groupby(period_column)
@@ -288,3 +364,202 @@ class TradeAnalyzer:
         if right == np.inf:
             return f"> {left:g}%"
         return f"> {left:g}% to <= {right:g}%"
+
+    def _build_html_report(
+        self,
+        title: str,
+        summary: dict,
+        chart_filename: str,
+        top_by_average_return: pd.DataFrame,
+        top_by_win_rate: pd.DataFrame,
+        monthly_summary: pd.DataFrame,
+        weekday_summary: pd.DataFrame,
+        return_distribution: pd.DataFrame,
+    ) -> str:
+        metric_cards = "\n".join(
+            f"""
+            <div class="metric">
+                <span>{escape(label)}</span>
+                <strong>{escape(self._format_report_value(value, label))}</strong>
+            </div>
+            """
+            for label, value in summary.items()
+        )
+
+        metric_cards += f"""
+            <div class="metric">
+                <span>Longest Winning Streak</span>
+                <strong>{self.longest_winning_streak()}</strong>
+            </div>
+            <div class="metric">
+                <span>Longest Losing Streak</span>
+                <strong>{self.longest_losing_streak()}</strong>
+            </div>
+        """
+
+        return f"""<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{escape(title)}</title>
+    <style>
+        body {{
+            background: #f8fafc;
+            color: #111827;
+            font-family: Arial, sans-serif;
+            margin: 0;
+        }}
+        main {{
+            margin: 0 auto;
+            max-width: 1180px;
+            padding: 32px 24px;
+        }}
+        h1, h2 {{
+            margin: 0;
+        }}
+        h1 {{
+            font-size: 32px;
+            margin-bottom: 8px;
+        }}
+        h2 {{
+            border-bottom: 1px solid #d1d5db;
+            font-size: 20px;
+            margin-top: 34px;
+            padding-bottom: 8px;
+        }}
+        .subtitle {{
+            color: #4b5563;
+            margin: 0 0 24px;
+        }}
+        .metrics {{
+            display: grid;
+            gap: 12px;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        }}
+        .metric {{
+            background: #ffffff;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            padding: 14px 16px;
+        }}
+        .metric span {{
+            color: #4b5563;
+            display: block;
+            font-size: 13px;
+            margin-bottom: 6px;
+        }}
+        .metric strong {{
+            font-size: 22px;
+        }}
+        .chart {{
+            background: #ffffff;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            margin-top: 16px;
+            padding: 12px;
+        }}
+        .chart img {{
+            display: block;
+            height: auto;
+            max-width: 100%;
+        }}
+        table {{
+            background: #ffffff;
+            border-collapse: collapse;
+            font-size: 13px;
+            margin-top: 14px;
+            width: 100%;
+        }}
+        th, td {{
+            border: 1px solid #d1d5db;
+            padding: 8px 10px;
+            text-align: right;
+        }}
+        th:first-child, td:first-child {{
+            text-align: left;
+        }}
+        th {{
+            background: #e5e7eb;
+            color: #111827;
+        }}
+        tr:nth-child(even) td {{
+            background: #f9fafb;
+        }}
+    </style>
+</head>
+<body>
+    <main>
+        <h1>{escape(title)}</h1>
+        <p class="subtitle">Generated from {escape(str(self.trade_csv_path or "DataFrame"))}</p>
+
+        <section>
+            <h2>Summary</h2>
+            <div class="metrics">
+                {metric_cards}
+            </div>
+        </section>
+
+        <section>
+            <h2>Return Distribution</h2>
+            <div class="chart">
+                <img src="{escape(chart_filename)}" alt="Return distribution chart">
+            </div>
+            {self._dataframe_to_html(return_distribution)}
+        </section>
+
+        <section>
+            <h2>Top Tickers by Average Return</h2>
+            {self._dataframe_to_html(top_by_average_return)}
+        </section>
+
+        <section>
+            <h2>Top Tickers by Win Rate</h2>
+            {self._dataframe_to_html(top_by_win_rate)}
+        </section>
+
+        <section>
+            <h2>Monthly Summary</h2>
+            {self._dataframe_to_html(monthly_summary)}
+        </section>
+
+        <section>
+            <h2>Weekday Summary</h2>
+            {self._dataframe_to_html(weekday_summary)}
+        </section>
+    </main>
+</body>
+</html>
+"""
+
+    @staticmethod
+    def _dataframe_to_html(dataframe: pd.DataFrame) -> str:
+        return dataframe.to_html(
+            index=False,
+            border=0,
+            classes="data-table",
+            float_format=lambda value: f"{value:.2f}",
+        )
+
+    @staticmethod
+    def _format_report_value(value, label: str) -> str:
+        percent_labels = {
+            "Win Rate",
+            "Average Return",
+            "Median Return",
+            "Average Winner",
+            "Average Loser",
+            "Best Trade",
+            "Worst Trade",
+            "Expectancy",
+        }
+
+        if isinstance(value, float):
+            formatted = "inf" if np.isinf(value) else f"{value:.2f}"
+        else:
+            formatted = str(value)
+
+        if label in percent_labels:
+            return f"{formatted}%"
+
+        return formatted

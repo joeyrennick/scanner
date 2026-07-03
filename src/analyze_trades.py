@@ -85,6 +85,14 @@ def main():
         action="store_true",
         help="Display return distribution buckets.",
     )
+    parser.add_argument(
+        "--plot-return-distribution",
+        help="Path to save a return distribution chart as a PNG.",
+    )
+    parser.add_argument(
+        "--html-report",
+        help="Path to save a full HTML analysis report.",
+    )
 
     args = parser.parse_args()
 
@@ -114,6 +122,20 @@ def main():
 
     if args.distribution:
         print_table("Return Distribution", analyzer.return_distribution())
+
+    if args.plot_return_distribution:
+        analyzer.plot_return_distribution(args.plot_return_distribution)
+        print()
+        print(f"Saved return distribution plot to {args.plot_return_distribution}")
+
+    if args.html_report:
+        analyzer.generate_html_report(
+            args.html_report,
+            min_trades=args.min_trades,
+            top=args.top,
+        )
+        print()
+        print(f"Generated HTML analysis report at {args.html_report}")
 
     if args.export_ticker_summary:
         analyzer.export_ticker_summary(

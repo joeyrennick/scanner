@@ -102,6 +102,33 @@ def test_return_distribution_counts_all_trades():
     assert distribution["Percent"].tolist() == [40.0, 20.0, 40.0]
 
 
+def test_plot_return_distribution_writes_png(tmp_path):
+    output_path = tmp_path / "return_distribution.png"
+
+    create_analyzer().plot_return_distribution(
+        output_path,
+        bins=[-math.inf, 0, 3, math.inf],
+    )
+
+    assert output_path.exists()
+    assert output_path.read_bytes().startswith(b"\x89PNG")
+
+
+def test_generate_html_report_writes_report_and_chart(tmp_path):
+    output_path = tmp_path / "trade_report.html"
+    chart_path = tmp_path / "trade_report_return_distribution.png"
+
+    create_analyzer().generate_html_report(output_path, min_trades=1, top=2)
+
+    html = output_path.read_text(encoding="utf-8")
+    assert "Trade Analysis Report" in html
+    assert "Top Tickers by Average Return" in html
+    assert "Return Distribution" in html
+    assert "trade_report_return_distribution.png" in html
+    assert chart_path.exists()
+    assert chart_path.read_bytes().startswith(b"\x89PNG")
+
+
 def test_export_ticker_summary_writes_csv(tmp_path):
     output_path = tmp_path / "ticker_summary.csv"
 

@@ -33,6 +33,28 @@ def main():
         "--portfolio-report",
         help="Optional detailed portfolio HTML report path to link from the daily report.",
     )
+    parser.add_argument(
+        "--account-size",
+        type=float,
+        help="Account size used for manual trade checklist position sizing.",
+    )
+    parser.add_argument(
+        "--risk-per-trade-percent",
+        type=float,
+        help="Percent of account to risk per trade in the manual trade checklist.",
+    )
+    parser.add_argument(
+        "--suggested-hold-days",
+        type=int,
+        default=5,
+        help="Suggested manual trade hold time in trading days.",
+    )
+    parser.add_argument(
+        "--reward-risk-multiple",
+        type=float,
+        default=2.0,
+        help="Reward/risk multiple used to calculate suggested exit.",
+    )
 
     args = parser.parse_args()
     report_date = date.fromisoformat(args.date)
@@ -48,6 +70,10 @@ def main():
         report_date=report_date,
         portfolio_equity_curve_path=args.portfolio_equity_curve,
         portfolio_report_path=args.portfolio_report,
+        account_size=args.account_size,
+        risk_per_trade_percent=args.risk_per_trade_percent,
+        suggested_hold_days=args.suggested_hold_days,
+        reward_risk_multiple=args.reward_risk_multiple,
     )
     report.generate_html_report(report_path)
 

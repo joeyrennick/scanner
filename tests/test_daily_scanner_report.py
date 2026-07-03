@@ -75,6 +75,37 @@ def test_daily_scanner_report_writes_html_and_archives_watchlist(tmp_path):
     assert archive_path.exists()
 
 
+def test_daily_scanner_report_includes_manual_trade_checklist(tmp_path):
+    report = DailyScannerReport(
+        watchlist_path=write_watchlist(tmp_path),
+        report_date=date(2026, 7, 3),
+        account_size=100_000,
+        risk_per_trade_percent=1,
+        suggested_hold_days=7,
+        reward_risk_multiple=2,
+    )
+    report_path = tmp_path / "daily_scanner_report.html"
+
+    checklist = report.manual_trade_checklist()
+    report.generate_html_report(report_path)
+
+    html = report_path.read_text(encoding="utf-8")
+    first_row = checklist[checklist["Ticker"] == "AAA"].iloc[0]
+    assert first_row["Entry Area"] == 50.0
+    assert first_row["Suggested Stop"] == 45.0
+    assert first_row["Risk / Share"] == 5.0
+    assert first_row["Suggested Exit"] == 60.0
+    assert first_row["Reward/Risk"] == 2
+    assert first_row["Suggested Hold Time"] == "7 trading days"
+    assert first_row["Risk Budget"] == 1000
+    assert first_row["Position Size Estimate"] == 200
+    assert first_row["Estimated Position Value"] == 10_000
+    assert "Manual Trade Checklist" in html
+    assert "Suggested Exit" in html
+    assert "Suggested Hold Time" in html
+    assert "Notes" in html
+
+
 def test_daily_scanner_report_includes_portfolio_context(tmp_path):
     equity_curve_path = tmp_path / "equity_curve.csv"
     portfolio_report_path = tmp_path / "portfolio_report.html"
@@ -129,6 +160,38 @@ def test_daily_scanner_report_rejects_invalid_equity_curve(tmp_path):
 
     with pytest.raises(ValueError, match="Equity"):
         report.generate_html_report(tmp_path / "daily_scanner_report.html")
+
+
+def test_daily_scanner_report_rejects_invalid_trade_checklist_inputs(tmp_path):
+    with pytest.raises(ValueError, match="account_size"):
+        DailyScannerReport(
+            watchlist_path=write_watchlist(tmp_path),
+            report_date=date(2026, 7, 3),
+            account_size=0,
+            risk_per_trade_percent=1,
+        )
+
+    with pytest.raises(ValueError, match="risk_per_trade_percent"):
+        DailyScannerReport(
+            watchlist_path=write_watchlist(tmp_path),
+            report_date=date(2026, 7, 3),
+            account_size=100_000,
+            risk_per_trade_percent=0,
+        )
+
+    with pytest.raises(ValueError, match="suggested_hold_days"):
+        DailyScannerReport(
+            watchlist_path=write_watchlist(tmp_path),
+            report_date=date(2026, 7, 3),
+            suggested_hold_days=0,
+        )
+
+    with pytest.raises(ValueError, match="reward_risk_multiple"):
+        DailyScannerReport(
+            watchlist_path=write_watchlist(tmp_path),
+            report_date=date(2026, 7, 3),
+            reward_risk_multiple=0,
+        )
 
 
 def test_daily_scanner_report_requires_ticker_column(tmp_path):

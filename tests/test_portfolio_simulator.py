@@ -1,6 +1,7 @@
 from datetime import date
 
 from scanner.backtesting.trade import Trade
+from scanner.portfolio.execution_model import ExecutionModel
 from scanner.portfolio.portfolio import Portfolio
 from scanner.portfolio.portfolio_simulator import PortfolioSimulator
 from scanner.portfolio.position import Position
@@ -86,6 +87,125 @@ def test_portfolio_uses_available_cash_for_position_sizing():
     assert first_position.shares == 6
     assert second_position.shares == 4
     assert portfolio.cash == 0
+
+
+def test_commissions_reduce_cash_and_position_profit_loss():
+    portfolio = Portfolio(
+        initial_cash=10_000,
+        max_open_positions=1,
+        position_size_percent=0.50,
+        execution_model=ExecutionModel(
+            commission_per_trade=1.0,
+            commission_per_share=0.01,
+        ),
+    )
+    trade = make_trade("AAA", date(2026, 1, 1), date(2026, 1, 5), 100, 110)
+
+    position = portfolio.open_position(trade)
+    portfolio.close_positions_on(date(2026, 1, 5))
+
+    assert position.shares == 49
+    assert round(position.total_commission, 2) == 2.98
+    assert round(position.profit_loss, 2) == 487.02
+    assert round(portfolio.cash, 2) == 10_487.02
+
+
+def test_slippage_adjusts_entry_and_exit_prices():
+    portfolio = Portfolio(
+        initial_cash=10_000,
+        max_open_positions=1,
+        position_size_percent=0.50,
+        execution_model=ExecutionModel(slippage_percent=1.0),
+    )
+    trade = make_trade("AAA", date(2026, 1, 1), date(2026, 1, 5), 100, 110)
+
+    position = portfolio.open_position(trade)
+
+    assert position.shares == 49
+    assert position.entry_price == 101
+    assert position.exit_price == 108.9
+
+
+def test_limit_orders_can_skip_unfilled_entries():
+    simulator = PortfolioSimulator(
+        initial_cash=10_000,
+        max_open_positions=1,
+        position_size_percent=0.50,
+        execution_model=ExecutionModel(limit_entry_offset_percent=1.0),
+    )
+    trades = [make_trade("AAA", date(2026, 1, 1), date(2026, 1, 5), 100, 110)]
+
+    result = simulator.run(trades)
+
+    assert result.positions == []
+    assert result.skipped_trades == 1
+
+
+def test_limit_orders_can_assume_fill_at_limit_price():
+    portfolio = Portfolio(
+        initial_cash=10_000,
+        max_open_positions=1,
+        position_size_percent=0.50,
+        execution_model=ExecutionModel(
+            limit_entry_offset_percent=1.0,
+            assume_limit_fills=True,
+        ),
+    )
+    trade = make_trade("AAA", date(2026, 1, 1), date(2026, 1, 5), 100, 110)
+
+    position = portfolio.open_position(trade)
+
+    assert position.entry_price == 99
+    assert position.shares == 50
+
+
+def test_stop_loss_caps_trade_loss():
+    portfolio = Portfolio(
+        initial_cash=10_000,
+        max_open_positions=1,
+        position_size_percent=0.50,
+        execution_model=ExecutionModel(stop_loss_percent=5.0),
+    )
+    trade = make_trade("AAA", date(2026, 1, 1), date(2026, 1, 5), 100, 80)
+
+    position = portfolio.open_position(trade)
+
+    assert position.exit_price == 95
+    assert position.exit_reason == "STOP_LOSS"
+
+
+def test_trailing_stop_can_cap_trade_loss():
+    portfolio = Portfolio(
+        initial_cash=10_000,
+        max_open_positions=1,
+        position_size_percent=0.50,
+        execution_model=ExecutionModel(trailing_stop_percent=8.0),
+    )
+    trade = make_trade("AAA", date(2026, 1, 1), date(2026, 1, 5), 100, 80)
+
+    position = portfolio.open_position(trade)
+
+    assert position.exit_price == 92
+    assert position.exit_reason == "TRAILING_STOP"
+
+
+def test_portfolio_limits_open_positions_per_ticker():
+    simulator = PortfolioSimulator(
+        initial_cash=10_000,
+        max_open_positions=3,
+        max_positions_per_ticker=1,
+        position_size_percent=0.25,
+    )
+    trades = [
+        make_trade("AAA", date(2026, 1, 1), date(2026, 1, 5), 100, 110),
+        make_trade("AAA", date(2026, 1, 1), date(2026, 1, 5), 100, 110),
+        make_trade("BBB", date(2026, 1, 1), date(2026, 1, 5), 100, 110),
+    ]
+
+    result = simulator.run(trades)
+
+    assert len(result.positions) == 2
+    assert result.skipped_trades == 1
 
 
 def test_simulator_tracks_equity_curve_and_performance_metrics():

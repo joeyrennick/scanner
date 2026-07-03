@@ -3,6 +3,7 @@ from datetime import date
 import pandas as pd
 
 from scanner.backtesting.trade import Trade
+from scanner.portfolio.execution_model import ExecutionModel
 from scanner.portfolio.portfolio import Portfolio
 from scanner.portfolio.portfolio_simulation_result import PortfolioSimulationResult
 
@@ -14,16 +15,22 @@ class PortfolioSimulator:
         initial_cash: float = 100_000.0,
         max_open_positions: int = 10,
         position_size_percent: float = 0.10,
+        execution_model: ExecutionModel | None = None,
+        max_positions_per_ticker: int | None = None,
     ):
         self.initial_cash = initial_cash
         self.max_open_positions = max_open_positions
         self.position_size_percent = position_size_percent
+        self.execution_model = execution_model or ExecutionModel()
+        self.max_positions_per_ticker = max_positions_per_ticker
 
     def run(self, trades: list[Trade]) -> PortfolioSimulationResult:
         portfolio = Portfolio(
             initial_cash=self.initial_cash,
             max_open_positions=self.max_open_positions,
             position_size_percent=self.position_size_percent,
+            execution_model=self.execution_model,
+            max_positions_per_ticker=self.max_positions_per_ticker,
         )
         trades_by_entry_date = self._group_trades_by_entry_date(trades)
         simulation_dates = self._simulation_dates(trades)

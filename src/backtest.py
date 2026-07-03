@@ -5,6 +5,7 @@ import os
 from scanner.backtesting.backtest_optimizer import BacktestOptimizer
 from scanner.backtesting.backtest_reporter import BacktestReporter
 from scanner.backtesting.backtest_service import BacktestService
+from scanner.backtesting.watchlist_loader import load_watchlist_tickers
 from scanner.strategies.strategy_registry import StrategyRegistry
 
 def export_trades(result, output_file: str):
@@ -24,6 +25,15 @@ def main():
         choices=["sp500"],
         help="Backtest an entire stock universe.",
     )
+    parser.add_argument(
+        "--watchlist",
+        help="Backtest tickers from a watchlist CSV.",
+    )
+    parser.add_argument(
+        "--watchlist-all",
+        action="store_true",
+        help="Backtest every ticker in --watchlist instead of filtering by strategy.",
+    )
 
     parser.add_argument("--strategy", default="pullback")
     parser.add_argument("--hold-days", type=int, default=5)
@@ -36,10 +46,31 @@ def main():
 
     args = parser.parse_args()
 
-    if not args.ticker and not args.universe:
-        parser.error("--ticker is required unless --universe is provided")
+    selected_sources = [
+        source for source in [args.ticker, args.universe, args.watchlist] if source
+    ]
+
+    if len(selected_sources) != 1:
+        parser.error("Exactly one of --ticker, --universe, or --watchlist is required")
+
+    if args.watchlist_all and not args.watchlist:
+        parser.error("--watchlist-all requires --watchlist")
 
     strategy = StrategyRegistry.get(args.strategy)
+    watchlist_tickers = None
+    result_ticker = None
+
+    if args.watchlist:
+        try:
+            watchlist_tickers = load_watchlist_tickers(
+                watchlist_path=args.watchlist,
+                strategy_name=strategy.name,
+                include_all=args.watchlist_all,
+            )
+        except ValueError as error:
+            parser.error(str(error))
+
+        result_ticker = "Watchlist"
 
     service = BacktestService()
     reporter = BacktestReporter()
@@ -51,6 +82,8 @@ def main():
             ticker=args.ticker,
             universe=args.universe,
             strategy=strategy,
+            tickers=watchlist_tickers,
+            result_ticker=result_ticker,
             min_hold_days=1,
             max_hold_days=30,
         )
@@ -67,6 +100,8 @@ def main():
                 universe=args.universe,
                 strategy=strategy,
                 hold_days=hold_days,
+                tickers=watchlist_tickers,
+                result_ticker=result_ticker,
             )
 
             results_by_hold_days.append((hold_days, result))
@@ -79,6 +114,8 @@ def main():
             universe=args.universe,
             strategy=strategy,
             hold_days=args.hold_days,
+            tickers=watchlist_tickers,
+            result_ticker=result_ticker,
         )
 
         reporter.print_result(result, args.hold_days)

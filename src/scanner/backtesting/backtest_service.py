@@ -40,6 +40,20 @@ class BacktestService:
             raise ValueError(f"Unsupported universe: {universe}")
 
         tickers = UniverseProvider().get_sp500_tickers()
+        return self.run_tickers(
+            tickers=tickers,
+            result_ticker="S&P 500",
+            strategy=strategy,
+            hold_days=hold_days,
+        )
+
+    def run_tickers(
+        self,
+        tickers: list[str],
+        result_ticker: str,
+        strategy,
+        hold_days: int,
+    ) -> BacktestResult:
         benchmark = self.market_data_service.get_history("SPY", period="5y")
 
         all_trades = []
@@ -82,7 +96,7 @@ class BacktestService:
         print(f"Skipped: {len(skipped)}")
 
         return BacktestResult(
-            ticker="S&P 500",
+            ticker=result_ticker,
             strategy_name=strategy.name,
             trades=all_trades,
         )
@@ -93,7 +107,17 @@ class BacktestService:
         universe: str | None,
         strategy,
         hold_days: int,
+        tickers: list[str] | None = None,
+        result_ticker: str | None = None,
     ) -> BacktestResult:
+        if tickers:
+            return self.run_tickers(
+                tickers=tickers,
+                result_ticker=result_ticker or "Custom Ticker List",
+                strategy=strategy,
+                hold_days=hold_days,
+            )
+
         if universe:
             return self.run_universe(
                 universe=universe,

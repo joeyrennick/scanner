@@ -8,6 +8,8 @@ class BacktestOptimizer:
         ticker: str | None,
         universe: str | None,
         strategy,
+        tickers: list[str] | None = None,
+        result_ticker: str | None = None,
         min_hold_days: int = 1,
         max_hold_days: int = 30,
     ):
@@ -19,6 +21,8 @@ class BacktestOptimizer:
                 universe=universe,
                 strategy=strategy,
                 hold_days=hold_days,
+                tickers=tickers,
+                result_ticker=result_ticker,
             )
 
             results.append((hold_days, result))

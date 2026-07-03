@@ -4,6 +4,7 @@ from scanner.backtesting.trade import Trade
 from scanner.portfolio.portfolio import Portfolio
 from scanner.portfolio.portfolio_simulator import PortfolioSimulator
 from scanner.portfolio.position import Position
+from scanner.portfolio.trade_csv_loader import load_trades_from_csv
 
 
 def make_trade(
@@ -107,3 +108,66 @@ def test_simulator_tracks_equity_curve_and_performance_metrics():
     assert result.max_drawdown_percent == -10.0
     assert round(result.cagr_percent, 2) == 7.96
     assert result.sharpe_ratio > 0
+
+
+def test_load_trades_from_exported_trade_csv(tmp_path):
+    trade_csv = tmp_path / "trades.csv"
+    trade_csv.write_text(
+        "\n".join(
+            [
+                "Ticker,Strategy,Entry Date,Exit Date,Hold Days,Entry Price,Exit Price,Return %,Winning Trade",
+                "AAA,Test Strategy,2026-01-01,2026-01-05,4,100,110,10,YES",
+                "BBB,Test Strategy,2026-01-02,2026-01-06,4,50,45,-10,NO",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    trades = load_trades_from_csv(trade_csv)
+
+    assert len(trades) == 2
+    assert trades[0].ticker == "AAA"
+    assert trades[0].entry_date == date(2026, 1, 1)
+    assert trades[0].exit_price == 110
+
+
+def test_result_exports_equity_curve_and_positions(tmp_path):
+    simulator = PortfolioSimulator(
+        initial_cash=10_000,
+        max_open_positions=1,
+        position_size_percent=1.0,
+    )
+    result = simulator.run(
+        [make_trade("AAA", date(2026, 1, 1), date(2026, 1, 5), 100, 110)]
+    )
+    equity_curve_path = tmp_path / "equity_curve.csv"
+    positions_path = tmp_path / "positions.csv"
+
+    result.export_equity_curve(equity_curve_path)
+    result.export_positions(positions_path)
+
+    assert "Equity" in equity_curve_path.read_text(encoding="utf-8")
+    assert "Profit/Loss" in positions_path.read_text(encoding="utf-8")
+
+
+def test_result_plots_equity_curve_and_generates_html_report(tmp_path):
+    simulator = PortfolioSimulator(
+        initial_cash=10_000,
+        max_open_positions=1,
+        position_size_percent=1.0,
+    )
+    result = simulator.run(
+        [make_trade("AAA", date(2026, 1, 1), date(2026, 1, 5), 100, 110)]
+    )
+    plot_path = tmp_path / "equity_curve.png"
+    report_path = tmp_path / "portfolio_report.html"
+    report_chart_path = tmp_path / "portfolio_report_equity_curve.png"
+
+    result.plot_equity_curve(plot_path)
+    result.generate_html_report(report_path)
+
+    html = report_path.read_text(encoding="utf-8")
+    assert plot_path.read_bytes().startswith(b"\x89PNG")
+    assert "Portfolio Simulation Report" in html
+    assert "portfolio_report_equity_curve.png" in html
+    assert report_chart_path.read_bytes().startswith(b"\x89PNG")

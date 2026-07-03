@@ -46,6 +46,8 @@ class StockAnalysis:
             for check_name, passed in strategy_result.checks.items():
                 data[f"{strategy_name}: {check_name}"] = "YES" if passed else "NO"
 
+            data[f"{strategy_name}: Passed Checks"] = self.passed_checks(strategy_result)
+            data[f"{strategy_name}: Failed Checks"] = self.failed_checks(strategy_result)
             data[strategy_result.name] = "YES" if strategy_result.triggered else "NO"
 
         return data
@@ -68,3 +70,21 @@ class StockAnalysis:
 
     def composite_score(self) -> int:
         return self.score_breakdown.total_score + self.strategy_score()
+
+    def passed_checks(self, strategy_result: StrategyResult) -> str:
+        passed = [
+            check_name
+            for check_name, passed in strategy_result.checks.items()
+            if passed
+        ]
+
+        return ", ".join(passed) if passed else "None"
+
+    def failed_checks(self, strategy_result: StrategyResult) -> str:
+        failed = [
+            check_name
+            for check_name, passed in strategy_result.checks.items()
+            if not passed
+        ]
+
+        return ", ".join(failed) if failed else "None"

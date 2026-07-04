@@ -1,5 +1,6 @@
 from scanner.backtesting.backtest_result import BacktestResult
 from scanner.backtesting.backtester import Backtester
+from scanner.config.settings import settings
 from scanner.indicators.relative_strength import calculate_relative_strength
 from scanner.services.market_data_service import MarketDataService
 from scanner.universe.universe_provider import UniverseProvider
@@ -36,13 +37,10 @@ class BacktestService:
         strategy,
         hold_days: int,
     ) -> BacktestResult:
-        if universe != "sp500":
-            raise ValueError(f"Unsupported universe: {universe}")
-
-        tickers = UniverseProvider().get_sp500_tickers()
+        tickers = UniverseProvider().get_universe_tickers(universe)
         return self.run_tickers(
             tickers=tickers,
-            result_ticker="S&P 500",
+            result_ticker=universe.upper(),
             strategy=strategy,
             hold_days=hold_days,
         )
@@ -58,7 +56,7 @@ class BacktestService:
 
         all_trades = []
         skipped = []
-        max_workers = 20
+        max_workers = settings.max_workers
 
         def run_one(ticker: str):
             history = self.market_data_service.get_history(ticker, period="5y")

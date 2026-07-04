@@ -1,12 +1,17 @@
 import argparse
-import pandas as pd
 import os
+
+import pandas as pd
 
 from scanner.backtesting.backtest_optimizer import BacktestOptimizer
 from scanner.backtesting.backtest_reporter import BacktestReporter
 from scanner.backtesting.backtest_service import BacktestService
 from scanner.backtesting.watchlist_loader import load_watchlist_tickers
+from scanner.data.market_data import check_market_data_connectivity
+from scanner.config.settings import settings
 from scanner.strategies.strategy_registry import StrategyRegistry
+from scanner.universe.universe_provider import UniverseProvider
+
 
 def export_trades(result, output_file: str):
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
@@ -16,13 +21,14 @@ def export_trades(result, output_file: str):
 
     print(f"Exported {len(result.trades)} trades to {output_file}")
 
+
 def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--ticker")
     parser.add_argument(
         "--universe",
-        choices=["sp500"],
+        choices=UniverseProvider.SUPPORTED_UNIVERSES,
         help="Backtest an entire stock universe.",
     )
     parser.add_argument(
@@ -43,6 +49,11 @@ def main():
         "--export-trades",
         help="Path to export individual backtest trades as CSV.",
     )
+    parser.add_argument(
+        "--preflight-market-data",
+        action="store_true",
+        help="Check Yahoo/yfinance connectivity before running the backtest.",
+    )
 
     args = parser.parse_args()
 
@@ -55,6 +66,20 @@ def main():
 
     if args.watchlist_all and not args.watchlist:
         parser.error("--watchlist-all requires --watchlist")
+
+    if args.preflight_market_data:
+        try:
+            result = check_market_data_connectivity(
+                ticker=settings.benchmark_ticker,
+                period="5d",
+            )
+        except Exception as error:
+            parser.error(f"Market data preflight failed: {error}")
+
+        print(
+            "Market data preflight passed for "
+            f"{result.ticker} ({result.rows} rows in {result.elapsed_seconds:.2f}s)"
+        )
 
     strategy = StrategyRegistry.get(args.strategy)
     watchlist_tickers = None

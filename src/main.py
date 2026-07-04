@@ -1,10 +1,14 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import argparse
 import time
 
 import pandas as pd
 
 from scanner.config.settings import settings
-from scanner.data.market_data import download_price_data
+from scanner.data.market_data import (
+    check_market_data_connectivity,
+    download_price_data,
+)
 from scanner.services.market_analyzer import MarketAnalyzer
 from scanner.universe.universe_provider import UniverseProvider
 from scanner.strategies.strategy_category import StrategyCategory
@@ -18,10 +22,40 @@ def analyze_one(ticker: str, benchmark_data):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--universe",
+        choices=UniverseProvider.SUPPORTED_UNIVERSES,
+        default="all",
+        help="Universe to scan. Defaults to all supported US stock universes.",
+    )
+    parser.add_argument(
+        "--preflight-market-data",
+        action="store_true",
+        help="Check Yahoo/yfinance connectivity before running the scan.",
+    )
+    args = parser.parse_args()
+
     logger = setup_logging()
+
+    if args.preflight_market_data:
+        try:
+            result = check_market_data_connectivity(
+                ticker=settings.benchmark_ticker,
+                period="5d",
+            )
+        except Exception as error:
+            logger.error(f"Market data preflight failed: {error}")
+            raise SystemExit(1)
+
+        logger.info(
+            "Market data preflight passed for "
+            f"{result.ticker} ({result.rows} rows in {result.elapsed_seconds:.2f}s)"
+        )
+
     start = time.perf_counter()
 
-    tickers = UniverseProvider().get_sp500_tickers()
+    tickers = UniverseProvider().get_universe_tickers(args.universe)
     benchmark_data = download_price_data(settings.benchmark_ticker)
 
     results = []

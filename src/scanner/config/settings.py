@@ -5,7 +5,7 @@ from dataclasses import dataclass
 class ScannerSettings:
     benchmark_ticker: str = "SPY"
     output_file: str = "output/watchlist.csv"
-    max_workers: int = 15
+    max_workers: int = 40
     relative_strength_lookback_days: int = 63
 
 

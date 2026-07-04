@@ -203,6 +203,48 @@ def test_backtest_service_runs_named_universe(monkeypatch):
     assert [trade.ticker for trade in result.trades] == ["DIA", "IBM"]
 
 
+def test_backtest_service_uses_configured_history_period(monkeypatch):
+    service = BacktestService(history_period="6mo")
+    calls = []
+
+    def fake_get_history(ticker, period):
+        calls.append((ticker, period))
+        return pd.DataFrame(
+            {"Close": [100, 101]},
+            index=pd.date_range("2026-01-01", periods=2),
+        )
+
+    service.market_data_service.get_history = fake_get_history
+
+    class FakeStrategy:
+        name = "Fake Strategy"
+
+    class FakeBacktester:
+        def run(self, ticker, history, strategy, relative_strength, hold_days):
+            return BacktestResult(
+                ticker=ticker,
+                strategy_name=strategy.name,
+                trades=[],
+            )
+
+    monkeypatch.setattr(
+        "scanner.backtesting.backtest_service.calculate_relative_strength",
+        lambda history, benchmark: 1,
+    )
+    monkeypatch.setattr(
+        "scanner.backtesting.backtest_service.Backtester",
+        FakeBacktester,
+    )
+
+    service.run_single_ticker(
+        ticker="AAPL",
+        strategy=FakeStrategy(),
+        hold_days=5,
+    )
+
+    assert calls == [("AAPL", "6mo"), ("SPY", "6mo")]
+
+
 def test_backtest_service_uses_shared_worker_setting(monkeypatch):
     service = BacktestService()
     service.market_data_service.get_history = lambda ticker, period: pd.DataFrame(

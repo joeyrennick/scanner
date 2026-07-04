@@ -12,9 +12,14 @@ import logging
 
 class MarketAnalyzer:
     logger = logging.getLogger("scanner")
-    def analyze(self, ticker: str, spy_return: float) -> StockAnalysis:
+    def analyze(
+        self,
+        ticker: str,
+        spy_return: float,
+        period: str = "1y",
+    ) -> StockAnalysis:
         self.logger.info(f"Downloading {ticker}")
-        data = download_price_data(ticker)
+        data = download_price_data(ticker, period=period)
 
         data = add_moving_averages(data)
         data = add_atr(data)

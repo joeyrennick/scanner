@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 
 import scanner.data.market_data as market_data
+from scanner.data.providers.yahoo import _split_batch_history
 from scanner.data.providers.yahoo import YahooMarketDataProvider
 
 
@@ -151,3 +152,21 @@ def test_get_market_data_provider_is_cached(monkeypatch):
 
     assert first is second
     assert len(created_sessions) == 1
+
+
+def test_split_batch_history_extracts_ticker_frames():
+    index = pd.to_datetime(["2026-07-02", "2026-07-03"])
+    history = pd.DataFrame(
+        {
+            ("AAPL", "Close"): [100.0, 101.0],
+            ("AAPL", "Volume"): [1_000_000, 1_100_000],
+            ("MSFT", "Close"): [200.0, 201.0],
+            ("MSFT", "Volume"): [2_000_000, 2_100_000],
+        },
+        index=index,
+    )
+
+    result = _split_batch_history(history, ["AAPL", "MSFT"])
+
+    assert list(result["AAPL"]["Close"]) == [100.0, 101.0]
+    assert list(result["MSFT"]["Close"]) == [200.0, 201.0]

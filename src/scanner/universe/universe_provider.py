@@ -51,6 +51,7 @@ class UniverseProvider:
             & (listed["ETF"] == "N")
             & (listed["Financial Status"] == "N")
         ]
+        listed = self._filter_tradeable_common_symbols(listed, "Symbol")
         return self._normalize_tickers(listed["Symbol"].tolist())
 
     def get_nyse_tickers(self) -> list[str]:
@@ -62,6 +63,7 @@ class UniverseProvider:
             & (listed["Test Issue"] == "N")
             & (listed["ETF"] == "N")
         ]
+        listed = self._filter_tradeable_common_symbols(listed, "ACT Symbol")
         return self._normalize_tickers(listed["ACT Symbol"].tolist())
 
     def get_universe_tickers(self, universe: str) -> list[str]:
@@ -115,3 +117,24 @@ class UniverseProvider:
             deduped.append(ticker)
 
         return deduped
+
+    def _filter_tradeable_common_symbols(
+        self,
+        listed: pd.DataFrame,
+        symbol_column: str,
+    ) -> pd.DataFrame:
+        filtered = listed.copy()
+
+        if "Security Name" in filtered.columns:
+            security_name = filtered["Security Name"].astype(str).str.lower()
+            non_common_pattern = r"\bwarrants?\b|\bunits?\b|\brights?\b"
+            filtered = filtered[
+                ~security_name.str.contains(non_common_pattern, regex=True)
+            ]
+
+        symbol = filtered[symbol_column].astype(str).str.strip().str.upper()
+        normalized_symbol = symbol.str.replace(".", "-", regex=False)
+        suffix = normalized_symbol.str.split("-").str[-1]
+        filtered = filtered[~suffix.isin(["W", "WS", "WT", "U", "R"])]
+
+        return filtered

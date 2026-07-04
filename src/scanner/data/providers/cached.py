@@ -110,11 +110,119 @@ class CachedMarketDataProvider(MarketDataProvider):
         )
         return refreshed_history if not refreshed_history.empty else fetched_history
 
+    def download_price_data_batch(
+        self,
+        tickers: list[str],
+        period: str = "1y",
+    ) -> dict[str, pd.DataFrame]:
+        if not self.enabled:
+            return self._fetch_batch_from_provider(tickers=tickers, period=period)
+
+        interval = "1d"
+        today = self.now().date()
+        start_date = period_start_date(period=period, today=today)
+        results: dict[str, pd.DataFrame] = {}
+        misses_by_fetch_period: dict[str, list[tuple[str, CacheFetchRequest]]] = {}
+
+        for ticker in tickers:
+            request = CacheFetchRequest(
+                provider=self.name,
+                ticker=ticker,
+                interval=interval,
+                period=period,
+                start_date=start_date,
+                end_date=None,
+                auto_adjust=True,
+            )
+            cached_history = self.cache.load_history(
+                provider=self.name,
+                ticker=ticker,
+                interval=interval,
+                start_date=start_date,
+            )
+
+            if not self.force_refresh and self._can_use_cache(cached_history, request):
+                self.stats.hits += 1
+                self.stats.rows_loaded_from_cache += len(cached_history)
+                results[ticker] = cached_history
+                continue
+
+            self.stats.misses += 1
+            fetch_period = self._refresh_period(
+                cached_history=cached_history,
+                requested_period=period,
+                requested_start_date=start_date,
+            )
+            misses_by_fetch_period.setdefault(fetch_period, []).append((ticker, request))
+
+        for fetch_period, misses in misses_by_fetch_period.items():
+            miss_tickers = [ticker for ticker, _request in misses]
+
+            try:
+                fetched_histories = self._fetch_batch_from_provider(
+                    tickers=miss_tickers,
+                    period=fetch_period,
+                )
+            except Exception as error:
+                for _ticker, request in misses:
+                    self.cache.record_fetch(
+                        request=request,
+                        status="error",
+                        error_message=str(error),
+                    )
+                raise
+
+            for ticker, request in misses:
+                fetched_history = fetched_histories.get(ticker, pd.DataFrame())
+                rows_stored = self.cache.store_history(
+                    provider=self.name,
+                    ticker=ticker,
+                    interval=interval,
+                    history=fetched_history,
+                )
+                self.cache.record_fetch(
+                    request=request,
+                    status="success",
+                    rows_returned=rows_stored,
+                )
+
+                refreshed_history = self.cache.load_history(
+                    provider=self.name,
+                    ticker=ticker,
+                    interval=interval,
+                    start_date=start_date,
+                )
+                results[ticker] = (
+                    refreshed_history
+                    if not refreshed_history.empty
+                    else fetched_history
+                )
+
+        return {ticker: results.get(ticker, pd.DataFrame()) for ticker in tickers}
+
     def _fetch_from_provider(self, ticker: str, period: str) -> pd.DataFrame:
         self.stats.provider_calls += 1
         history = self.provider.download_price_data(ticker=ticker, period=period)
         self.stats.rows_fetched_from_provider += len(history)
         return history
+
+    def _fetch_batch_from_provider(
+        self,
+        tickers: list[str],
+        period: str,
+    ) -> dict[str, pd.DataFrame]:
+        if not tickers:
+            return {}
+
+        self.stats.provider_calls += 1
+        histories = self.provider.download_price_data_batch(
+            tickers=tickers,
+            period=period,
+        )
+        self.stats.rows_fetched_from_provider += sum(
+            len(history) for history in histories.values()
+        )
+        return histories
 
     def _refresh_period(
         self,
@@ -153,8 +261,7 @@ class CachedMarketDataProvider(MarketDataProvider):
         if self.cache.has_successful_fetch_today(request=request, today=today):
             return True
 
-        latest_cached_date = cached_history.index.max().date()
-        return latest_cached_date >= latest_required_bar_date(self.now())
+        return cache_covers_latest(cached_history, self.now())
 
 
 def period_start_date(period: str, today: date) -> date | None:
@@ -194,6 +301,17 @@ def cache_covers_start(
         days=START_COVERAGE_GRACE_DAYS
     )
     return earliest_cached_date <= latest_acceptable_start
+
+
+def cache_covers_latest(
+    cached_history: pd.DataFrame,
+    now: datetime,
+) -> bool:
+    latest_cached_date = cached_history.index.max().date()
+    earliest_acceptable_latest = latest_required_bar_date(now) - timedelta(
+        days=START_COVERAGE_GRACE_DAYS
+    )
+    return latest_cached_date >= earliest_acceptable_latest
 
 
 def latest_required_bar_date(now: datetime) -> date:

@@ -8,7 +8,7 @@ import pandas as pd
 from yfinance.exceptions import YFRateLimitError
 
 from scanner.config.settings import settings
-from scanner.data.cache import SQLiteMarketDataCache
+from scanner.data.cache import CacheOverview, SQLiteMarketDataCache
 from scanner.data.providers import (
     AlphaVantageMarketDataProvider,
     CachedMarketDataProvider,
@@ -139,6 +139,13 @@ def get_market_data_cache_stats():
     return None
 
 
+def get_market_data_cache_overview() -> CacheOverview | None:
+    if not _CACHE_ENABLED:
+        return None
+
+    return _get_market_data_cache(_CACHE_PATH).overview(provider=_ACTIVE_PROVIDER_NAME)
+
+
 def download_price_data(
     ticker: str,
     period: str = "1y",
@@ -150,6 +157,35 @@ def download_price_data(
     for attempt in range(1, MAX_DOWNLOAD_ATTEMPTS + 1):
         try:
             return market_data_provider.download_price_data(ticker=ticker, period=period)
+        except Exception as error:
+            if not _should_retry(error) or attempt == MAX_DOWNLOAD_ATTEMPTS:
+                raise
+
+            last_error = error
+            delay_seconds = BASE_RETRY_DELAY_SECONDS * (2 ** (attempt - 1))
+            delay_seconds += random.uniform(0, 0.5)
+            time.sleep(delay_seconds)
+
+    if last_error is not None:
+        raise last_error
+
+    raise RuntimeError("Failed to download market data")
+
+
+def download_price_data_batch(
+    tickers: list[str],
+    period: str = "1y",
+    provider: str | MarketDataProvider | None = None,
+) -> dict[str, pd.DataFrame]:
+    last_error = None
+    market_data_provider = get_market_data_provider(provider)
+
+    for attempt in range(1, MAX_DOWNLOAD_ATTEMPTS + 1):
+        try:
+            return market_data_provider.download_price_data_batch(
+                tickers=tickers,
+                period=period,
+            )
         except Exception as error:
             if not _should_retry(error) or attempt == MAX_DOWNLOAD_ATTEMPTS:
                 raise

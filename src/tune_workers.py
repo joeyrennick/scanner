@@ -4,8 +4,10 @@ from scanner.config.settings import settings
 from scanner.data.market_data import (
     configure_market_data_cache,
     configure_market_data_provider,
+    get_market_data_cache_overview,
     get_market_data_cache_stats,
 )
+from scanner.utils.cache_summary import format_cache_summary
 from scanner.utils.worker_tuner import (
     DEFAULT_TICKERS,
     first_unstable_worker_count,
@@ -103,17 +105,13 @@ def main():
         results_df.to_csv(args.export_csv, index=False)
         print(f"Exported worker benchmark results to {args.export_csv}")
 
-    cache_stats = get_market_data_cache_stats()
+    cache_summary = format_cache_summary(
+        get_market_data_cache_stats(),
+        get_market_data_cache_overview(),
+    )
 
-    if cache_stats:
-        print(
-            "Market data cache: "
-            f"hits={cache_stats.hits}, "
-            f"misses={cache_stats.misses}, "
-            f"provider_calls={cache_stats.provider_calls}, "
-            f"rows_from_cache={cache_stats.rows_loaded_from_cache}, "
-            f"rows_fetched={cache_stats.rows_fetched_from_provider}"
-        )
+    if cache_summary:
+        print(cache_summary)
 
 
 if __name__ == "__main__":

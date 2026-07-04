@@ -11,11 +11,14 @@ from scanner.data.market_data import (
     check_market_data_connectivity,
     configure_market_data_cache,
     configure_market_data_provider,
+    get_market_data_cache_overview,
     get_market_data_cache_stats,
 )
 from scanner.config.settings import settings
+from scanner.services.price_filter import filter_tickers_by_price
 from scanner.strategies.strategy_registry import StrategyRegistry
 from scanner.universe.universe_provider import UniverseProvider
+from scanner.utils.cache_summary import format_cache_summary
 
 
 def export_trades(result, output_file: str):
@@ -74,8 +77,88 @@ def main():
         action="store_true",
         help="Force provider refreshes and update the local market data cache.",
     )
+    parser.add_argument(
+        "--history-period",
+        default=settings.backtest_history_period,
+        help="Price history period to download for backtesting.",
+    )
+    parser.add_argument(
+        "--min-price",
+        type=float,
+        help="Skip tickers with latest close below this price.",
+    )
+    parser.add_argument(
+        "--max-price",
+        type=float,
+        help="Skip tickers with latest close above this price.",
+    )
+    parser.add_argument(
+        "--price-sample-period",
+        default=settings.price_filter_sample_period,
+        help="Small history period to fetch when price is not already cached.",
+    )
+    parser.add_argument(
+        "--price-filter-workers",
+        type=int,
+        help="Deprecated alias for --price-filter-batch-size.",
+    )
+    parser.add_argument(
+        "--price-filter-batch-size",
+        type=int,
+        default=settings.price_filter_batch_size,
+        help="Number of uncached symbols to request in each price-filter batch.",
+    )
+    parser.add_argument(
+        "--price-filter-max-provider-calls",
+        type=int,
+        default=settings.price_filter_max_provider_calls,
+        help="Maximum uncached price-filter provider calls to make in one run.",
+    )
+    parser.add_argument(
+        "--price-filter-max-provider-batches",
+        type=int,
+        default=settings.price_filter_max_provider_batches,
+        help="Maximum price-filter provider batches to make in one run.",
+    )
+    parser.add_argument(
+        "--price-filter-batch-delay-ms",
+        type=int,
+        default=int(settings.price_filter_batch_delay_seconds * 1000),
+        help="Delay between price-filter provider batches in milliseconds.",
+    )
 
     args = parser.parse_args()
+
+    if (
+        args.min_price is not None
+        and args.max_price is not None
+        and args.min_price > args.max_price
+    ):
+        parser.error("--min-price cannot be greater than --max-price")
+
+    price_filter_batch_size = (
+        args.price_filter_workers
+        if args.price_filter_workers is not None
+        else args.price_filter_batch_size
+    )
+
+    if price_filter_batch_size <= 0:
+        parser.error("--price-filter-batch-size must be greater than zero")
+
+    if (
+        args.price_filter_max_provider_calls is not None
+        and args.price_filter_max_provider_calls < 0
+    ):
+        parser.error("--price-filter-max-provider-calls cannot be negative")
+
+    if (
+        args.price_filter_max_provider_batches is not None
+        and args.price_filter_max_provider_batches < 0
+    ):
+        parser.error("--price-filter-max-provider-batches cannot be negative")
+
+    if args.price_filter_batch_delay_ms < 0:
+        parser.error("--price-filter-batch-delay-ms cannot be negative")
 
     selected_sources = [
         source for source in [args.ticker, args.universe, args.watchlist] if source
@@ -115,6 +198,7 @@ def main():
     strategy = StrategyRegistry.get(args.strategy)
     watchlist_tickers = None
     result_ticker = None
+    selected_tickers = None
 
     if args.watchlist:
         try:
@@ -127,8 +211,58 @@ def main():
             parser.error(str(error))
 
         result_ticker = "Watchlist"
+        selected_tickers = watchlist_tickers
 
-    service = BacktestService()
+    if args.universe:
+        selected_tickers = UniverseProvider().get_universe_tickers(args.universe)
+        result_ticker = args.universe.upper()
+
+    if args.ticker:
+        selected_tickers = [args.ticker.upper()]
+        result_ticker = args.ticker.upper()
+
+    if args.min_price is not None or args.max_price is not None:
+        price_filter_result = filter_tickers_by_price(
+            tickers=selected_tickers or [],
+            min_price=args.min_price,
+            max_price=args.max_price,
+            provider_name=args.market_data_provider,
+            cache_path=settings.market_data_cache_path,
+            sample_period=args.price_sample_period,
+            max_cached_price_age_days=settings.price_filter_max_cache_age_days,
+            max_provider_calls=args.price_filter_max_provider_calls,
+            batch_size=price_filter_batch_size,
+            batch_delay_seconds=args.price_filter_batch_delay_ms / 1000,
+            max_provider_batches=args.price_filter_max_provider_batches,
+        )
+        selected_tickers = price_filter_result.tickers
+        print(
+            "Price filter kept "
+            f"{price_filter_result.passed_count}/{price_filter_result.checked_count} "
+            f"tickers; skipped={price_filter_result.skipped_count}; "
+            f"provider_calls_attempted={price_filter_result.provider_calls_attempted}; "
+            f"provider_call_limit={price_filter_result.provider_calls_allowed}; "
+            f"provider_batches_attempted={price_filter_result.provider_batches_attempted}; "
+            f"provider_batch_limit={price_filter_result.provider_batches_allowed}"
+        )
+
+        if not selected_tickers:
+            print("No tickers matched the price filter.")
+            _print_cache_stats()
+            return
+
+        if args.watchlist or args.universe:
+            watchlist_tickers = selected_tickers
+            result_ticker = result_ticker or "Filtered Tickers"
+        else:
+            args.ticker = selected_tickers[0]
+
+    if args.universe and selected_tickers is not None:
+        watchlist_tickers = selected_tickers
+        result_ticker = result_ticker or args.universe.upper()
+        args.universe = None
+
+    service = BacktestService(history_period=args.history_period)
     reporter = BacktestReporter()
 
     if args.optimize_hold_days:
@@ -179,17 +313,17 @@ def main():
         if args.export_trades:
             export_trades(result, args.export_trades)
 
-    cache_stats = get_market_data_cache_stats()
+    _print_cache_stats()
 
-    if cache_stats:
-        print(
-            "Market data cache: "
-            f"hits={cache_stats.hits}, "
-            f"misses={cache_stats.misses}, "
-            f"provider_calls={cache_stats.provider_calls}, "
-            f"rows_from_cache={cache_stats.rows_loaded_from_cache}, "
-            f"rows_fetched={cache_stats.rows_fetched_from_provider}"
-        )
+
+def _print_cache_stats():
+    cache_summary = format_cache_summary(
+        get_market_data_cache_stats(),
+        get_market_data_cache_overview(),
+    )
+
+    if cache_summary:
+        print(cache_summary)
 
 if __name__ == "__main__":
     main()

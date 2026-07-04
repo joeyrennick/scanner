@@ -1,3 +1,5 @@
+import pandas as pd
+
 from scanner.universe.universe_provider import UniverseProvider
 
 
@@ -36,3 +38,24 @@ def test_normalize_tickers_dedupes_and_converts_dot_symbols():
         "BRK-B",
         "AAPL",
     ]
+
+
+def test_filter_tradeable_common_symbols_removes_warrants_units_and_rights():
+    provider = UniverseProvider()
+    listed = pd.DataFrame(
+        {
+            "Symbol": ["AAPL", "RZLVW", "SAAQ", "XYZU", "ABCR", "MSFT"],
+            "Security Name": [
+                "Apple Inc. Common Stock",
+                "Rezolve AI Warrants",
+                "SAAQ Units",
+                "XYZ Units",
+                "ABC Rights",
+                "Microsoft Corporation Common Stock",
+            ],
+        }
+    )
+
+    filtered = provider._filter_tradeable_common_symbols(listed, "Symbol")
+
+    assert filtered["Symbol"].tolist() == ["AAPL", "MSFT"]

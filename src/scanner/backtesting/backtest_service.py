@@ -9,8 +9,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 class BacktestService:
 
-    def __init__(self):
+    def __init__(self, history_period: str = settings.backtest_history_period):
         self.market_data_service = MarketDataService()
+        self.history_period = history_period
 
     def run_single_ticker(
         self,
@@ -18,8 +19,14 @@ class BacktestService:
         strategy,
         hold_days: int,
     ) -> BacktestResult:
-        history = self.market_data_service.get_history(ticker, period="5y")
-        benchmark = self.market_data_service.get_history("SPY", period="5y")
+        history = self.market_data_service.get_history(
+            ticker,
+            period=self.history_period,
+        )
+        benchmark = self.market_data_service.get_history(
+            "SPY",
+            period=self.history_period,
+        )
 
         relative_strength = calculate_relative_strength(history, benchmark)
 
@@ -52,14 +59,20 @@ class BacktestService:
         strategy,
         hold_days: int,
     ) -> BacktestResult:
-        benchmark = self.market_data_service.get_history("SPY", period="5y")
+        benchmark = self.market_data_service.get_history(
+            "SPY",
+            period=self.history_period,
+        )
 
         all_trades = []
         skipped = []
         max_workers = settings.max_workers
 
         def run_one(ticker: str):
-            history = self.market_data_service.get_history(ticker, period="5y")
+            history = self.market_data_service.get_history(
+                ticker,
+                period=self.history_period,
+            )
             relative_strength = calculate_relative_strength(history, benchmark)
 
             return Backtester().run(

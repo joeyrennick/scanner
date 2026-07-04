@@ -31,6 +31,17 @@ class CacheFetchRequest:
     auto_adjust: bool = True
 
 
+@dataclass(frozen=True)
+class CacheOverview:
+    provider: str | None
+    cached_tickers: int
+    cached_bars: int
+    earliest_bar_date: date | None
+    latest_bar_date: date | None
+    last_successful_refresh: datetime | None
+    days_since_refresh: int | None
+
+
 class SQLiteMarketDataCache:
     def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path)
@@ -90,6 +101,32 @@ class SQLiteMarketDataCache:
         history["Date"] = pd.to_datetime(history["Date"])
         history = history.set_index("Date")
         return history
+
+    def load_latest_close(
+        self,
+        provider: str,
+        ticker: str,
+        interval: str = "1d",
+    ) -> tuple[date, float] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT bar_date, close
+                FROM price_bars
+                WHERE provider = ?
+                  AND ticker = ?
+                  AND interval = ?
+                  AND close IS NOT NULL
+                ORDER BY bar_date DESC
+                LIMIT 1
+                """,
+                (provider, ticker.upper(), interval),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        return date.fromisoformat(row[0]), float(row[1])
 
     def store_history(
         self,
@@ -226,6 +263,66 @@ class SQLiteMarketDataCache:
             return False
 
         return datetime.fromisoformat(row[0]).date() == today
+
+    def overview(
+        self,
+        provider: str | None = None,
+        today: date | None = None,
+    ) -> CacheOverview:
+        today = today or datetime.now(UTC).date()
+        price_where = []
+        fetch_where = ["last_success_at IS NOT NULL"]
+        params: list[object] = []
+
+        if provider is not None:
+            price_where.append("provider = ?")
+            fetch_where.append("provider = ?")
+            params.append(provider)
+
+        price_query = """
+            SELECT
+                COUNT(DISTINCT ticker),
+                COUNT(*),
+                MIN(bar_date),
+                MAX(bar_date)
+            FROM price_bars
+        """
+
+        if price_where:
+            price_query += f" WHERE {' AND '.join(price_where)}"
+
+        fetch_query = """
+            SELECT MAX(last_success_at)
+            FROM cache_fetches
+        """
+
+        if fetch_where:
+            fetch_query += f" WHERE {' AND '.join(fetch_where)}"
+
+        with self._connect() as connection:
+            price_row = connection.execute(price_query, params).fetchone()
+            fetch_row = connection.execute(fetch_query, params).fetchone()
+
+        earliest_bar_date = date.fromisoformat(price_row[2]) if price_row[2] else None
+        latest_bar_date = date.fromisoformat(price_row[3]) if price_row[3] else None
+        last_successful_refresh = (
+            datetime.fromisoformat(fetch_row[0]) if fetch_row and fetch_row[0] else None
+        )
+        days_since_refresh = (
+            (today - last_successful_refresh.date()).days
+            if last_successful_refresh is not None
+            else None
+        )
+
+        return CacheOverview(
+            provider=provider,
+            cached_tickers=int(price_row[0] or 0),
+            cached_bars=int(price_row[1] or 0),
+            earliest_bar_date=earliest_bar_date,
+            latest_bar_date=latest_bar_date,
+            last_successful_refresh=last_successful_refresh,
+            days_since_refresh=days_since_refresh,
+        )
 
     def _ensure_schema(self) -> None:
         with self._connect() as connection:

@@ -5,10 +5,7 @@ import time
 import pandas as pd
 
 from scanner.config.settings import settings
-from scanner.data.market_data import (
-    check_market_data_connectivity,
-    download_price_data,
-)
+from scanner.data.market_data import check_market_data_connectivity, configure_market_data_provider, download_price_data
 from scanner.services.market_analyzer import MarketAnalyzer
 from scanner.universe.universe_provider import UniverseProvider
 from scanner.strategies.strategy_category import StrategyCategory
@@ -34,15 +31,26 @@ def main():
         action="store_true",
         help="Check Yahoo/yfinance connectivity before running the scan.",
     )
+    parser.add_argument(
+        "--market-data-provider",
+        default=settings.market_data_provider,
+        help="Market data provider to use for downloads.",
+    )
     args = parser.parse_args()
 
     logger = setup_logging()
+
+    try:
+        configure_market_data_provider(args.market_data_provider)
+    except ValueError as error:
+        parser.error(str(error))
 
     if args.preflight_market_data:
         try:
             result = check_market_data_connectivity(
                 ticker=settings.benchmark_ticker,
                 period="5d",
+                provider=args.market_data_provider,
             )
         except Exception as error:
             logger.error(f"Market data preflight failed: {error}")

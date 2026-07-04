@@ -2,11 +2,17 @@ from dataclasses import dataclass
 from functools import lru_cache
 import random
 import time
+from typing import Callable
 
 import pandas as pd
-import yfinance as yf
 from yfinance.exceptions import YFRateLimitError
-from yfinance._http import new_session
+
+from scanner.config.settings import settings
+from scanner.data.providers import (
+    AlphaVantageMarketDataProvider,
+    MarketDataProvider,
+    YahooMarketDataProvider,
+)
 
 
 @dataclass(frozen=True)
@@ -19,32 +25,80 @@ class MarketDataConnectivityResult:
     last_timestamp: str | None
 
 
+MAX_DOWNLOAD_ATTEMPTS = 4
+BASE_RETRY_DELAY_SECONDS = 1.5
 RETRYABLE_ERROR_PATTERNS = (
     "Too Many Requests",
     "Rate limited",
     "rate limit",
     "429",
 )
-MAX_DOWNLOAD_ATTEMPTS = 4
-BASE_RETRY_DELAY_SECONDS = 1.5
+
+_ACTIVE_PROVIDER_NAME = settings.market_data_provider
+_PROVIDER_FACTORIES: dict[str, Callable[[], MarketDataProvider]] = {
+    "yahoo": YahooMarketDataProvider,
+    "alpha_vantage": AlphaVantageMarketDataProvider,
+}
 
 
-@lru_cache(maxsize=1)
-def get_market_data_session():
-    return new_session()
+def register_market_data_provider(
+    name: str,
+    factory: Callable[[], MarketDataProvider],
+) -> None:
+    _PROVIDER_FACTORIES[name.lower()] = factory
+    _get_market_data_provider.cache_clear()
 
 
-def download_price_data(ticker, period="1y") -> pd.DataFrame:
+def configure_market_data_provider(name: str) -> None:
+    normalized = name.lower()
+
+    if normalized not in _PROVIDER_FACTORIES:
+        supported = ", ".join(sorted(_PROVIDER_FACTORIES))
+        raise ValueError(
+            f"Unsupported market data provider: {name}. Supported: {supported}"
+        )
+
+    global _ACTIVE_PROVIDER_NAME
+    _ACTIVE_PROVIDER_NAME = normalized
+    _get_market_data_provider.cache_clear()
+
+
+def get_market_data_provider(
+    provider: str | MarketDataProvider | None = None,
+) -> MarketDataProvider:
+    if provider is None:
+        return _get_market_data_provider(_ACTIVE_PROVIDER_NAME)
+
+    if isinstance(provider, str):
+        return _get_market_data_provider(provider.lower())
+
+    return provider
+
+
+@lru_cache(maxsize=None)
+def _get_market_data_provider(provider_name: str) -> MarketDataProvider:
+    factory = _PROVIDER_FACTORIES.get(provider_name.lower())
+
+    if factory is None:
+        supported = ", ".join(sorted(_PROVIDER_FACTORIES))
+        raise ValueError(
+            f"Unsupported market data provider: {provider_name}. Supported: {supported}"
+        )
+
+    return factory()
+
+
+def download_price_data(
+    ticker: str,
+    period: str = "1y",
+    provider: str | MarketDataProvider | None = None,
+) -> pd.DataFrame:
     last_error = None
+    market_data_provider = get_market_data_provider(provider)
 
     for attempt in range(1, MAX_DOWNLOAD_ATTEMPTS + 1):
         try:
-            return yf.download(
-                ticker,
-                period=period,
-                progress=True,
-                session=get_market_data_session(),
-            )
+            return market_data_provider.download_price_data(ticker=ticker, period=period)
         except Exception as error:
             if not _should_retry(error) or attempt == MAX_DOWNLOAD_ATTEMPTS:
                 raise
@@ -63,14 +117,15 @@ def download_price_data(ticker, period="1y") -> pd.DataFrame:
 def check_market_data_connectivity(
     ticker: str = "SPY",
     period: str = "5d",
+    provider: str | MarketDataProvider | None = None,
 ) -> MarketDataConnectivityResult:
     started_at = time.perf_counter()
-    history = download_price_data(ticker=ticker, period=period)
+    history = download_price_data(ticker=ticker, period=period, provider=provider)
     elapsed_seconds = time.perf_counter() - started_at
 
     if history.empty:
         raise RuntimeError(
-            f"No rows returned for {ticker} over period {period}; Yahoo connectivity is not healthy"
+            f"No rows returned for {ticker} over period {period}; market data connectivity is not healthy"
         )
 
     first_timestamp = history.index[0].isoformat() if len(history.index) else None

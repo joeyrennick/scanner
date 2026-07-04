@@ -1,5 +1,7 @@
 import argparse
 
+from scanner.config.settings import settings
+from scanner.data.market_data import configure_market_data_provider
 from scanner.utils.worker_tuner import (
     DEFAULT_TICKERS,
     first_unstable_worker_count,
@@ -39,8 +41,14 @@ def main():
         help="Average latency multiple above baseline that marks instability.",
     )
     parser.add_argument("--export-csv")
+    parser.add_argument(
+        "--market-data-provider",
+        default=settings.market_data_provider,
+        help="Market data provider to use for worker tuning.",
+    )
 
     args = parser.parse_args()
+    configure_market_data_provider(args.market_data_provider)
     worker_counts = parse_worker_counts(args.workers)
     results = benchmark_worker_counts(
         worker_counts=worker_counts,

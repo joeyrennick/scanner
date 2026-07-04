@@ -1,6 +1,8 @@
 import argparse
 
+from scanner.config.settings import settings
 from scanner.data.market_data import check_market_data_connectivity
+from scanner.data.market_data import configure_market_data_provider
 
 
 def main():
@@ -17,13 +19,20 @@ def main():
         default="5d",
         help="History period to request, such as 1d, 5d, or 1mo.",
     )
+    parser.add_argument(
+        "--market-data-provider",
+        default=settings.market_data_provider,
+        help="Market data provider to use for the connectivity check.",
+    )
 
     args = parser.parse_args()
 
     try:
+        configure_market_data_provider(args.market_data_provider)
         result = check_market_data_connectivity(
             ticker=args.ticker,
             period=args.period,
+            provider=args.market_data_provider,
         )
     except Exception as error:
         print(f"Market data check failed: {error}")

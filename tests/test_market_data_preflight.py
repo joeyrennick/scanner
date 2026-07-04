@@ -23,7 +23,7 @@ def test_main_preflight_flag_exits_before_scan(monkeypatch):
     monkeypatch.setattr(
         main,
         "check_market_data_connectivity",
-        lambda ticker, period: (_ for _ in ()).throw(RuntimeError("boom")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
     )
     monkeypatch.setattr(
         main,
@@ -46,7 +46,7 @@ def test_backtest_preflight_flag_exits_before_backtest(monkeypatch):
     monkeypatch.setattr(
         backtest,
         "check_market_data_connectivity",
-        lambda ticker, period: (_ for _ in ()).throw(RuntimeError("boom")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
     )
     monkeypatch.setattr(
         backtest.StrategyRegistry,

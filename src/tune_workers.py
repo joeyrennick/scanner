@@ -1,7 +1,11 @@
 import argparse
 
 from scanner.config.settings import settings
-from scanner.data.market_data import configure_market_data_provider
+from scanner.data.market_data import (
+    configure_market_data_cache,
+    configure_market_data_provider,
+    get_market_data_cache_stats,
+)
 from scanner.utils.worker_tuner import (
     DEFAULT_TICKERS,
     first_unstable_worker_count,
@@ -46,9 +50,23 @@ def main():
         default=settings.market_data_provider,
         help="Market data provider to use for worker tuning.",
     )
+    parser.add_argument(
+        "--no-market-data-cache",
+        action="store_true",
+        help="Disable the local market data cache for this run.",
+    )
+    parser.add_argument(
+        "--refresh-market-data-cache",
+        action="store_true",
+        help="Force provider refreshes and update the local market data cache.",
+    )
 
     args = parser.parse_args()
     configure_market_data_provider(args.market_data_provider)
+    configure_market_data_cache(
+        enabled=not args.no_market_data_cache,
+        force_refresh=args.refresh_market_data_cache,
+    )
     worker_counts = parse_worker_counts(args.workers)
     results = benchmark_worker_counts(
         worker_counts=worker_counts,
@@ -84,6 +102,18 @@ def main():
     if args.export_csv:
         results_df.to_csv(args.export_csv, index=False)
         print(f"Exported worker benchmark results to {args.export_csv}")
+
+    cache_stats = get_market_data_cache_stats()
+
+    if cache_stats:
+        print(
+            "Market data cache: "
+            f"hits={cache_stats.hits}, "
+            f"misses={cache_stats.misses}, "
+            f"provider_calls={cache_stats.provider_calls}, "
+            f"rows_from_cache={cache_stats.rows_loaded_from_cache}, "
+            f"rows_fetched={cache_stats.rows_fetched_from_provider}"
+        )
 
 
 if __name__ == "__main__":

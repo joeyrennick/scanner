@@ -7,7 +7,12 @@ from scanner.backtesting.backtest_optimizer import BacktestOptimizer
 from scanner.backtesting.backtest_reporter import BacktestReporter
 from scanner.backtesting.backtest_service import BacktestService
 from scanner.backtesting.watchlist_loader import load_watchlist_tickers
-from scanner.data.market_data import check_market_data_connectivity, configure_market_data_provider
+from scanner.data.market_data import (
+    check_market_data_connectivity,
+    configure_market_data_cache,
+    configure_market_data_provider,
+    get_market_data_cache_stats,
+)
 from scanner.config.settings import settings
 from scanner.strategies.strategy_registry import StrategyRegistry
 from scanner.universe.universe_provider import UniverseProvider
@@ -59,6 +64,16 @@ def main():
         default=settings.market_data_provider,
         help="Market data provider to use for downloads.",
     )
+    parser.add_argument(
+        "--no-market-data-cache",
+        action="store_true",
+        help="Disable the local market data cache for this run.",
+    )
+    parser.add_argument(
+        "--refresh-market-data-cache",
+        action="store_true",
+        help="Force provider refreshes and update the local market data cache.",
+    )
 
     args = parser.parse_args()
 
@@ -76,6 +91,11 @@ def main():
         configure_market_data_provider(args.market_data_provider)
     except ValueError as error:
         parser.error(str(error))
+
+    configure_market_data_cache(
+        enabled=not args.no_market_data_cache,
+        force_refresh=args.refresh_market_data_cache,
+    )
 
     if args.preflight_market_data:
         try:
@@ -159,7 +179,17 @@ def main():
         if args.export_trades:
             export_trades(result, args.export_trades)
 
+    cache_stats = get_market_data_cache_stats()
 
+    if cache_stats:
+        print(
+            "Market data cache: "
+            f"hits={cache_stats.hits}, "
+            f"misses={cache_stats.misses}, "
+            f"provider_calls={cache_stats.provider_calls}, "
+            f"rows_from_cache={cache_stats.rows_loaded_from_cache}, "
+            f"rows_fetched={cache_stats.rows_fetched_from_provider}"
+        )
 
 if __name__ == "__main__":
     main()

@@ -2,6 +2,7 @@ import argparse
 
 from scanner.config.settings import settings
 from scanner.data.market_data import check_market_data_connectivity
+from scanner.data.market_data import configure_market_data_cache
 from scanner.data.market_data import configure_market_data_provider
 
 
@@ -24,11 +25,25 @@ def main():
         default=settings.market_data_provider,
         help="Market data provider to use for the connectivity check.",
     )
+    parser.add_argument(
+        "--no-market-data-cache",
+        action="store_true",
+        help="Disable the local market data cache for this check.",
+    )
+    parser.add_argument(
+        "--refresh-market-data-cache",
+        action="store_true",
+        help="Force a provider refresh and update the local market data cache.",
+    )
 
     args = parser.parse_args()
 
     try:
         configure_market_data_provider(args.market_data_provider)
+        configure_market_data_cache(
+            enabled=not args.no_market_data_cache,
+            force_refresh=args.refresh_market_data_cache,
+        )
         result = check_market_data_connectivity(
             ticker=args.ticker,
             period=args.period,

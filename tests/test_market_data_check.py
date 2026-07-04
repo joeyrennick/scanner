@@ -81,12 +81,58 @@ def test_download_price_data_uses_configured_provider():
     market_data.register_market_data_provider("fake", lambda: FakeProvider())
 
     try:
+        market_data.configure_market_data_cache(enabled=False)
         market_data.configure_market_data_provider("fake")
         result = market_data.download_price_data("SPY", period="5d")
     finally:
         market_data.configure_market_data_provider("yahoo")
+        market_data.configure_market_data_cache(enabled=True, force_refresh=False)
 
     assert result.equals(history)
+
+
+def test_download_price_data_uses_configured_cache(tmp_path):
+    history = pd.DataFrame(
+        {
+            "Open": [100.0, 101.0],
+            "High": [101.0, 102.0],
+            "Low": [99.0, 100.0],
+            "Close": [100.0, 101.0],
+            "Volume": [1_000_000, 1_000_000],
+        },
+        index=pd.to_datetime(["2026-07-02", "2026-07-03"]),
+    )
+    calls = []
+
+    class FakeProvider:
+        name = "fake_cache"
+
+        def download_price_data(self, ticker, period="5d"):
+            calls.append((ticker, period))
+            return history
+
+    market_data.register_market_data_provider("fake_cache", lambda: FakeProvider())
+
+    try:
+        market_data.configure_market_data_provider("fake_cache")
+        market_data.configure_market_data_cache(
+            enabled=True,
+            force_refresh=False,
+            cache_path=str(tmp_path / "cache.sqlite"),
+        )
+
+        first = market_data.download_price_data("SPY", period="1d")
+        second = market_data.download_price_data("SPY", period="1d")
+    finally:
+        market_data.configure_market_data_provider("yahoo")
+        market_data.configure_market_data_cache(
+            enabled=True,
+            force_refresh=False,
+            cache_path="output/market_data_cache.sqlite",
+        )
+
+    assert first.equals(second)
+    assert len(calls) == 1
 
 
 def test_get_market_data_provider_is_cached(monkeypatch):

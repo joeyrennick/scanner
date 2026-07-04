@@ -8,8 +8,10 @@ import pandas as pd
 from yfinance.exceptions import YFRateLimitError
 
 from scanner.config.settings import settings
+from scanner.data.cache import SQLiteMarketDataCache
 from scanner.data.providers import (
     AlphaVantageMarketDataProvider,
+    CachedMarketDataProvider,
     MarketDataProvider,
     YahooMarketDataProvider,
 )
@@ -35,6 +37,10 @@ RETRYABLE_ERROR_PATTERNS = (
 )
 
 _ACTIVE_PROVIDER_NAME = settings.market_data_provider
+_CACHE_ENABLED = settings.market_data_cache_enabled
+_CACHE_FORCE_REFRESH = False
+_CACHE_PATH = settings.market_data_cache_path
+_CACHE_REFRESH_OVERLAP_DAYS = settings.market_data_refresh_overlap_days
 _PROVIDER_FACTORIES: dict[str, Callable[[], MarketDataProvider]] = {
     "yahoo": YahooMarketDataProvider,
     "alpha_vantage": AlphaVantageMarketDataProvider,
@@ -63,6 +69,26 @@ def configure_market_data_provider(name: str) -> None:
     _get_market_data_provider.cache_clear()
 
 
+def configure_market_data_cache(
+    enabled: bool | None = None,
+    force_refresh: bool | None = None,
+    cache_path: str | None = None,
+) -> None:
+    global _CACHE_ENABLED, _CACHE_FORCE_REFRESH, _CACHE_PATH
+
+    if enabled is not None:
+        _CACHE_ENABLED = enabled
+
+    if force_refresh is not None:
+        _CACHE_FORCE_REFRESH = force_refresh
+
+    if cache_path is not None:
+        _CACHE_PATH = cache_path
+
+    _get_market_data_provider.cache_clear()
+    _get_market_data_cache.cache_clear()
+
+
 def get_market_data_provider(
     provider: str | MarketDataProvider | None = None,
 ) -> MarketDataProvider:
@@ -85,7 +111,32 @@ def _get_market_data_provider(provider_name: str) -> MarketDataProvider:
             f"Unsupported market data provider: {provider_name}. Supported: {supported}"
         )
 
-    return factory()
+    provider = factory()
+
+    if not _CACHE_ENABLED:
+        return provider
+
+    return CachedMarketDataProvider(
+        provider=provider,
+        cache=_get_market_data_cache(_CACHE_PATH),
+        refresh_overlap_days=_CACHE_REFRESH_OVERLAP_DAYS,
+        force_refresh=_CACHE_FORCE_REFRESH,
+        enabled=_CACHE_ENABLED,
+    )
+
+
+@lru_cache(maxsize=None)
+def _get_market_data_cache(cache_path: str) -> SQLiteMarketDataCache:
+    return SQLiteMarketDataCache(cache_path)
+
+
+def get_market_data_cache_stats():
+    provider = get_market_data_provider()
+
+    if isinstance(provider, CachedMarketDataProvider):
+        return provider.stats
+
+    return None
 
 
 def download_price_data(

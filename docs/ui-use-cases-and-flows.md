@@ -392,6 +392,27 @@ Closed trades:
 - recommendation vs actual entry difference
 - recommendation vs actual exit difference
 
+Historical trade ledger:
+
+- all closed trades in one sortable/filterable table
+- each trade row colored by result:
+  - green for winning trades
+  - red for losing trades
+  - neutral for scratch/breakeven trades
+- ticker
+- strategy
+- planned vs actual entry
+- planned vs actual exit
+- entry date
+- exit date
+- days held
+- shares
+- return percent
+- dollar profit/loss
+- fees/slippage
+- notes
+- linked scanner recommendation, if available
+
 Actions:
 
 - Add recommended trade from candidate detail
@@ -407,7 +428,29 @@ Summary:
 - open risk
 - realized return
 - win rate
+- loss rate
+- actual win/loss ratio
+- average winner
+- average loser
+- profit factor
+- expectancy
+- total closed trades
+- total winning trades
+- total losing trades
 - average win/loss
+
+Historical analysis:
+
+- percentage of successful trades
+- win/loss count ratio
+- average return by strategy
+- average return by ticker
+- best trade
+- worst trade
+- longest winning streak
+- longest losing streak
+- monthly journal performance
+- cumulative realized P/L
 
 ### Broker Sync
 

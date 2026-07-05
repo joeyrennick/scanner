@@ -683,6 +683,9 @@ Security requirements:
 
 - use read-only credentials where the broker supports them
 - do not ask users to enter Fidelity website credentials into this app
+- use broker-hosted or approved-provider-hosted authentication when automated broker sync is available
+- the user should enter brokerage username/password only on the broker or approved provider page
+- the app should receive only an authorization result, token, or connection reference
 - do not screen-scrape brokerage websites
 - never place trades from this app in version one
 - keep credentials local
@@ -915,6 +918,7 @@ Settings navigation:
 - store broker API secrets in OS keychain/keyring where practical
 - use encrypted local config only as a fallback
 - do not store Fidelity website credentials for file import mode
+- do not collect brokerage website passwords in the app
 - clearly display connected account and paper/live status
 - require confirmation before applying matched broker fills to the journal
 

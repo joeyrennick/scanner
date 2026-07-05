@@ -559,6 +559,7 @@ Fidelity mode should support:
 - selected import file list
 - import preview button
 - note that Fidelity website credentials are not entered into this app
+- future automated sync should use broker/provider-hosted authorization, not an in-app Fidelity password form
 
 Interactive Brokers mode should support:
 
@@ -595,6 +596,8 @@ Security banner:
 ```text
 Read-only sync only. This app will not place, modify, or cancel trades.
 ```
+
+Broker authentication copy should make clear that users enter brokerage website passwords only on broker-hosted or approved-provider-hosted pages, never in this app.
 
 ## Mockup 7: Backtest Results
 

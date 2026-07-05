@@ -690,6 +690,9 @@ Fidelity import UI:
 Fidelity future sync path:
 
 - investigate Fidelity Access or a supported data aggregator only for read-only account/transaction sync
+- use a broker-hosted or approved-provider-hosted authorization flow
+- user should authenticate on Fidelity's or the approved provider's page, not in this app
+- app should receive only an authorization result, token, or connection reference
 - do not ask users to paste Fidelity website credentials into this app
 - do not screen-scrape Fidelity
 - do not build trade placement for Fidelity
@@ -981,6 +984,30 @@ Create a Settings / Broker Connections flow where the user can:
 5. Confirm paper vs live mode.
 6. Confirm read-only sync.
 7. Store credentials locally.
+
+Broker-hosted authentication:
+
+- If a broker supports OAuth, Fidelity Access-style data sharing, or an approved aggregator login, the app should open that broker/provider-hosted authorization flow.
+- The user enters brokerage username/password only on the broker or approved provider page.
+- The app receives only the authorization result, token, or connection reference needed for read-only sync.
+- The app must not render its own username/password form for Fidelity or any other brokerage website login.
+- The app must not ask users to paste brokerage website credentials into settings.
+- The app must not automate browser login or screen-scrape brokerage websites.
+
+Allowed connection modes:
+
+- file import, such as Fidelity activity/history exports
+- broker-hosted OAuth or equivalent approved authorization
+- approved data-sharing aggregator flow
+- direct API key/secret only where the broker intentionally provides API credentials for client applications
+
+Disallowed connection modes:
+
+- collecting brokerage website username/password in this app
+- storing brokerage website passwords
+- logging into Fidelity on the user's behalf
+- screen scraping brokerage websites
+- bypassing broker multi-factor authentication
 
 Version one broker sync should be read-only:
 

@@ -615,10 +615,19 @@ Controls:
 - strategy selector populated from backend metadata, including Bounce
 - hold days
 - history period
+- minimum history days, default `252`
+- allow overlapping trades toggle, default on
 - price range
 - Run Backtest button
 
 Source options should include selected or filtered Daily Scanner candidates. Example selected source label: `Selected Daily Scanner Candidates (3)`. The screen should make clear that this direct source does not require CSV export first.
+
+Backtest Results should show the configuration used for the run near the controls or summary:
+
+- hold days
+- history period
+- minimum history days
+- overlap mode
 
 Summary cards:
 
@@ -658,6 +667,7 @@ Show what strategy trades look like with portfolio rules applied.
 Controls:
 
 - trade CSV/source selector
+- source backtest config display when source is a backtest result
 - starting cash
 - max open positions
 - position sizing

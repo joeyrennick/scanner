@@ -274,12 +274,15 @@ Controls:
 - strategy selector populated from backend strategy metadata
 - hold days
 - history period
+- minimum history days, default `252`
+- allow overlapping trades toggle, default on
 - price range
 - export trades
 
 Output:
 
 - backtest summary
+- backtest config context: hold days, history period, minimum history days, overlap mode
 - trade table
 - return distribution
 - monthly summary
@@ -293,6 +296,7 @@ Purpose: convert trade CSV into portfolio-level results.
 Controls:
 
 - trade CSV selector
+- source backtest config display when the source is a backtest result
 - starting cash
 - max positions
 - position sizing

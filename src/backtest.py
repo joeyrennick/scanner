@@ -3,6 +3,7 @@ import os
 
 import pandas as pd
 
+from scanner.backtesting.backtest_config import BacktestConfig
 from scanner.backtesting.backtest_optimizer import BacktestOptimizer
 from scanner.backtesting.backtest_reporter import BacktestReporter
 from scanner.backtesting.backtest_service import BacktestService
@@ -51,6 +52,17 @@ def main():
 
     parser.add_argument("--strategy", default="pullback")
     parser.add_argument("--hold-days", type=int, default=5)
+    parser.add_argument(
+        "--min-history-days",
+        type=int,
+        default=252,
+        help="Minimum number of historical bars required before evaluating signals.",
+    )
+    parser.add_argument(
+        "--no-overlapping-trades",
+        action="store_true",
+        help="Skip new signals while a prior backtest trade is still open.",
+    )
     parser.add_argument("--compare-hold-days", nargs="+", type=int)
     parser.add_argument("--optimize-hold-days", action="store_true")
     parser.add_argument(
@@ -160,6 +172,16 @@ def main():
     if args.price_filter_batch_delay_ms < 0:
         parser.error("--price-filter-batch-delay-ms cannot be negative")
 
+    try:
+        backtest_config = BacktestConfig(
+            history_period=args.history_period,
+            hold_days=args.hold_days,
+            min_history_days=args.min_history_days,
+            allow_overlapping_trades=not args.no_overlapping_trades,
+        )
+    except ValueError as error:
+        parser.error(str(error))
+
     selected_sources = [
         source for source in [args.ticker, args.universe, args.watchlist] if source
     ]
@@ -262,7 +284,7 @@ def main():
         result_ticker = result_ticker or args.universe.upper()
         args.universe = None
 
-    service = BacktestService(history_period=args.history_period)
+    service = BacktestService(config=backtest_config)
     reporter = BacktestReporter()
 
     if args.optimize_hold_days:
@@ -303,12 +325,12 @@ def main():
             ticker=args.ticker,
             universe=args.universe,
             strategy=strategy,
-            hold_days=args.hold_days,
             tickers=watchlist_tickers,
             result_ticker=result_ticker,
+            config=backtest_config,
         )
 
-        reporter.print_result(result, args.hold_days)
+        reporter.print_result(result, backtest_config.hold_days)
 
         if args.export_trades:
             export_trades(result, args.export_trades)

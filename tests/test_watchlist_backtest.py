@@ -117,7 +117,9 @@ def test_backtest_service_runs_supplied_ticker_list(monkeypatch):
         name = "Fake Strategy"
 
     class FakeBacktester:
-        def run(self, ticker, history, strategy, relative_strength, hold_days):
+        def run(self, ticker, history, strategy, benchmark_history, config):
+            assert config.hold_days == 5
+            assert benchmark_history is not None
             return BacktestResult(
                 ticker=ticker,
                 strategy_name=strategy.name,
@@ -133,10 +135,6 @@ def test_backtest_service_runs_supplied_ticker_list(monkeypatch):
                 ],
             )
 
-    monkeypatch.setattr(
-        "scanner.backtesting.backtest_service.calculate_relative_strength",
-        lambda history, benchmark: 1,
-    )
     monkeypatch.setattr(
         "scanner.backtesting.backtest_service.Backtester",
         FakeBacktester,
@@ -164,7 +162,9 @@ def test_backtest_service_runs_named_universe(monkeypatch):
         name = "Fake Strategy"
 
     class FakeBacktester:
-        def run(self, ticker, history, strategy, relative_strength, hold_days):
+        def run(self, ticker, history, strategy, benchmark_history, config):
+            assert config.hold_days == 5
+            assert benchmark_history is not None
             return BacktestResult(
                 ticker=ticker,
                 strategy_name=strategy.name,
@@ -180,10 +180,6 @@ def test_backtest_service_runs_named_universe(monkeypatch):
                 ],
             )
 
-    monkeypatch.setattr(
-        "scanner.backtesting.backtest_service.calculate_relative_strength",
-        lambda history, benchmark: 1,
-    )
     monkeypatch.setattr(
         "scanner.backtesting.backtest_service.Backtester",
         FakeBacktester,
@@ -220,17 +216,16 @@ def test_backtest_service_uses_configured_history_period(monkeypatch):
         name = "Fake Strategy"
 
     class FakeBacktester:
-        def run(self, ticker, history, strategy, relative_strength, hold_days):
+        def run(self, ticker, history, strategy, benchmark_history, config):
+            assert config.hold_days == 5
+            assert config.history_period == "6mo"
+            assert benchmark_history is not None
             return BacktestResult(
                 ticker=ticker,
                 strategy_name=strategy.name,
                 trades=[],
             )
 
-    monkeypatch.setattr(
-        "scanner.backtesting.backtest_service.calculate_relative_strength",
-        lambda history, benchmark: 1,
-    )
     monkeypatch.setattr(
         "scanner.backtesting.backtest_service.Backtester",
         FakeBacktester,

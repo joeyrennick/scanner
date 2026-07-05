@@ -332,6 +332,8 @@ Evaluate configured strategy behavior over a ticker, watchlist, selected scanner
    - strategy from backend metadata, initially Pullback, Breakout, Bounce, and any future registered strategies
    - hold days
    - history period
+   - minimum history days, default `252`
+   - overlap mode: allow overlapping trades by default, with an option to block overlap
    - optional price filter
 4. User runs backtest.
 5. UI displays summary and trade table.
@@ -347,6 +349,7 @@ Summary cards:
 - expectancy
 - best trade
 - worst trade
+- configuration context: hold days, history period, minimum history days, and overlap mode
 
 Tables/charts:
 
@@ -368,6 +371,8 @@ Backtest source behavior:
 - Backtest can be launched directly from selected or filtered Daily Scanner candidates
 - Backtest Results should show the source clearly, for example `Selected Daily Scanner Candidates (3)`
 - the user should not need to export a CSV before running this backtest
+- Backtest Results should show the `BacktestConfig` used for the run so users can interpret results correctly
+- When a portfolio simulation is launched from a backtest result, the simulation should retain and display the source backtest config
 
 ## Use Case 5: Portfolio Simulation
 
@@ -389,6 +394,14 @@ Show what the trade results look like when realistic portfolio constraints are a
    - trailing stop
 4. User runs simulation.
 5. UI displays portfolio-level results.
+
+When the source is a backtest result, the page should show the backtest configuration that produced the trade list:
+
+- strategy
+- hold days
+- history period
+- minimum history days
+- overlap mode
 
 ### Screen Content
 

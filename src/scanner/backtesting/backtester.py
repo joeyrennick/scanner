@@ -1,5 +1,9 @@
+from dataclasses import replace
+
+from scanner.backtesting.backtest_config import BacktestConfig
 from scanner.backtesting.backtest_result import BacktestResult
 from scanner.backtesting.trade import Trade
+from scanner.indicators.relative_strength import calculate_relative_strength
 from scanner.models.market_data import MarketData
 from scanner.strategies.base_strategy import BaseStrategy
 
@@ -11,18 +15,43 @@ class Backtester:
         ticker: str,
         history,
         strategy: BaseStrategy,
-        relative_strength: float,
-        min_history_days: int = 252,
-        hold_days: int = 5,
+        benchmark_history,
+        config: BacktestConfig | None = None,
+        min_history_days: int | None = None,
+        hold_days: int | None = None,
     ) -> BacktestResult:
-        trades = []
+        backtest_config = config or BacktestConfig()
 
-        for index in range(min_history_days, len(history) - hold_days - 1):
+        if hold_days is not None:
+            backtest_config = replace(backtest_config, hold_days=hold_days)
+
+        if min_history_days is not None:
+            backtest_config = replace(
+                backtest_config,
+                min_history_days=min_history_days,
+            )
+
+        trades = []
+        last_exit_index = -1
+
+        for index in range(
+            backtest_config.min_history_days,
+            len(history) - backtest_config.hold_days - 1,
+        ):
             historical_slice = history.iloc[: index + 1]
 
             market_data = MarketData(
                 ticker=ticker,
                 history=historical_slice,
+            )
+            benchmark_slice = self._benchmark_slice(
+                benchmark_history=benchmark_history,
+                signal_label=history.index[index],
+                signal_index=index,
+            )
+            relative_strength = calculate_relative_strength(
+                historical_slice,
+                benchmark_slice,
             )
 
             result = strategy.evaluate(
@@ -32,7 +61,13 @@ class Backtester:
 
             if result.triggered:
                 entry_index = index + 1
-                exit_index = entry_index + hold_days
+                exit_index = entry_index + backtest_config.hold_days
+
+                if (
+                    not backtest_config.allow_overlapping_trades
+                    and entry_index <= last_exit_index
+                ):
+                    continue
 
                 entry_price = history.iloc[entry_index]["Close"]
                 exit_price = history.iloc[exit_index]["Close"]
@@ -68,9 +103,22 @@ class Backtester:
                         exit_price=exit_price,
                     )
                 )
+                last_exit_index = exit_index
 
         return BacktestResult(
             ticker=ticker,
             strategy_name=strategy.name,
             trades=trades,
         )
+
+    def _benchmark_slice(self, benchmark_history, signal_label, signal_index: int):
+        try:
+            benchmark_slice = benchmark_history.loc[:signal_label]
+
+            if not benchmark_slice.empty:
+                return benchmark_slice
+
+        except (AttributeError, KeyError, TypeError):
+            pass
+
+        return benchmark_history.iloc[: signal_index + 1]

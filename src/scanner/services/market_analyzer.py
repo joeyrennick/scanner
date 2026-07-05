@@ -25,7 +25,7 @@ class MarketAnalyzer:
     def analyze(
         self,
         ticker: str,
-        spy_return: float,
+        benchmark_history,
         period: str = "1y",
     ) -> StockAnalysis:
         self.logger.info(f"Downloading {ticker}")
@@ -43,7 +43,7 @@ class MarketAnalyzer:
 
         rs = calculate_relative_strength(
             market_data.history,
-            spy_return,
+            benchmark_history,
         )
 
         score_breakdown = calculate_score_breakdown(

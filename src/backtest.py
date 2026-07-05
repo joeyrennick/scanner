@@ -7,6 +7,7 @@ from scanner.backtesting.backtest_config import BacktestConfig
 from scanner.backtesting.backtest_optimizer import BacktestOptimizer
 from scanner.backtesting.backtest_reporter import BacktestReporter
 from scanner.backtesting.backtest_service import BacktestService
+from scanner.backtesting.walk_forward import WalkForwardTester
 from scanner.backtesting.watchlist_loader import load_watchlist_tickers
 from scanner.data.market_data import (
     check_market_data_connectivity,
@@ -121,6 +122,46 @@ def main():
         help="Path to export parameter sweep results as CSV.",
     )
     parser.add_argument(
+        "--walk-forward",
+        action="store_true",
+        help=(
+            "Run walk-forward testing by optimizing on each training window "
+            "and testing on the following forward window."
+        ),
+    )
+    parser.add_argument(
+        "--walk-forward-start-date",
+        help="Walk-forward start date in YYYY-MM-DD format.",
+    )
+    parser.add_argument(
+        "--walk-forward-end-date",
+        help="Walk-forward end date in YYYY-MM-DD format.",
+    )
+    parser.add_argument(
+        "--walk-forward-train-months",
+        type=int,
+        default=6,
+        help="Number of months in each walk-forward training window.",
+    )
+    parser.add_argument(
+        "--walk-forward-test-months",
+        type=int,
+        default=3,
+        help="Number of months in each walk-forward forward-test window.",
+    )
+    parser.add_argument(
+        "--walk-forward-step-months",
+        type=int,
+        help=(
+            "Months to advance between walk-forward windows. "
+            "Defaults to --walk-forward-test-months."
+        ),
+    )
+    parser.add_argument(
+        "--export-walk-forward-results",
+        help="Path to export walk-forward results as CSV.",
+    )
+    parser.add_argument(
         "--export-trades",
         help="Path to export individual backtest trades as CSV.",
     )
@@ -232,6 +273,28 @@ def main():
 
     if args.sweep_top <= 0:
         parser.error("--sweep-top must be greater than zero")
+
+    if args.sweep and args.walk_forward:
+        parser.error("--sweep and --walk-forward cannot be used together")
+
+    if args.walk_forward:
+        if not args.walk_forward_start_date or not args.walk_forward_end_date:
+            parser.error(
+                "--walk-forward requires --walk-forward-start-date and "
+                "--walk-forward-end-date"
+            )
+
+        if args.walk_forward_train_months <= 0:
+            parser.error("--walk-forward-train-months must be greater than zero")
+
+        if args.walk_forward_test_months <= 0:
+            parser.error("--walk-forward-test-months must be greater than zero")
+
+        if (
+            args.walk_forward_step_months is not None
+            and args.walk_forward_step_months <= 0
+        ):
+            parser.error("--walk-forward-step-months must be greater than zero")
 
     try:
         backtest_config = BacktestConfig(
@@ -348,7 +411,50 @@ def main():
     service = BacktestService(config=backtest_config)
     reporter = BacktestReporter()
 
-    if args.sweep:
+    if args.walk_forward:
+        tester = WalkForwardTester(service)
+
+        try:
+            walk_forward_results = tester.run(
+                ticker=args.ticker,
+                universe=args.universe,
+                strategy_name=args.strategy,
+                base_config=backtest_config,
+                start_date=args.walk_forward_start_date,
+                end_date=args.walk_forward_end_date,
+                train_months=args.walk_forward_train_months,
+                test_months=args.walk_forward_test_months,
+                step_months=args.walk_forward_step_months,
+                tickers=watchlist_tickers,
+                result_ticker=result_ticker,
+                hold_days=args.sweep_hold_days,
+                min_history_days=args.sweep_min_history_days,
+                allow_overlapping_trades=_parse_sweep_overlap(args.sweep_overlap),
+                strategy_parameters=_parse_sweep_strategy_params(
+                    args.sweep_strategy_param
+                ),
+                sort_by=args.sweep_sort_by,
+                min_trades=args.sweep_min_trades,
+            )
+        except ValueError as error:
+            parser.error(str(error))
+
+        reporter.print_walk_forward(
+            tester.summary(walk_forward_results),
+            walk_forward_results,
+        )
+
+        if args.export_walk_forward_results:
+            tester.export_results(
+                walk_forward_results,
+                args.export_walk_forward_results,
+            )
+            print(
+                "Exported walk-forward results to "
+                f"{args.export_walk_forward_results}"
+            )
+
+    elif args.sweep:
         optimizer = BacktestOptimizer(service)
 
         try:

@@ -129,3 +129,69 @@ class BacktestReporter:
         return ", ".join(
             f"{name}={value}" for name, value in parameters.items()
         )
+
+    def print_walk_forward(self, summary, results):
+        print("=" * 140)
+        print("Walk-Forward Results")
+        print("=" * 140)
+        print(f"Windows Tested: {summary.windows}")
+        print(
+            "Forward Windows With Trades: "
+            f"{summary.forward_windows_with_trades}"
+        )
+        print(
+            "Profitable Forward Windows: "
+            f"{summary.profitable_forward_windows}"
+        )
+        print(f"Average Forward Return: {summary.average_forward_return:.2f}%")
+        print(
+            "Average Forward Expectancy: "
+            f"{summary.average_forward_expectancy:.2f}%"
+        )
+        print(
+            "Average Forward Profit Factor: "
+            f"{summary.average_forward_profit_factor:.2f}"
+        )
+        print("-" * 140)
+
+        print(
+            f"{'Train':<23}"
+            f"{'Test':<23}"
+            f"{'Hold':<7}"
+            f"{'Trades':<9}"
+            f"{'Win Rate':<11}"
+            f"{'Avg Ret':<11}"
+            f"{'Expect':<11}"
+            f"{'PF':<8}"
+            f"{'Selected Strategy Params':<40}"
+        )
+        print("-" * 140)
+
+        for result in results:
+            row = result.to_dict()
+            train_period = f"{row['Train Start']} -> {row['Train End']}"
+            test_period = f"{row['Test Start']} -> {row['Test End']}"
+            params = (
+                self._format_strategy_params(
+                    result.training_result.candidate.strategy_parameters
+                )
+                if result.training_result is not None
+                else "n/a"
+            )
+            win_rate = f"{row['Forward Win Rate']:.2f}%"
+            average_return = f"{row['Forward Average Return']:.2f}%"
+            expectancy = f"{row['Forward Expectancy']:.2f}%"
+            profit_factor = f"{row['Forward Profit Factor']:.2f}"
+            print(
+                f"{train_period:<23}"
+                f"{test_period:<23}"
+                f"{str(row['Selected Hold Days']):<7}"
+                f"{row['Forward Trades']:<9}"
+                f"{win_rate:<11}"
+                f"{average_return:<11}"
+                f"{expectancy:<11}"
+                f"{profit_factor:<8}"
+                f"{params:<40}"
+            )
+
+        print("=" * 140)

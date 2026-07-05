@@ -358,6 +358,23 @@ Evaluate configured strategy behavior over a ticker, watchlist, selected scanner
 6. UI shows ranked configurations with the best configuration at the top.
 7. User can apply a selected configuration to the Backtest controls, export the sweep CSV, or run a full backtest with that configuration.
 
+### Walk-Forward Flow
+
+1. User opens Backtest Results or Backtest setup.
+2. User opens `Walk-Forward`.
+3. User selects the same parameter ranges used by Parameter Sweep.
+4. User selects:
+   - start date
+   - end date
+   - training window length, for example 6 months
+   - forward-test window length, for example 3 months
+   - step size, usually matching the forward-test length
+   - ranking metric and minimum trades
+5. User runs the walk-forward test.
+6. For each window, the backend optimizes only on the training period and then tests the selected configuration on the following unseen forward period.
+7. UI shows summary metrics, window-by-window results, selected parameters, and an export action.
+8. User can apply a stable configuration to the Backtest controls, but the UI should label the output as historical validation, not a prediction.
+
 ### Screen Content
 
 Summary cards:
@@ -390,6 +407,8 @@ Actions:
 - Export Analyzer Bucket CSVs
 - Optimize Parameters
 - Export Parameter Sweep CSV
+- Run Walk-Forward
+- Export Walk-Forward CSV
 - Generate HTML Report
 - Simulate Portfolio
 
@@ -402,6 +421,7 @@ Backtest source behavior:
 - When a portfolio simulation is launched from a backtest result, the simulation should retain and display the source backtest config
 - Analyzer bucket sections should be shown only when the backtest result has the required source columns. Older trade CSVs may only show strategy-level buckets.
 - Parameter sweep results should clearly label that they are historical research, not live trade recommendations.
+- Walk-forward results should explain that they show whether optimized settings generalized into later historical periods; they do not predict the next forward period.
 
 ## Use Case 5: Portfolio Simulation
 

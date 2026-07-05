@@ -620,6 +620,7 @@ Controls:
 - price range
 - Run Backtest button
 - Optimize Parameters button
+- Walk-Forward button
 
 Source options should include selected or filtered Daily Scanner candidates. Example selected source label: `Selected Daily Scanner Candidates (3)`. The screen should make clear that this direct source does not require CSV export first.
 
@@ -654,6 +655,7 @@ Tables:
   - relative strength buckets, if source data includes relative strength
   - relative volume buckets, if source data includes relative volume
 - parameter sweep results with ranked configurations, best row highlight, and `Apply Configuration`
+- walk-forward results with summary cards, rolling window table, selected settings, and forward-test metrics
 
 Do not show a Recent Trades table on Backtest Results. This page should focus on aggregate historical backtest metrics, charts, and ticker rankings. Trade-level detail belongs in the exported trade CSV, generated HTML report, or a separate drill-down view.
 
@@ -663,6 +665,8 @@ Actions:
 - Export Analyzer Bucket CSVs
 - Optimize Parameters
 - Export Parameter Sweep CSV
+- Run Walk-Forward
+- Export Walk-Forward CSV
 - Generate HTML Report
 - Simulate Portfolio
 

@@ -1,5 +1,7 @@
 from dataclasses import replace
 
+import pandas as pd
+
 from scanner.backtesting.backtest_config import BacktestConfig
 from scanner.backtesting.backtest_result import BacktestResult
 from scanner.backtesting.trade import Trade
@@ -38,6 +40,11 @@ class Backtester:
             backtest_config.min_history_days,
             len(history) - backtest_config.hold_days - 1,
         ):
+            signal_label = history.index[index]
+
+            if not self._is_signal_in_window(signal_label, backtest_config):
+                continue
+
             historical_slice = history.iloc[: index + 1]
 
             market_data = MarketData(
@@ -46,7 +53,7 @@ class Backtester:
             )
             benchmark_slice = self._benchmark_slice(
                 benchmark_history=benchmark_history,
-                signal_label=history.index[index],
+                signal_label=signal_label,
                 signal_index=index,
             )
             relative_strength = calculate_relative_strength(
@@ -62,6 +69,10 @@ class Backtester:
             if result.triggered:
                 entry_index = index + 1
                 exit_index = entry_index + backtest_config.hold_days
+                exit_label = history.index[exit_index]
+
+                if not self._is_exit_in_window(exit_label, backtest_config):
+                    continue
 
                 if (
                     not backtest_config.allow_overlapping_trades
@@ -79,7 +90,6 @@ class Backtester:
                     exit_price = exit_price.item()
 
                 entry_label = history.index[entry_index]
-                exit_label = history.index[exit_index]
 
                 entry_date = (
                     entry_label.date()
@@ -122,3 +132,33 @@ class Backtester:
             pass
 
         return benchmark_history.iloc[: signal_index + 1]
+
+    def _is_signal_in_window(self, signal_label, config: BacktestConfig) -> bool:
+        return self._is_label_in_window(
+            label=signal_label,
+            start=config.signal_start_date,
+            end=config.signal_end_date,
+        )
+
+    def _is_exit_in_window(self, exit_label, config: BacktestConfig) -> bool:
+        if config.signal_end_date is None:
+            return True
+
+        return self._label_to_timestamp(exit_label) <= self._label_to_timestamp(
+            config.signal_end_date
+        )
+
+    def _is_label_in_window(self, label, start, end) -> bool:
+        timestamp = self._label_to_timestamp(label)
+
+        if start is not None and timestamp < self._label_to_timestamp(start):
+            return False
+
+        if end is not None and timestamp > self._label_to_timestamp(end):
+            return False
+
+        return True
+
+    @staticmethod
+    def _label_to_timestamp(label):
+        return pd.Timestamp(label).normalize()

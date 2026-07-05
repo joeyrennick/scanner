@@ -1,3 +1,5 @@
+import pandas as pd
+
 from scanner.backtesting.backtest_config import BacktestConfig
 from scanner.backtesting.backtester import Backtester
 from scanner.models.strategy_result import StrategyResult
@@ -133,3 +135,46 @@ def test_backtester_calculates_relative_strength_without_future_data():
 
     assert strategy.relative_strengths
     assert max(strategy.relative_strengths) == 0
+
+
+def test_backtester_limits_signals_and_exits_to_configured_date_window():
+    market_data = create_market_data(days=90)
+    market_data.history.index = pd.date_range("2026-01-01", periods=90, freq="D")
+
+    class AlwaysTriggeredStrategy:
+        name = "Always Triggered Strategy"
+        category = StrategyCategory.ENTRY
+
+        def evaluate(self, market_data, relative_strength):
+            return StrategyResult(
+                name=self.name,
+                category=self.category,
+                triggered=True,
+                score=1,
+                reason="test",
+                checks={},
+            )
+
+    result = Backtester().run(
+        ticker="TEST",
+        history=market_data.history,
+        strategy=AlwaysTriggeredStrategy(),
+        benchmark_history=create_flat_benchmark_history(days=90),
+        config=BacktestConfig(
+            hold_days=2,
+            min_history_days=63,
+            signal_start_date="2026-03-10",
+            signal_end_date="2026-03-15",
+        ),
+    )
+
+    assert [trade.entry_date.isoformat() for trade in result.trades] == [
+        "2026-03-11",
+        "2026-03-12",
+        "2026-03-13",
+    ]
+    assert [trade.exit_date.isoformat() for trade in result.trades] == [
+        "2026-03-13",
+        "2026-03-14",
+        "2026-03-15",
+    ]

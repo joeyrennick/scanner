@@ -284,6 +284,12 @@ Controls:
   - strategy config field ranges from backend strategy metadata
   - ranking metric
   - minimum trades
+- walk-forward controls:
+  - date range
+  - training window months
+  - forward-test window months
+  - step months
+  - same parameter ranges and ranking metric used by parameter sweep
 - export trades
 
 Output:
@@ -304,6 +310,12 @@ Output:
   - selected best configuration
   - apply-to-backtest action
   - sweep CSV export
+- walk-forward results:
+  - summary cards
+  - window-by-window table
+  - selected training configuration per window
+  - forward-test metrics
+  - walk-forward CSV export
 - HTML report link
 
 Analyzer bucket behavior:
@@ -328,6 +340,18 @@ Parameter sweep behavior:
 - `Export Parameter Sweep CSV` should save the ranked sweep table
 - long-running sweeps should use the same job/progress model as scanner and backtest jobs
 - display a research disclaimer that optimized values are historical results and may overfit
+
+Walk-forward behavior:
+
+- expose walk-forward as a mode or tab inside Backtest, next to Standard Backtest and Parameter Sweep
+- generate rolling windows from start date, end date, training months, forward-test months, and step months
+- for each window, run parameter sweep only on the training period
+- apply the winning training configuration to the next forward-test period without re-optimizing
+- show windows tested, forward windows with trades, profitable forward windows, average forward return, average forward expectancy, and average forward profit factor
+- window rows should show train period, test period, selected settings, training metrics, and forward-test metrics
+- `Apply Stable Configuration` should copy a selected or most frequent successful configuration into Backtest controls without claiming future performance
+- `Export Walk-Forward CSV` should save all window-level results
+- display a disclaimer that walk-forward tests historical generalization and is not a forecast
 
 ### Portfolio Simulation
 
@@ -421,6 +445,8 @@ Report type inference:
 - `*_buckets.csv` -> `analyzer_bucket_csv`
 - `parameter_sweep*.csv` -> `parameter_sweep_csv`
 - `*_sweep_results.csv` -> `parameter_sweep_csv`
+- `walk_forward*.csv` -> `walk_forward_csv`
+- `*_walk_forward_results.csv` -> `walk_forward_csv`
 - `*.csv` -> `csv_export`
 - unknown included file -> `other`
 

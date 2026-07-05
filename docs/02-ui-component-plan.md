@@ -277,6 +277,13 @@ Controls:
 - minimum history days, default `252`
 - allow overlapping trades toggle, default on
 - price range
+- parameter sweep controls:
+  - hold day values
+  - minimum history values
+  - overlap modes
+  - strategy config field ranges from backend strategy metadata
+  - ranking metric
+  - minimum trades
 - export trades
 
 Output:
@@ -292,6 +299,11 @@ Output:
   - composite score buckets
   - relative strength buckets
   - relative volume buckets
+- parameter sweep results:
+  - ranked configuration table
+  - selected best configuration
+  - apply-to-backtest action
+  - sweep CSV export
 - HTML report link
 
 Analyzer bucket behavior:
@@ -303,6 +315,19 @@ Analyzer bucket behavior:
 - each bucket table should include trades, win rate, average return, median return, best trade, worst trade, and profit factor
 - provide an `Export Analyzer Bucket CSVs` action that writes one CSV per available bucket table
 - generated HTML trade analysis reports should include the same available bucket sections
+
+Parameter sweep behavior:
+
+- call the backend parameter sweep optimizer from Backtest Results or Backtest setup
+- generate combinations from selected backtest config values and strategy config field values
+- rank by expectancy by default, with alternatives for average return, win rate, profit factor, or trade count
+- filter low-sample rows with a configurable minimum trade count
+- show the current best row first and include its hold days, minimum history, overlap mode, strategy config values, trades, win rate, average return, expectancy, profit factor, best trade, and worst trade
+- `Apply Configuration` should copy the selected row values into the normal Backtest controls without rerunning automatically
+- `Run Backtest` from a selected sweep row should run the full backtest using those values
+- `Export Parameter Sweep CSV` should save the ranked sweep table
+- long-running sweeps should use the same job/progress model as scanner and backtest jobs
+- display a research disclaimer that optimized values are historical results and may overfit
 
 ### Portfolio Simulation
 
@@ -394,6 +419,8 @@ Report type inference:
 - `ticker_summary*.csv` -> `ticker_summary_csv`
 - `strategy_summary.csv` -> `analyzer_bucket_csv`
 - `*_buckets.csv` -> `analyzer_bucket_csv`
+- `parameter_sweep*.csv` -> `parameter_sweep_csv`
+- `*_sweep_results.csv` -> `parameter_sweep_csv`
 - `*.csv` -> `csv_export`
 - unknown included file -> `other`
 

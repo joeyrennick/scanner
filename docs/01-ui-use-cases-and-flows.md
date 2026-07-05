@@ -339,6 +339,25 @@ Evaluate configured strategy behavior over a ticker, watchlist, selected scanner
 5. UI displays summary and trade table.
 6. User can export trades or generate HTML analysis report.
 
+### Parameter Sweep Flow
+
+1. User opens Backtest Results or Backtest setup.
+2. User opens `Optimize Parameters`.
+3. User selects ranges for:
+   - hold days
+   - minimum history days
+   - overlap mode
+   - strategy-specific fields such as pullback distance, relative volume, or relative strength
+4. User selects ranking metric:
+   - expectancy
+   - average return
+   - win rate
+   - profit factor
+   - trades
+5. User runs the sweep.
+6. UI shows ranked configurations with the best configuration at the top.
+7. User can apply a selected configuration to the Backtest controls, export the sweep CSV, or run a full backtest with that configuration.
+
 ### Screen Content
 
 Summary cards:
@@ -369,6 +388,8 @@ Actions:
 
 - Export Trade CSV
 - Export Analyzer Bucket CSVs
+- Optimize Parameters
+- Export Parameter Sweep CSV
 - Generate HTML Report
 - Simulate Portfolio
 
@@ -380,6 +401,7 @@ Backtest source behavior:
 - Backtest Results should show the `BacktestConfig` used for the run so users can interpret results correctly
 - When a portfolio simulation is launched from a backtest result, the simulation should retain and display the source backtest config
 - Analyzer bucket sections should be shown only when the backtest result has the required source columns. Older trade CSVs may only show strategy-level buckets.
+- Parameter sweep results should clearly label that they are historical research, not live trade recommendations.
 
 ## Use Case 5: Portfolio Simulation
 

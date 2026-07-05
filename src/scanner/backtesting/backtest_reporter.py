@@ -72,3 +72,60 @@ class BacktestReporter:
         print(f"Average Return: {stats.average_return:.2f}%")
         print(f"Expectancy: {stats.expectancy:.2f}%")
         print("=" * 50)
+
+    def print_parameter_sweep(self, results, top: int = 10):
+        print("=" * 132)
+        print("Parameter Sweep Results")
+        print("=" * 132)
+
+        if not results:
+            print("No sweep results matched the minimum trade count.")
+            print("=" * 132)
+            return
+
+        print(
+            f"{'Rank':<6}"
+            f"{'Hold':<7}"
+            f"{'MinHist':<9}"
+            f"{'Overlap':<10}"
+            f"{'Trades':<9}"
+            f"{'Win Rate':<11}"
+            f"{'Avg Ret':<11}"
+            f"{'Expect':<11}"
+            f"{'PF':<8}"
+            f"{'Strategy Params':<50}"
+        )
+        print("-" * 132)
+
+        for rank, sweep_result in enumerate(results[:top], start=1):
+            row = sweep_result.to_dict()
+            params = self._format_strategy_params(
+                sweep_result.candidate.strategy_parameters
+            )
+            win_rate = f"{row['Win Rate']:.2f}%"
+            average_return = f"{row['Average Return']:.2f}%"
+            expectancy = f"{row['Expectancy']:.2f}%"
+            profit_factor = f"{row['Profit Factor']:.2f}"
+            print(
+                f"{rank:<6}"
+                f"{row['Hold Days']:<7}"
+                f"{row['Min History Days']:<9}"
+                f"{str(row['Allow Overlap']):<10}"
+                f"{row['Trades']:<9}"
+                f"{win_rate:<11}"
+                f"{average_return:<11}"
+                f"{expectancy:<11}"
+                f"{profit_factor:<8}"
+                f"{params:<50}"
+            )
+
+        print("=" * 132)
+
+    @staticmethod
+    def _format_strategy_params(parameters: dict) -> str:
+        if not parameters:
+            return "default"
+
+        return ", ".join(
+            f"{name}={value}" for name, value in parameters.items()
+        )

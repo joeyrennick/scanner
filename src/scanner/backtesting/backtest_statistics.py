@@ -90,3 +90,13 @@ class BacktestStatistics:
             (win_probability * self.average_win)
             + (loss_probability * self.average_loss)
         )
+
+    @property
+    def profit_factor(self) -> float:
+        gross_profit = sum(t.return_percent for t in self.winning_trades)
+        gross_loss = abs(sum(t.return_percent for t in self.losing_trades))
+
+        if gross_loss == 0:
+            return float("inf") if gross_profit > 0 else 0.0
+
+        return gross_profit / gross_loss

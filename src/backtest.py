@@ -66,6 +66,61 @@ def main():
     parser.add_argument("--compare-hold-days", nargs="+", type=int)
     parser.add_argument("--optimize-hold-days", action="store_true")
     parser.add_argument(
+        "--sweep",
+        action="store_true",
+        help="Run a parameter sweep over backtest and strategy settings.",
+    )
+    parser.add_argument(
+        "--sweep-hold-days",
+        nargs="+",
+        type=int,
+        help="Hold-day values to include in --sweep.",
+    )
+    parser.add_argument(
+        "--sweep-min-history-days",
+        nargs="+",
+        type=int,
+        help="Minimum-history values to include in --sweep.",
+    )
+    parser.add_argument(
+        "--sweep-overlap",
+        nargs="+",
+        choices=["allowed", "blocked"],
+        help="Overlap modes to include in --sweep.",
+    )
+    parser.add_argument(
+        "--sweep-strategy-param",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE[,VALUE...]",
+        help=(
+            "Strategy config field and values to include in --sweep. "
+            "Example: min_relative_volume=1.0,1.25,1.5"
+        ),
+    )
+    parser.add_argument(
+        "--sweep-sort-by",
+        default="expectancy",
+        choices=sorted(BacktestOptimizer.SORT_KEYS.keys()),
+        help="Metric used to rank parameter sweep results.",
+    )
+    parser.add_argument(
+        "--sweep-min-trades",
+        type=int,
+        default=1,
+        help="Minimum trades required for a sweep row to be ranked.",
+    )
+    parser.add_argument(
+        "--sweep-top",
+        type=int,
+        default=10,
+        help="Number of ranked sweep rows to print.",
+    )
+    parser.add_argument(
+        "--export-sweep-results",
+        help="Path to export parameter sweep results as CSV.",
+    )
+    parser.add_argument(
         "--export-trades",
         help="Path to export individual backtest trades as CSV.",
     )
@@ -171,6 +226,12 @@ def main():
 
     if args.price_filter_batch_delay_ms < 0:
         parser.error("--price-filter-batch-delay-ms cannot be negative")
+
+    if args.sweep_min_trades < 0:
+        parser.error("--sweep-min-trades cannot be negative")
+
+    if args.sweep_top <= 0:
+        parser.error("--sweep-top must be greater than zero")
 
     try:
         backtest_config = BacktestConfig(
@@ -287,7 +348,36 @@ def main():
     service = BacktestService(config=backtest_config)
     reporter = BacktestReporter()
 
-    if args.optimize_hold_days:
+    if args.sweep:
+        optimizer = BacktestOptimizer(service)
+
+        try:
+            sweep_results = optimizer.sweep_parameters(
+                ticker=args.ticker,
+                universe=args.universe,
+                strategy_name=args.strategy,
+                base_config=backtest_config,
+                tickers=watchlist_tickers,
+                result_ticker=result_ticker,
+                hold_days=args.sweep_hold_days,
+                min_history_days=args.sweep_min_history_days,
+                allow_overlapping_trades=_parse_sweep_overlap(args.sweep_overlap),
+                strategy_parameters=_parse_sweep_strategy_params(
+                    args.sweep_strategy_param
+                ),
+                sort_by=args.sweep_sort_by,
+                min_trades=args.sweep_min_trades,
+            )
+        except ValueError as error:
+            parser.error(str(error))
+
+        reporter.print_parameter_sweep(sweep_results, top=args.sweep_top)
+
+        if args.export_sweep_results:
+            optimizer.export_results(sweep_results, args.export_sweep_results)
+            print(f"Exported parameter sweep results to {args.export_sweep_results}")
+
+    elif args.optimize_hold_days:
         optimizer = BacktestOptimizer(service)
 
         results_by_hold_days, best = optimizer.optimize_hold_days(
@@ -346,6 +436,66 @@ def _print_cache_stats():
 
     if cache_summary:
         print(cache_summary)
+
+
+def _parse_sweep_overlap(values: list[str] | None) -> list[bool] | None:
+    if values is None:
+        return None
+
+    return [value == "allowed" for value in values]
+
+
+def _parse_sweep_strategy_params(values: list[str]) -> dict[str, list]:
+    parsed = {}
+
+    for value in values:
+        if "=" not in value:
+            raise ValueError(
+                "--sweep-strategy-param values must use NAME=VALUE[,VALUE...]"
+            )
+
+        name, raw_values = value.split("=", 1)
+        name = name.strip()
+
+        if not name:
+            raise ValueError("--sweep-strategy-param name cannot be empty")
+
+        parsed_values = [
+            _parse_sweep_value(raw_value.strip())
+            for raw_value in raw_values.split(",")
+            if raw_value.strip()
+        ]
+
+        if not parsed_values:
+            raise ValueError(
+                f"--sweep-strategy-param {name} must include at least one value"
+            )
+
+        parsed[name] = parsed_values
+
+    return parsed
+
+
+def _parse_sweep_value(value: str):
+    lower_value = value.lower()
+
+    if lower_value in {"true", "false"}:
+        return lower_value == "true"
+
+    if lower_value in {"none", "null"}:
+        return None
+
+    try:
+        return int(value)
+    except ValueError:
+        pass
+
+    try:
+        return float(value)
+    except ValueError:
+        pass
+
+    return value
 
 if __name__ == "__main__":
     main()

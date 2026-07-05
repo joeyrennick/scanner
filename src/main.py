@@ -1,30 +1,17 @@
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import argparse
-import time
-
-import pandas as pd
+from dataclasses import replace
 
 from scanner.config.settings import settings
+from scanner.context import ScannerContext
 from scanner.data.market_data import (
     check_market_data_connectivity,
     configure_market_data_cache,
     configure_market_data_provider,
-    download_price_data,
-    get_market_data_cache_overview,
-    get_market_data_cache_stats,
+    get_market_data_provider,
 )
-from scanner.services.market_analyzer import MarketAnalyzer
-from scanner.services.price_filter import filter_tickers_by_price
+from scanner.services.scan_service import ScanConfig, ScanService
 from scanner.universe.universe_provider import UniverseProvider
-from scanner.strategies.strategy_category import StrategyCategory
 from scanner.utils.logger import setup_logging
-from scanner.utils.cache_summary import format_cache_summary
-
-
-def analyze_one(ticker: str, benchmark_data, period: str):
-    analyzer = MarketAnalyzer()
-    result = analyzer.analyze(ticker, benchmark_data, period=period)
-    return ticker, result
 
 
 def main():
@@ -165,120 +152,34 @@ def main():
             f"{result.ticker} ({result.rows} rows in {result.elapsed_seconds:.2f}s)"
         )
 
-    start = time.perf_counter()
+    context = ScannerContext(
+        settings=replace(
+            settings,
+            market_data_provider=args.market_data_provider,
+        ),
+        logger=logger,
+        market_data_provider=get_market_data_provider(),
+        market_data_cache_enabled=not args.no_market_data_cache,
+        market_data_cache_force_refresh=args.refresh_market_data_cache,
+    )
 
-    tickers = UniverseProvider().get_universe_tickers(args.universe)
-
-    if args.min_price is not None or args.max_price is not None:
-        logger.info(
-            "Applying price filter: "
-            f"min={args.min_price if args.min_price is not None else 'none'}, "
-            f"max={args.max_price if args.max_price is not None else 'none'}"
-        )
-        price_filter_result = filter_tickers_by_price(
-            tickers=tickers,
+    scan_result = ScanService(context=context, logger=logger).run(
+        ScanConfig(
+            universe=args.universe,
+            market_data_provider=args.market_data_provider,
+            history_period=args.history_period,
+            output_file=settings.output_file,
             min_price=args.min_price,
             max_price=args.max_price,
-            provider_name=args.market_data_provider,
-            cache_path=settings.market_data_cache_path,
-            sample_period=args.price_sample_period,
-            max_cached_price_age_days=settings.price_filter_max_cache_age_days,
-            max_provider_calls=args.price_filter_max_provider_calls,
-            batch_size=price_filter_batch_size,
-            batch_delay_seconds=args.price_filter_batch_delay_ms / 1000,
-            max_provider_batches=args.price_filter_max_provider_batches,
-            logger=logger,
+            price_sample_period=args.price_sample_period,
+            price_filter_batch_size=price_filter_batch_size,
+            price_filter_max_provider_calls=args.price_filter_max_provider_calls,
+            price_filter_max_provider_batches=args.price_filter_max_provider_batches,
+            price_filter_batch_delay_seconds=args.price_filter_batch_delay_ms / 1000,
         )
-        tickers = price_filter_result.tickers
-        logger.info(
-            "Price filter kept "
-            f"{price_filter_result.passed_count}/{price_filter_result.checked_count} "
-            f"tickers; skipped={price_filter_result.skipped_count}; "
-            f"provider_calls_attempted={price_filter_result.provider_calls_attempted}; "
-            f"provider_call_limit={price_filter_result.provider_calls_allowed}; "
-            f"provider_batches_attempted={price_filter_result.provider_batches_attempted}; "
-            f"provider_batch_limit={price_filter_result.provider_batches_allowed}"
-        )
-
-    benchmark_data = download_price_data(
-        settings.benchmark_ticker,
-        period=args.history_period,
     )
 
-    results = []
-    skipped = []
-
-    logger.info(f"Loaded {len(tickers)} tickers")
-    logger.info(f"Starting scan with {settings.max_workers} workers")
-
-    with ThreadPoolExecutor(max_workers=settings.max_workers) as executor:
-        futures = {
-            executor.submit(
-                analyze_one,
-                ticker,
-                benchmark_data,
-                args.history_period,
-            ): ticker
-            for ticker in tickers
-        }
-
-        completed = 0
-
-        for future in as_completed(futures):
-            completed += 1
-            ticker = futures[future]
-
-            try:
-                _, result = future.result()
-                results.append(result)
-                logger.info(f"[{completed}/{len(tickers)}] Finished {ticker}")
-
-            except Exception as e:
-                skipped.append((ticker, str(e)))
-                logger.warning(f"[{completed}/{len(tickers)}] Skipping {ticker}: {e}")
-
-
-    trade_candidates = [
-        result
-        for result in results
-        if any(
-            strategy.triggered and strategy.category == StrategyCategory.ENTRY
-            for strategy in result.strategy_results
-        )
-    ]
-
-    if trade_candidates:
-        df = pd.DataFrame([result.to_dict() for result in trade_candidates])
-        df = df.sort_values(by="Composite Score", ascending=False)
-    else:
-        logger.info("No trade candidates found.")
-        df = pd.DataFrame()
-
-    print(df)
-
-    df.to_csv(settings.output_file, index=False)
-
-    elapsed = time.perf_counter() - start
-
-    logger.info("=" * 50)
-    logger.info(f"Total tickers: {len(tickers)}")
-    logger.info(f"Successfully analyzed: {len(results)}")
-    logger.info(f"Trade candidates: {len(trade_candidates)}")
-    logger.info(f"Skipped: {len(skipped)}")
-    logger.info(f"Scan completed in {elapsed:.2f} seconds")
-
-    cache_summary = format_cache_summary(
-        get_market_data_cache_stats(),
-        get_market_data_cache_overview(),
-    )
-
-    if cache_summary:
-        logger.info(cache_summary)
-
-    if skipped:
-        logger.info("Skipped tickers:")
-        for ticker, reason in skipped:
-            logger.info(f"  - {ticker}: {reason}")
+    print(scan_result.dataframe)
 
 
 if __name__ == "__main__":

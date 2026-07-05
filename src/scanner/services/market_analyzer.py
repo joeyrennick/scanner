@@ -1,4 +1,5 @@
 from scanner.data.market_data import download_price_data
+from scanner.context import ScannerContext
 from scanner.indicators.atr import add_atr
 from scanner.indicators.moving_averages import add_moving_averages
 from scanner.indicators.relative_strength import calculate_relative_strength
@@ -12,6 +13,15 @@ import logging
 
 class MarketAnalyzer:
     logger = logging.getLogger("scanner")
+
+    def __init__(
+        self,
+        context: ScannerContext | None = None,
+        logger: logging.Logger | None = None,
+    ):
+        self.context = context
+        self.logger = logger or logging.getLogger("scanner")
+
     def analyze(
         self,
         ticker: str,
@@ -19,7 +29,11 @@ class MarketAnalyzer:
         period: str = "1y",
     ) -> StockAnalysis:
         self.logger.info(f"Downloading {ticker}")
-        data = download_price_data(ticker, period=period)
+        data = (
+            self.context.download_price_data(ticker, period=period)
+            if self.context is not None
+            else download_price_data(ticker, period=period)
+        )
 
         data = add_moving_averages(data)
         data = add_atr(data)

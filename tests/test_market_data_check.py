@@ -122,8 +122,8 @@ def test_download_price_data_uses_configured_cache(tmp_path):
             cache_path=str(tmp_path / "cache.sqlite"),
         )
 
-        first = market_data.download_price_data("SPY", period="1d")
-        second = market_data.download_price_data("SPY", period="1d")
+        first = market_data.download_price_data("SPY", period="5d")
+        second = market_data.download_price_data("SPY", period="5d")
     finally:
         market_data.configure_market_data_provider("yahoo")
         market_data.configure_market_data_cache(

@@ -103,25 +103,47 @@ def get_market_data_provider(
 
 @lru_cache(maxsize=None)
 def _get_market_data_provider(provider_name: str) -> MarketDataProvider:
-    factory = _PROVIDER_FACTORIES.get(provider_name.lower())
+    return create_market_data_provider(
+        name=provider_name,
+        cache_enabled=_CACHE_ENABLED,
+        force_refresh=_CACHE_FORCE_REFRESH,
+        cache_path=_CACHE_PATH,
+        refresh_overlap_days=_CACHE_REFRESH_OVERLAP_DAYS,
+    )
+
+
+def create_market_data_provider(
+    name: str,
+    cache_enabled: bool | None = None,
+    force_refresh: bool = False,
+    cache_path: str | None = None,
+    refresh_overlap_days: int | None = None,
+) -> MarketDataProvider:
+    provider_name = name.lower()
+    factory = _PROVIDER_FACTORIES.get(provider_name)
 
     if factory is None:
         supported = ", ".join(sorted(_PROVIDER_FACTORIES))
         raise ValueError(
-            f"Unsupported market data provider: {provider_name}. Supported: {supported}"
+            f"Unsupported market data provider: {name}. Supported: {supported}"
         )
 
     provider = factory()
+    resolved_cache_enabled = _CACHE_ENABLED if cache_enabled is None else cache_enabled
 
-    if not _CACHE_ENABLED:
+    if not resolved_cache_enabled:
         return provider
 
     return CachedMarketDataProvider(
         provider=provider,
-        cache=_get_market_data_cache(_CACHE_PATH),
-        refresh_overlap_days=_CACHE_REFRESH_OVERLAP_DAYS,
-        force_refresh=_CACHE_FORCE_REFRESH,
-        enabled=_CACHE_ENABLED,
+        cache=SQLiteMarketDataCache(cache_path or _CACHE_PATH),
+        refresh_overlap_days=(
+            _CACHE_REFRESH_OVERLAP_DAYS
+            if refresh_overlap_days is None
+            else refresh_overlap_days
+        ),
+        force_refresh=force_refresh,
+        enabled=resolved_cache_enabled,
     )
 
 

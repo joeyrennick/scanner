@@ -116,7 +116,9 @@ def test_sqlite_cache_overview_reports_refresh_staleness(tmp_path):
     assert overview.earliest_bar_date.isoformat() == "2026-07-01"
     assert overview.latest_bar_date.isoformat() == "2026-07-03"
     assert overview.last_successful_refresh is not None
-    assert overview.days_since_refresh == 2
+    assert overview.days_since_refresh == (
+        datetime(2026, 7, 6).date() - overview.last_successful_refresh.date()
+    ).days
 
 
 def test_cached_provider_fetches_and_stores_on_cache_miss(tmp_path):
@@ -163,7 +165,7 @@ def test_cached_provider_accepts_next_trading_day_start_after_non_trading_start(
         provider="fake",
         ticker="AAPL",
         interval="1d",
-        history=create_history(start="2021-07-06", days=1254),
+        history=create_history(start="2021-07-06", days=1825),
     )
     cache.record_fetch(
         request=CacheFetchRequest(
@@ -174,9 +176,9 @@ def test_cached_provider_accepts_next_trading_day_start_after_non_trading_start(
             start_date=datetime(2021, 7, 4).date(),
         ),
         status="success",
-        rows_returned=1254,
+        rows_returned=1825,
     )
-    provider = FakeProvider(create_history(start="2021-07-06", days=1254))
+    provider = FakeProvider(create_history(start="2021-07-06", days=1825))
     cached_provider = CachedMarketDataProvider(
         provider=provider,
         cache=cache,

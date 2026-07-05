@@ -27,8 +27,8 @@ def test_main_preflight_flag_exits_before_scan(monkeypatch):
     )
     monkeypatch.setattr(
         main,
-        "download_price_data",
-        lambda *args, **kwargs: pytest.fail("download_price_data should not be called"),
+        "ScanService",
+        lambda *args, **kwargs: pytest.fail("ScanService should not be called"),
     )
 
     with pytest.raises(SystemExit) as excinfo:

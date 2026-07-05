@@ -325,15 +325,15 @@ Final user command should eventually become:
 PYTHONPATH=src venv/bin/python src/run_ui.py
 ```
 
-## Open Decisions
+## Resolved Implementation Decisions
 
-- Whether to use React Query or plain fetch hooks.
-- Whether reports should be viewed as generated HTML files or rendered as native UI screens.
-- Whether cache warmup should have a dedicated CLI command in addition to the UI flow.
-- Whether a later packaged desktop app is worth the maintenance cost.
-- Which broker connector to implement first.
-- Whether broker credentials should be stored in the OS keychain/keyring or encrypted local config.
-- Whether the UI needs app login if the app remains local-only.
+- Use TanStack Query for UI server state, polling, cache invalidation, and long-running job status. Keep a small plain `fetch` API client underneath it so API calls stay testable.
+- View reports as generated local HTML/files in version one. The UI should index, open, download, and reveal report files instead of rebuilding every report as native UI.
+- Add a dedicated cache warmup CLI command in addition to the UI flow. The CLI and UI should call the same backend/cache service code so request throttling, cache-only preview, and rate-limit handling stay consistent.
+- Build the local web UI first. Defer native desktop packaging until the web UI stabilizes and there is a clear need for installation, tray integration, file association, or simpler non-technical setup.
+- Implement Interactive Brokers as the first broker connector for read-only sync because it supports paper/live accounts, API access, and the broker-sync model needed for open positions, executions, and closed trades.
+- Store broker credentials in the OS keychain/keyring where practical. Use encrypted local config only as a fallback when keychain/keyring support is unavailable.
+- Do not add app login while the application remains local-only. Add app accounts, sessions, roles, and hosted authentication only if the app becomes hosted or multi-user.
 
 ## Authentication Model
 

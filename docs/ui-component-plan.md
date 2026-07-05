@@ -44,8 +44,19 @@ Primary first-run workflow:
    - provider calls/batches attempted
    - estimated time remaining
    - whether rate limiting stopped the run
-7. User reviews candidates in a sortable/filterable watchlist.
-8. User can open detail for each candidate.
+7. After candidates are identified, UI refreshes the latest available provider price for the final candidate list.
+8. User reviews candidates in a sortable/filterable watchlist.
+9. User can open detail for each candidate.
+
+Daily Scanner price handling:
+
+- Use cached historical bars for strategy calculations, indicators, ATR, moving averages, relative strength, and backtests.
+- Do not rely on stale cached history for the displayed candidate price.
+- After the candidate list is narrowed, make a small fresh provider quote/history request for those final tickers only.
+- Display `Current Price`, `Price As Of`, and `Price Source` in scanner results, candidate detail, manual trade checklist, and the daily HTML report.
+- The scanner table `Current Price` column should include an info tooltip explaining that Yahoo/latest provider prices may be delayed or stale and should be verified in the user's trading platform before placing a trade.
+- If fresh price refresh fails because of provider errors or rate limits, fall back to the latest cached close and label it clearly as `Cached Close`.
+- Treat Yahoo prices as latest available Yahoo data, not guaranteed real-time market data.
 
 ## Initial Screens
 
@@ -70,12 +81,25 @@ Output:
 - watchlist table
 - score columns
 - pullback/breakout flags
-- price, moving averages, ATR, volume, relative strength
+- current price, price as of, price source
+- moving averages, ATR, volume, relative strength
+- entry area, stop, target/exit, hold time
 - cache and provider summary
 - CSV export link
 - daily HTML report link
 
-### Cache Setup
+The scanner table should not show the reward/risk column. Reward/risk belongs in Candidate Detail, where there is room to explain how the target was calculated.
+
+Scanner values that come from Candidate Detail can be user-adjusted:
+
+- Entry area, stop, target/exit, and hold time start from the app's suggested values.
+- If the user adjusts entry, stop, or target in Candidate Detail, the Daily Scanner table should show the adjusted values for that candidate.
+- Adjusted values should be visually marked, for example with an `Edited` indicator or tooltip.
+- The user must be able to revert adjusted values back to the original app-suggested values.
+- The Candidate Detail stock chart should be resizable so investors can enlarge it while adjusting trade levels.
+- Resizing the chart should preserve visible draggable trade levels and should not hide or break the Manual Trade Checklist panel.
+
+### Cache Warmup
 
 Purpose: help a first-time user build cache safely without hitting Yahoo too hard.
 
@@ -221,7 +245,7 @@ This gives the UI enough information to show meaningful first-run progress.
 - Add cache overview endpoint.
 - Add tests for API health, cache overview, and job lifecycle.
 
-### Phase 2: Cache Setup UI
+### Phase 2: Cache Warmup UI
 
 - Create Vite React app under `ui/`.
 - Add cache overview card.
@@ -313,6 +337,18 @@ PYTHONPATH=src venv/bin/python src/run_ui.py
 
 ## Authentication Model
 
+## Settings
+
+Settings should include scanner and recommendation defaults that affect generated trade plans.
+
+Recommendation defaults:
+
+- default reward/risk multiple, initially `2.0`
+- default suggested hold period, initially `5` trading days
+- default stop method, initially `2 * ATR`
+
+The default reward/risk multiple should be configurable under Settings and used when calculating the suggested target/exit shown in Candidate Detail, the manual trade checklist, journal planned trades, exports, and daily HTML reports. The Daily Scanner table should not display reward/risk directly.
+
 There are two separate authentication concerns.
 
 ### Local App Access
@@ -350,3 +386,12 @@ Version one broker sync should be read-only:
 - update journal only after user confirmation
 - never place, modify, or cancel trades
 
+Journal data ownership:
+
+- `Planned Trades` is the user-editable planning view.
+- Daily Scanner and Candidate Detail `Add To Journal` actions create rows in `Planned Trades`.
+- Users can edit or delete/cancel planned trades before they become actual broker positions.
+- `Open Trades` is a read-only view populated from broker-synced open positions and executions.
+- `Historical Ledger` is a read-only view populated from broker-synced closed trades and matched executions.
+- Actual entry, exit, shares, fees, and realized P/L should not be edited inline in `Open Trades` or `Historical Ledger`.
+- Corrections to actual trade data should happen through broker sync review, matching/linking, or broker-side correction.

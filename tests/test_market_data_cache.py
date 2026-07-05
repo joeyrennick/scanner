@@ -138,6 +138,51 @@ def test_cached_provider_fetches_and_stores_on_cache_miss(tmp_path):
     assert cached_provider.stats.provider_calls == 1
 
 
+def test_sqlite_cache_prunes_price_bars_before_cutoff(tmp_path):
+    cache = SQLiteMarketDataCache(tmp_path / "market_data.sqlite")
+    cache.store_history(
+        provider="fake",
+        ticker="AAPL",
+        interval="1d",
+        history=create_history(start="2020-01-01", days=10),
+    )
+
+    deleted_rows = cache.prune_price_bars_before(
+        provider="fake",
+        ticker="AAPL",
+        interval="1d",
+        cutoff_date=datetime(2020, 1, 6).date(),
+    )
+    loaded = cache.load_history(
+        provider="fake",
+        ticker="AAPL",
+        interval="1d",
+    )
+
+    assert deleted_rows == 5
+    assert loaded.index.min().date().isoformat() == "2020-01-06"
+
+
+def test_cached_provider_enforces_retention_after_single_fetch(tmp_path):
+    cache = SQLiteMarketDataCache(tmp_path / "market_data.sqlite")
+    provider = FakeProvider(create_history(start="2020-07-01", days=2200))
+    cached_provider = CachedMarketDataProvider(
+        provider=provider,
+        cache=cache,
+        retention_years=5,
+        now=lambda: datetime(2026, 7, 4, 10, 0),
+    )
+
+    result = cached_provider.download_price_data("AAPL", period="10y")
+
+    assert result.index.min().date().isoformat() == "2021-07-04"
+    assert cache.load_history(
+        provider="fake",
+        ticker="AAPL",
+        interval="1d",
+    ).index.min().date().isoformat() == "2021-07-04"
+
+
 def test_cached_provider_skips_provider_call_on_fresh_cache_hit(tmp_path):
     cache = SQLiteMarketDataCache(tmp_path / "market_data.sqlite")
     history = create_history(start="2026-06-01", days=40)
@@ -306,3 +351,27 @@ def test_cached_provider_batch_fetches_multiple_tickers_in_one_provider_call(tmp
     assert second["MSFT"].empty is False
     assert cached_provider.stats.provider_calls == 1
     assert cached_provider.stats.hits == 2
+
+
+def test_cached_provider_enforces_retention_after_batch_fetch(tmp_path):
+    cache = SQLiteMarketDataCache(tmp_path / "market_data.sqlite")
+    provider = FakeBatchProvider(
+        {
+            "AAPL": create_history(start="2020-07-01", days=2200),
+            "MSFT": create_history(start="2020-07-01", days=2200),
+        }
+    )
+    cached_provider = CachedMarketDataProvider(
+        provider=provider,
+        cache=cache,
+        retention_years=5,
+        now=lambda: datetime(2026, 7, 4, 10, 0),
+    )
+
+    result = cached_provider.download_price_data_batch(
+        ["AAPL", "MSFT"],
+        period="10y",
+    )
+
+    assert result["AAPL"].index.min().date().isoformat() == "2021-07-04"
+    assert result["MSFT"].index.min().date().isoformat() == "2021-07-04"

@@ -2,6 +2,8 @@ import pandas as pd
 
 from scanner.config.settings import ScannerSettings
 from scanner.context import ScannerContext
+from scanner.data.cache import SQLiteMarketDataCache
+from scanner.data.providers.cached import CachedMarketDataProvider
 from scanner.models.stock_analysis import StockAnalysis
 from scanner.models.strategy_result import StrategyResult
 from scanner.scoring.score_engine import ScoreBreakdown
@@ -34,6 +36,24 @@ class FakeProvider:
             {"Close": [100.0, 101.0]},
             index=pd.to_datetime(["2026-07-02", "2026-07-03"]),
         )
+
+
+class RateLimitedBatchProvider:
+    name = "fake_rate_limited_scan"
+
+    def __init__(self):
+        self.batch_calls = []
+
+    def download_price_data(self, ticker: str, period: str = "1y") -> pd.DataFrame:
+        raise AssertionError("scan should not fall through to single-ticker fetches")
+
+    def download_price_data_batch(
+        self,
+        tickers: list[str],
+        period: str = "1y",
+    ) -> dict[str, pd.DataFrame]:
+        self.batch_calls.append((tuple(tickers), period))
+        raise RuntimeError("YFRateLimitError: Too Many Requests")
 
 
 def create_analysis(ticker: str, triggered: bool) -> StockAnalysis:
@@ -109,3 +129,55 @@ def test_scan_service_returns_structured_result_and_writes_watchlist(
     assert pd.read_csv(output_file)["Ticker"].tolist() == ["AAPL"]
     assert "Loaded 2 tickers" in logger.infos
     assert "Trade candidates: 1" in logger.infos
+
+
+def test_scan_service_stops_after_cache_warmup_rate_limit(
+    tmp_path,
+    monkeypatch,
+):
+    from scanner.data import market_data
+
+    monkeypatch.setattr(market_data, "MAX_DOWNLOAD_ATTEMPTS", 1)
+    logger = FakeLogger()
+    provider = RateLimitedBatchProvider()
+    cached_provider = CachedMarketDataProvider(
+        provider=provider,
+        cache=SQLiteMarketDataCache(tmp_path / "market_data.sqlite"),
+    )
+    context = ScannerContext(
+        settings=ScannerSettings(
+            benchmark_ticker="SPY",
+            max_workers=1,
+            market_data_cache_enabled=True,
+        ),
+        logger=logger,
+        market_data_provider=cached_provider,
+    )
+    service = ScanService(
+        context=context,
+        logger=logger,
+        universe_provider=FakeUniverseProvider(),
+    )
+
+    def fail_analyze_one(self, ticker, benchmark_data, period):
+        raise AssertionError("analysis should not run without warmed cache")
+
+    monkeypatch.setattr(ScanService, "_analyze_one", fail_analyze_one)
+
+    output_file = tmp_path / "watchlist.csv"
+    result = service.run(
+        ScanConfig(
+            universe="sp500",
+            history_period="5d",
+            output_file=str(output_file),
+            cache_warmup_batch_size=1,
+            cache_warmup_batch_delay_seconds=0,
+        )
+    )
+
+    assert provider.batch_calls == [(("SPY",), "5d")]
+    assert result.cache_warmup_result is not None
+    assert result.cache_warmup_result.stopped_for_rate_limit is True
+    assert result.analyses == []
+    assert result.trade_candidates == []
+    assert output_file.exists()

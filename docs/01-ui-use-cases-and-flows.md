@@ -146,15 +146,22 @@ Dashboard primary action:
    - cache-only mode
 3. UI shows current cache status before running.
 4. User clicks Run Scan.
-5. UI shows:
+5. App runs a pre-scan cache warmup/incremental refresh:
+   - fresh cached symbols make no provider calls
+   - stale cached symbols request only the configured overlap window
+   - missing symbols are requested in controlled provider batches
+   - if rate limiting is detected, provider calls stop immediately
+6. UI shows:
    - symbols analyzed
    - skipped symbols
    - cache hits/misses
    - provider calls
+   - cache warmup batches attempted
    - elapsed time
-6. UI refreshes latest available provider prices for the final candidate list.
-7. UI displays watchlist table.
-8. User can:
+7. If cache warmup stopped because of rate limiting, the scanner analyzes only symbols with usable cached history and clearly labels the run as partial.
+8. UI refreshes latest available provider prices for the final candidate list.
+9. UI displays watchlist table.
+10. User can:
    - sort by composite score
    - filter by strategy
    - open candidate detail
@@ -334,6 +341,7 @@ Evaluate configured strategy behavior over a ticker, watchlist, selected scanner
    - history period
    - minimum history days, default `252`
    - overlap mode: allow overlapping trades by default, with an option to block overlap
+   - entry reset policy: none or require signal-off reset before another entry
    - optional price filter
 4. User runs backtest.
 5. UI displays summary and trade table.
@@ -347,6 +355,7 @@ Evaluate configured strategy behavior over a ticker, watchlist, selected scanner
    - hold days
    - minimum history days
    - overlap mode
+   - entry reset policy
    - strategy-specific fields such as pullback distance, relative volume, or relative strength
 4. User selects ranking metric:
    - expectancy
@@ -385,7 +394,7 @@ Summary cards:
 - expectancy
 - best trade
 - worst trade
-- configuration context: hold days, history period, minimum history days, and overlap mode
+- configuration context: hold days, history period, minimum history days, overlap mode, and entry reset policy
 
 Tables/charts:
 

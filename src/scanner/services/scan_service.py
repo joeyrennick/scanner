@@ -11,6 +11,11 @@ import pandas as pd
 from scanner.config.settings import settings
 from scanner.context import ScannerContext
 from scanner.models.stock_analysis import StockAnalysis
+from scanner.services.cache_warmup import (
+    CacheWarmupConfig,
+    CacheWarmupResult,
+    CacheWarmupService,
+)
 from scanner.services.market_analyzer import MarketAnalyzer
 from scanner.services.price_filter import PriceFilterResult, filter_tickers_by_price
 from scanner.strategies.strategy_category import StrategyCategory
@@ -37,6 +42,13 @@ class ScanConfig:
     price_filter_batch_delay_seconds: float = (
         settings.price_filter_batch_delay_seconds
     )
+    warm_market_data_cache: bool = settings.cache_warmup_enabled
+    cache_warmup_batch_size: int = settings.cache_warmup_batch_size
+    cache_warmup_max_provider_batches: int | None = (
+        settings.cache_warmup_max_provider_batches
+    )
+    cache_warmup_batch_delay_seconds: float = settings.cache_warmup_batch_delay_seconds
+    cache_warmup_stop_on_rate_limit: bool = settings.cache_warmup_stop_on_rate_limit
 
 
 @dataclass(frozen=True)
@@ -49,6 +61,7 @@ class ScanResult:
     output_file: str
     elapsed_seconds: float
     price_filter_result: PriceFilterResult | None = None
+    cache_warmup_result: CacheWarmupResult | None = None
     cache_summary: str | None = None
 
 
@@ -101,10 +114,58 @@ class ScanService:
                 f"provider_batch_limit={price_filter_result.provider_batches_allowed}"
             )
 
-        benchmark_data = self.context.download_price_data(
-            self.context.settings.benchmark_ticker,
-            period=config.history_period,
+        cache_warmup_result = None
+        cache_enabled = (
+            self.context.settings.market_data_cache_enabled
+            if self.context.market_data_cache_enabled is None
+            else self.context.market_data_cache_enabled
         )
+        if (
+            config.warm_market_data_cache
+            and not self.context.market_data_cache_force_refresh
+            and cache_enabled
+        ):
+            warmup_tickers = [self.context.settings.benchmark_ticker] + tickers
+            cache_warmup_result = CacheWarmupService(
+                context=self.context,
+                logger=self.logger,
+            ).run(
+                CacheWarmupConfig(
+                    tickers=warmup_tickers,
+                    period=config.history_period,
+                    batch_size=config.cache_warmup_batch_size,
+                    batch_delay_seconds=config.cache_warmup_batch_delay_seconds,
+                    max_provider_batches=config.cache_warmup_max_provider_batches,
+                    stop_on_rate_limit=config.cache_warmup_stop_on_rate_limit,
+                )
+            )
+            self.logger.info(cache_warmup_result.summary())
+
+            if cache_warmup_result.stopped_for_rate_limit:
+                available_tickers = set(cache_warmup_result.available_tickers)
+                tickers = [ticker for ticker in tickers if ticker in available_tickers]
+                self.logger.warning(
+                    "Scan will continue using only tickers with usable cached data "
+                    f"after cache warmup stopped: {len(tickers)} tickers"
+                )
+
+        benchmark_ticker = self.context.settings.benchmark_ticker.upper()
+        if (
+            cache_warmup_result is not None
+            and cache_warmup_result.stopped_for_rate_limit
+            and benchmark_ticker not in set(cache_warmup_result.available_tickers)
+        ):
+            self.logger.warning(
+                "Scan cannot continue because benchmark data is not available "
+                "after cache warmup stopped."
+            )
+            tickers = []
+            benchmark_data = pd.DataFrame()
+        else:
+            benchmark_data = self.context.download_price_data(
+                self.context.settings.benchmark_ticker,
+                period=config.history_period,
+            )
 
         analyses: list[StockAnalysis] = []
         skipped: list[tuple[str, str]] = []
@@ -179,6 +240,7 @@ class ScanService:
             output_file=config.output_file,
             elapsed_seconds=elapsed,
             price_filter_result=price_filter_result,
+            cache_warmup_result=cache_warmup_result,
             cache_summary=cache_summary,
         )
 

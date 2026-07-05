@@ -178,3 +178,69 @@ def test_backtester_limits_signals_and_exits_to_configured_date_window():
         "2026-03-14",
         "2026-03-15",
     ]
+
+
+def test_backtester_can_require_signal_reset_before_next_entry():
+    market_data = create_market_data(days=90)
+    market_data.history.index = pd.date_range("2026-01-01", periods=90, freq="D")
+    triggered_dates = {
+        "2026-03-10",
+        "2026-03-11",
+        "2026-03-12",
+        "2026-03-14",
+        "2026-03-15",
+    }
+
+    class DateTriggeredStrategy:
+        name = "Date Triggered Strategy"
+        category = StrategyCategory.ENTRY
+
+        def evaluate(self, market_data, relative_strength):
+            signal_date = market_data.history.index[-1].date().isoformat()
+            triggered = signal_date in triggered_dates
+            return StrategyResult(
+                name=self.name,
+                category=self.category,
+                triggered=triggered,
+                score=1 if triggered else 0,
+                reason="test",
+                checks={},
+            )
+
+    default_result = Backtester().run(
+        ticker="TEST",
+        history=market_data.history,
+        strategy=DateTriggeredStrategy(),
+        benchmark_history=create_flat_benchmark_history(days=90),
+        config=BacktestConfig(
+            hold_days=1,
+            min_history_days=63,
+            signal_start_date="2026-03-10",
+            signal_end_date="2026-03-17",
+        ),
+    )
+    reset_result = Backtester().run(
+        ticker="TEST",
+        history=market_data.history,
+        strategy=DateTriggeredStrategy(),
+        benchmark_history=create_flat_benchmark_history(days=90),
+        config=BacktestConfig(
+            hold_days=1,
+            min_history_days=63,
+            entry_reset_policy="signal_off",
+            signal_start_date="2026-03-10",
+            signal_end_date="2026-03-17",
+        ),
+    )
+
+    assert [trade.entry_date.isoformat() for trade in default_result.trades] == [
+        "2026-03-11",
+        "2026-03-12",
+        "2026-03-13",
+        "2026-03-15",
+        "2026-03-16",
+    ]
+    assert [trade.entry_date.isoformat() for trade in reset_result.trades] == [
+        "2026-03-11",
+        "2026-03-15",
+    ]

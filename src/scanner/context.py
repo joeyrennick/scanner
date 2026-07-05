@@ -44,6 +44,7 @@ class ScannerContext:
                 force_refresh=self.market_data_cache_force_refresh,
                 cache_path=self.settings.market_data_cache_path,
                 refresh_overlap_days=self.settings.market_data_refresh_overlap_days,
+                retention_years=self.settings.market_data_cache_retention_years,
             )
 
         return self._resolved_market_data_provider

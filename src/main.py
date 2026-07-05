@@ -91,6 +91,39 @@ def main():
         default=int(settings.price_filter_batch_delay_seconds * 1000),
         help="Delay between price-filter provider batches in milliseconds.",
     )
+    parser.add_argument(
+        "--skip-cache-warmup",
+        action="store_true",
+        help="Skip the pre-scan market data cache warmup.",
+    )
+    parser.add_argument(
+        "--cache-warmup-only",
+        action="store_true",
+        help="Warm the market data cache and exit without running the scanner.",
+    )
+    parser.add_argument(
+        "--cache-warmup-batch-size",
+        type=int,
+        default=settings.cache_warmup_batch_size,
+        help="Number of symbols to request in each cache warmup batch.",
+    )
+    parser.add_argument(
+        "--cache-warmup-max-provider-batches",
+        type=int,
+        default=settings.cache_warmup_max_provider_batches,
+        help="Maximum cache warmup provider batches to make in one run.",
+    )
+    parser.add_argument(
+        "--cache-warmup-batch-delay-ms",
+        type=int,
+        default=int(settings.cache_warmup_batch_delay_seconds * 1000),
+        help="Delay between cache warmup provider batches in milliseconds.",
+    )
+    parser.add_argument(
+        "--cache-only-preview",
+        action="store_true",
+        help="Preview cache coverage without making provider calls.",
+    )
     args = parser.parse_args()
 
     logger = setup_logging()
@@ -125,6 +158,18 @@ def main():
 
     if args.price_filter_batch_delay_ms < 0:
         parser.error("--price-filter-batch-delay-ms cannot be negative")
+
+    if args.cache_warmup_batch_size <= 0:
+        parser.error("--cache-warmup-batch-size must be greater than zero")
+
+    if (
+        args.cache_warmup_max_provider_batches is not None
+        and args.cache_warmup_max_provider_batches < 0
+    ):
+        parser.error("--cache-warmup-max-provider-batches cannot be negative")
+
+    if args.cache_warmup_batch_delay_ms < 0:
+        parser.error("--cache-warmup-batch-delay-ms cannot be negative")
 
     try:
         configure_market_data_provider(args.market_data_provider)
@@ -163,6 +208,23 @@ def main():
         market_data_cache_force_refresh=args.refresh_market_data_cache,
     )
 
+    if args.cache_warmup_only or args.cache_only_preview:
+        from scanner.services.cache_warmup import CacheWarmupConfig, CacheWarmupService
+
+        tickers = UniverseProvider().get_universe_tickers(args.universe)
+        result = CacheWarmupService(context=context, logger=logger).run(
+            CacheWarmupConfig(
+                tickers=[settings.benchmark_ticker] + tickers,
+                period=args.history_period,
+                batch_size=args.cache_warmup_batch_size,
+                batch_delay_seconds=args.cache_warmup_batch_delay_ms / 1000,
+                max_provider_batches=args.cache_warmup_max_provider_batches,
+                cache_only_preview=args.cache_only_preview,
+            )
+        )
+        logger.info(result.summary())
+        return
+
     scan_result = ScanService(context=context, logger=logger).run(
         ScanConfig(
             universe=args.universe,
@@ -176,6 +238,10 @@ def main():
             price_filter_max_provider_calls=args.price_filter_max_provider_calls,
             price_filter_max_provider_batches=args.price_filter_max_provider_batches,
             price_filter_batch_delay_seconds=args.price_filter_batch_delay_ms / 1000,
+            warm_market_data_cache=not args.skip_cache_warmup,
+            cache_warmup_batch_size=args.cache_warmup_batch_size,
+            cache_warmup_max_provider_batches=args.cache_warmup_max_provider_batches,
+            cache_warmup_batch_delay_seconds=args.cache_warmup_batch_delay_ms / 1000,
         )
     )
 

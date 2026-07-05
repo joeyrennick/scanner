@@ -24,6 +24,7 @@ class ParameterSweepCandidate:
             "allow_overlapping_trades": (
                 self.backtest_config.allow_overlapping_trades
             ),
+            "entry_reset_policy": self.backtest_config.entry_reset_policy,
             **self.strategy_parameters,
         }
 
@@ -40,6 +41,7 @@ class ParameterSweepResult:
             "Hold Days": self.candidate.backtest_config.hold_days,
             "Min History Days": self.candidate.backtest_config.min_history_days,
             "Allow Overlap": self.candidate.backtest_config.allow_overlapping_trades,
+            "Entry Reset Policy": self.candidate.backtest_config.entry_reset_policy,
             "Trades": stats.total_trades,
             "Win Rate": stats.win_rate,
             "Average Return": stats.average_return,
@@ -110,6 +112,7 @@ class BacktestOptimizer:
         hold_days: list[int] | None = None,
         min_history_days: list[int] | None = None,
         allow_overlapping_trades: list[bool] | None = None,
+        entry_reset_policies: list[str] | None = None,
         strategy_parameters: dict[str, list[Any]] | None = None,
         sort_by: str = "expectancy",
         min_trades: int = 1,
@@ -120,6 +123,7 @@ class BacktestOptimizer:
             hold_days=hold_days,
             min_history_days=min_history_days,
             allow_overlapping_trades=allow_overlapping_trades,
+            entry_reset_policies=entry_reset_policies,
             strategy_parameters=strategy_parameters,
         )
 
@@ -157,6 +161,7 @@ class BacktestOptimizer:
         hold_days: list[int] | None = None,
         min_history_days: list[int] | None = None,
         allow_overlapping_trades: list[bool] | None = None,
+        entry_reset_policies: list[str] | None = None,
         strategy_parameters: dict[str, list[Any]] | None = None,
     ) -> list[ParameterSweepCandidate]:
         strategy_parameters = strategy_parameters or {}
@@ -181,6 +186,9 @@ class BacktestOptimizer:
             if allow_overlapping_trades is not None
             else [base_config.allow_overlapping_trades]
         )
+        reset_policy_values = entry_reset_policies or [
+            base_config.entry_reset_policy
+        ]
         strategy_param_names = list(strategy_parameters.keys())
         strategy_param_values = [
             strategy_parameters[name] for name in strategy_param_names
@@ -192,10 +200,17 @@ class BacktestOptimizer:
             strategy_param_combinations = product(*strategy_param_values)
 
         candidates = []
-        for hold_days_value, min_history_value, overlap_value, strategy_values in product(
+        for (
+            hold_days_value,
+            min_history_value,
+            overlap_value,
+            reset_policy_value,
+            strategy_values,
+        ) in product(
             hold_day_values,
             min_history_values,
             overlap_values,
+            reset_policy_values,
             strategy_param_combinations,
         ):
             strategy_params = dict(zip(strategy_param_names, strategy_values))
@@ -204,6 +219,7 @@ class BacktestOptimizer:
                 hold_days=hold_days_value,
                 min_history_days=min_history_value,
                 allow_overlapping_trades=overlap_value,
+                entry_reset_policy=reset_policy_value,
             )
             strategy_config = replace(
                 default_strategy_config,

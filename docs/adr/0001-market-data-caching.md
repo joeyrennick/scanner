@@ -66,6 +66,7 @@ global settings in `ScannerSettings`:
 - `market_data_provider`
 - `market_data_cache_enabled`
 - `market_data_cache_path`
+- `market_data_cache_retention_years`
 - `market_data_refresh_overlap_days`
 - `price_filter_batch_size`
 - `price_filter_batch_delay_seconds`
@@ -88,6 +89,11 @@ not require changes to strategy logic.
 The SQLite cache adds local persistence without requiring a separate database
 server. This is appropriate for the current desktop/local CLI product and can
 later be replaced or wrapped by a service layer if the UI becomes multi-user.
+
+Cached daily price bars are pruned after successful cache writes according to
+`market_data_cache_retention_years`, which defaults to five years. This keeps
+the local SQLite database bounded while preserving enough history for the
+current scanner, backtester, and analyzer workflows.
 
 The tradeoff is added cache-invalidation complexity. Daily bars near the current
 date may change after initial publication, and current quotes are not the same

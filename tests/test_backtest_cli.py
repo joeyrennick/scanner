@@ -1,6 +1,8 @@
 import pytest
 
 from backtest import (
+    _parse_entry_reset_policy,
+    _parse_sweep_entry_reset_policies,
     _parse_sweep_overlap,
     _parse_sweep_strategy_params,
     _parse_sweep_value,
@@ -10,6 +12,16 @@ from backtest import (
 def test_parse_sweep_overlap_maps_cli_terms_to_booleans():
     assert _parse_sweep_overlap(["allowed", "blocked"]) == [True, False]
     assert _parse_sweep_overlap(None) is None
+
+
+def test_parse_entry_reset_policy_maps_cli_terms_to_config_values():
+    assert _parse_entry_reset_policy("none") == "none"
+    assert _parse_entry_reset_policy("signal-off") == "signal_off"
+    assert _parse_sweep_entry_reset_policies(["none", "signal-off"]) == [
+        "none",
+        "signal_off",
+    ]
+    assert _parse_sweep_entry_reset_policies(None) is None
 
 
 def test_parse_sweep_strategy_params_parses_value_types():

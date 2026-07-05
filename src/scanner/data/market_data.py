@@ -40,6 +40,7 @@ _ACTIVE_PROVIDER_NAME = settings.market_data_provider
 _CACHE_ENABLED = settings.market_data_cache_enabled
 _CACHE_FORCE_REFRESH = False
 _CACHE_PATH = settings.market_data_cache_path
+_CACHE_RETENTION_YEARS = settings.market_data_cache_retention_years
 _CACHE_REFRESH_OVERLAP_DAYS = settings.market_data_refresh_overlap_days
 _PROVIDER_FACTORIES: dict[str, Callable[[], MarketDataProvider]] = {
     "yahoo": YahooMarketDataProvider,
@@ -73,8 +74,9 @@ def configure_market_data_cache(
     enabled: bool | None = None,
     force_refresh: bool | None = None,
     cache_path: str | None = None,
+    retention_years: int | None = None,
 ) -> None:
-    global _CACHE_ENABLED, _CACHE_FORCE_REFRESH, _CACHE_PATH
+    global _CACHE_ENABLED, _CACHE_FORCE_REFRESH, _CACHE_PATH, _CACHE_RETENTION_YEARS
 
     if enabled is not None:
         _CACHE_ENABLED = enabled
@@ -84,6 +86,9 @@ def configure_market_data_cache(
 
     if cache_path is not None:
         _CACHE_PATH = cache_path
+
+    if retention_years is not None:
+        _CACHE_RETENTION_YEARS = retention_years
 
     _get_market_data_provider.cache_clear()
     _get_market_data_cache.cache_clear()
@@ -118,6 +123,7 @@ def create_market_data_provider(
     force_refresh: bool = False,
     cache_path: str | None = None,
     refresh_overlap_days: int | None = None,
+    retention_years: int | None = None,
 ) -> MarketDataProvider:
     provider_name = name.lower()
     factory = _PROVIDER_FACTORIES.get(provider_name)
@@ -141,6 +147,9 @@ def create_market_data_provider(
             _CACHE_REFRESH_OVERLAP_DAYS
             if refresh_overlap_days is None
             else refresh_overlap_days
+        ),
+        retention_years=(
+            _CACHE_RETENTION_YEARS if retention_years is None else retention_years
         ),
         force_refresh=force_refresh,
         enabled=resolved_cache_enabled,

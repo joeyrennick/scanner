@@ -41,6 +41,7 @@ class WalkForwardResult:
                     "Selected Hold Days": None,
                     "Selected Min History Days": None,
                     "Selected Allow Overlap": None,
+                    "Selected Entry Reset Policy": None,
                     "Training Trades": 0,
                     "Training Expectancy": 0.0,
                     "Training Profit Factor": 0.0,
@@ -64,6 +65,9 @@ class WalkForwardResult:
                 "Selected Min History Days": candidate.backtest_config.min_history_days,
                 "Selected Allow Overlap": (
                     candidate.backtest_config.allow_overlapping_trades
+                ),
+                "Selected Entry Reset Policy": (
+                    candidate.backtest_config.entry_reset_policy
                 ),
                 "Training Trades": training_stats.total_trades,
                 "Training Expectancy": training_stats.expectancy,
@@ -125,6 +129,7 @@ class WalkForwardTester:
         hold_days: list[int] | None = None,
         min_history_days: list[int] | None = None,
         allow_overlapping_trades: list[bool] | None = None,
+        entry_reset_policies: list[str] | None = None,
         strategy_parameters: dict[str, list[Any]] | None = None,
         sort_by: str = "expectancy",
         min_trades: int = 1,
@@ -154,6 +159,7 @@ class WalkForwardTester:
                 hold_days=hold_days,
                 min_history_days=min_history_days,
                 allow_overlapping_trades=allow_overlapping_trades,
+                entry_reset_policies=entry_reset_policies,
                 strategy_parameters=strategy_parameters,
                 sort_by=sort_by,
                 min_trades=min_trades,

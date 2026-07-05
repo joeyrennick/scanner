@@ -102,6 +102,11 @@ Primary first-run workflow:
    - last successful refresh
    - days since refresh
 5. User starts a cache warmup or scan.
+   - Daily Scanner runs a pre-scan cache warmup/incremental refresh before strategy analysis when cache is enabled.
+   - Fresh cached symbols do not call the provider.
+   - Stale cached symbols fetch only the configured overlap window.
+   - Missing symbols are fetched in controlled batches.
+   - If Yahoo rate limiting is detected, provider calls stop and the scan only continues for symbols with usable cached history.
 6. UI shows progress:
    - current batch
    - total planned batches
@@ -198,13 +203,10 @@ Proposed command:
 ```bash
 PYTHONPATH=src venv/bin/python src/warm_cache.py \
   --universe all \
-  --min-price 20 \
-  --max-price 50 \
   --history-period 6mo \
   --batch-size 100 \
-  --max-batches 10 \
-  --batch-delay 500 \
-  --stop-on-rate-limit
+  --max-provider-batches 10 \
+  --batch-delay-ms 500
 ```
 
 Preview command:
@@ -212,8 +214,6 @@ Preview command:
 ```bash
 PYTHONPATH=src venv/bin/python src/warm_cache.py \
   --universe all \
-  --min-price 20 \
-  --max-price 50 \
   --cache-only-preview
 ```
 
@@ -221,15 +221,13 @@ CLI options:
 
 - `--universe`: `sp500`, `djia`, `nasdaq`, `nyse`, or `all`
 - `--tickers`: optional comma-separated ticker override
-- `--min-price` and `--max-price`: optional price filter
 - `--history-period`: default `6mo`
 - `--batch-size`: default from settings
-- `--max-batches`: optional cap for safe incremental warmups
-- `--batch-delay`: delay between provider batches in milliseconds
+- `--max-provider-batches`: optional cap for safe incremental warmups
+- `--batch-delay-ms`: delay between provider batches in milliseconds
 - `--cache-only-preview`: inspect existing cache only and make no provider calls
-- `--refresh-stale-only`: fetch only symbols whose cache is stale or missing
-- `--stop-on-rate-limit`: stop provider calls immediately if rate limiting is detected
-- `--export-summary`: optional path for a CSV or JSON summary
+- `--refresh-market-data-cache`: force refreshes, for maintenance only; this can increase provider calls
+- `--keep-going-on-rate-limit`: advanced override; default behavior stops provider calls immediately if rate limiting is detected
 
 Shared service boundary:
 
@@ -241,7 +239,7 @@ Shared service boundary:
 
 Terminal output:
 
-- show selected universe, price range, history period, provider, and cache database path
+- show selected universe, history period, provider, and cache database path
 - estimate symbols to inspect, maximum provider batches, and minimum wait time before starting
 - show progress with current batch, symbols checked, kept, skipped, provider batches attempted, elapsed time, ETA, and rate-limit status
 - clearly label cache-only preview as `no provider calls`
@@ -250,7 +248,8 @@ Terminal output:
 Safety behavior:
 
 - default to conservative batching and delay values from settings
-- never continue provider calls after a detected Yahoo rate-limit error when `--stop-on-rate-limit` is enabled
+- never continue provider calls after a detected Yahoo rate-limit error by default
+- allow advanced users to override that behavior with `--keep-going-on-rate-limit`
 - preserve all cached data if a provider error or rate limit occurs
 - allow the user to resume later without refetching fresh cached data
 - return a non-zero exit code only for hard failures, not for a controlled rate-limit stop
@@ -258,8 +257,8 @@ Safety behavior:
 Tests:
 
 - unit test cache-only preview makes zero provider calls
-- unit test stale-only mode skips fresh cached symbols
-- unit test provider batching respects `batch_size`, `max_batches`, and `batch_delay`
+- unit test fresh-cache mode skips provider calls
+- unit test provider batching respects `batch_size`, `max_provider_batches`, and `batch_delay_ms`
 - unit test rate-limit handling stops subsequent provider calls and preserves cache
 - unit test CLI argument parsing maps to the shared service request model
 - integration test CLI summary output with a fake provider
@@ -276,11 +275,13 @@ Controls:
 - history period
 - minimum history days, default `252`
 - allow overlapping trades toggle, default on
+- entry reset policy selector, default `None`
 - price range
 - parameter sweep controls:
   - hold day values
   - minimum history values
   - overlap modes
+  - entry reset policies
   - strategy config field ranges from backend strategy metadata
   - ranking metric
   - minimum trades
@@ -295,7 +296,7 @@ Controls:
 Output:
 
 - backtest summary
-- backtest config context: hold days, history period, minimum history days, overlap mode
+- backtest config context: hold days, history period, minimum history days, overlap mode, entry reset policy
 - trade table
 - return distribution
 - monthly summary
@@ -334,12 +335,20 @@ Parameter sweep behavior:
 - generate combinations from selected backtest config values and strategy config field values
 - rank by expectancy by default, with alternatives for average return, win rate, profit factor, or trade count
 - filter low-sample rows with a configurable minimum trade count
-- show the current best row first and include its hold days, minimum history, overlap mode, strategy config values, trades, win rate, average return, expectancy, profit factor, best trade, and worst trade
+- show the current best row first and include its hold days, minimum history, overlap mode, entry reset policy, strategy config values, trades, win rate, average return, expectancy, profit factor, best trade, and worst trade
 - `Apply Configuration` should copy the selected row values into the normal Backtest controls without rerunning automatically
 - `Run Backtest` from a selected sweep row should run the full backtest using those values
 - `Export Parameter Sweep CSV` should save the ranked sweep table
 - long-running sweeps should use the same job/progress model as scanner and backtest jobs
 - display a research disclaimer that optimized values are historical results and may overfit
+
+Entry policy behavior:
+
+- overlap mode controls whether another trade can open while a prior trade is still active
+- entry reset policy controls whether another signal can count before the strategy setup has reset
+- `None` keeps existing behavior and permits repeated signals according to overlap settings
+- `Signal off` requires the strategy signal to become false before the next signal can open a new trade
+- reset policy should be visible in normal backtest config, parameter sweep rows, walk-forward selected settings, and exported CSVs
 
 Walk-forward behavior:
 

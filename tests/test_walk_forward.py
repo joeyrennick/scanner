@@ -163,6 +163,7 @@ def test_walk_forward_summary_and_export(tmp_path):
         "Selected Hold Days",
         "Selected Min History Days",
         "Selected Allow Overlap",
+        "Selected Entry Reset Policy",
         "Training Trades",
         "Training Expectancy",
         "Training Profit Factor",

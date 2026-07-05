@@ -221,7 +221,9 @@ Summary row:
 - candidates
 - cache hits
 - provider calls
+- warmup batches
 - elapsed time
+- rate limit stopped
 
 Results table:
 
@@ -259,6 +261,14 @@ Price behavior:
 - The `Current Price` column header should include a small info icon.
 - Tooltip copy: `Scanner indicators can use cached history, but displayed candidate prices are refreshed after the final list is built. If refresh fails, the latest cached close is shown and labeled.`
 - Current Price info tooltip copy: `Current Price comes from Yahoo/latest provider data and may be delayed or stale. Confirm the live price in your trading platform, such as TradingView or thinkorswim, before placing a trade.`
+
+Cache warmup behavior:
+
+- Running Daily Scanner should first show a warmup/incremental refresh progress state when cached history is missing or stale.
+- Fresh cached symbols should be counted as cache hits and should not increase provider calls.
+- Stale cached symbols should be refreshed with the configured overlap period, not full history.
+- Missing symbols should be fetched in controlled provider batches.
+- If rate limiting stops warmup, show `Rate limit stopped` and label results as a partial scan of symbols with usable cached history.
 
 Action buttons:
 
@@ -617,6 +627,7 @@ Controls:
 - history period
 - minimum history days, default `252`
 - allow overlapping trades toggle, default on
+- entry reset policy selector, default `None`
 - price range
 - Run Backtest button
 - Optimize Parameters button
@@ -630,6 +641,7 @@ Backtest Results should show the configuration used for the run near the control
 - history period
 - minimum history days
 - overlap mode
+- entry reset policy
 
 Summary cards:
 
@@ -655,7 +667,7 @@ Tables:
   - relative strength buckets, if source data includes relative strength
   - relative volume buckets, if source data includes relative volume
 - parameter sweep results with ranked configurations, best row highlight, and `Apply Configuration`
-- walk-forward results with summary cards, rolling window table, selected settings, and forward-test metrics
+- walk-forward results with summary cards, rolling window table, selected settings including reset policy, and forward-test metrics
 
 Do not show a Recent Trades table on Backtest Results. This page should focus on aggregate historical backtest metrics, charts, and ticker rankings. Trade-level detail belongs in the exported trade CSV, generated HTML report, or a separate drill-down view.
 
@@ -857,6 +869,7 @@ Cache Storage controls:
 
 - database path
 - estimated cache size
+- maximum retained history selector, default `5 years`
 - archive older than selector
 - retain adjusted OHLCV toggle
 
@@ -865,7 +878,7 @@ Maintenance actions:
 - Warm Cache
 - Cache-Only Preview
 - Refresh Stale Data
-- Prune Old Data
+- Prune Old Data, using the configured maximum retained history window
 - Open Cache Folder
 
 Display rules:

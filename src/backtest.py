@@ -64,6 +64,15 @@ def main():
         action="store_true",
         help="Skip new signals while a prior backtest trade is still open.",
     )
+    parser.add_argument(
+        "--entry-reset-policy",
+        choices=["none", "signal-off"],
+        default="none",
+        help=(
+            "Require a setup reset before another entry. "
+            "'signal-off' waits until the strategy signal turns off."
+        ),
+    )
     parser.add_argument("--compare-hold-days", nargs="+", type=int)
     parser.add_argument("--optimize-hold-days", action="store_true")
     parser.add_argument(
@@ -88,6 +97,12 @@ def main():
         nargs="+",
         choices=["allowed", "blocked"],
         help="Overlap modes to include in --sweep.",
+    )
+    parser.add_argument(
+        "--sweep-entry-reset-policy",
+        nargs="+",
+        choices=["none", "signal-off"],
+        help="Entry reset policies to include in --sweep.",
     )
     parser.add_argument(
         "--sweep-strategy-param",
@@ -302,6 +317,7 @@ def main():
             hold_days=args.hold_days,
             min_history_days=args.min_history_days,
             allow_overlapping_trades=not args.no_overlapping_trades,
+            entry_reset_policy=_parse_entry_reset_policy(args.entry_reset_policy),
         )
     except ValueError as error:
         parser.error(str(error))
@@ -430,6 +446,9 @@ def main():
                 hold_days=args.sweep_hold_days,
                 min_history_days=args.sweep_min_history_days,
                 allow_overlapping_trades=_parse_sweep_overlap(args.sweep_overlap),
+                entry_reset_policies=_parse_sweep_entry_reset_policies(
+                    args.sweep_entry_reset_policy
+                ),
                 strategy_parameters=_parse_sweep_strategy_params(
                     args.sweep_strategy_param
                 ),
@@ -468,6 +487,9 @@ def main():
                 hold_days=args.sweep_hold_days,
                 min_history_days=args.sweep_min_history_days,
                 allow_overlapping_trades=_parse_sweep_overlap(args.sweep_overlap),
+                entry_reset_policies=_parse_sweep_entry_reset_policies(
+                    args.sweep_entry_reset_policy
+                ),
                 strategy_parameters=_parse_sweep_strategy_params(
                     args.sweep_strategy_param
                 ),
@@ -549,6 +571,17 @@ def _parse_sweep_overlap(values: list[str] | None) -> list[bool] | None:
         return None
 
     return [value == "allowed" for value in values]
+
+
+def _parse_entry_reset_policy(value: str) -> str:
+    return value.replace("-", "_")
+
+
+def _parse_sweep_entry_reset_policies(values: list[str] | None) -> list[str] | None:
+    if values is None:
+        return None
+
+    return [_parse_entry_reset_policy(value) for value in values]
 
 
 def _parse_sweep_strategy_params(values: list[str]) -> dict[str, list]:

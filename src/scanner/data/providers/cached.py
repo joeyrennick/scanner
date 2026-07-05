@@ -22,12 +22,22 @@ class MarketDataCacheStats:
     rows_fetched_from_provider: int = 0
 
 
+@dataclass(frozen=True)
+class CacheRequirement:
+    ticker: str
+    cached_rows: int
+    needs_provider: bool
+    fetch_period: str
+    reason: str
+
+
 class CachedMarketDataProvider(MarketDataProvider):
     def __init__(
         self,
         provider: MarketDataProvider,
         cache: SQLiteMarketDataCache,
         refresh_overlap_days: int = 10,
+        retention_years: int | None = None,
         force_refresh: bool = False,
         enabled: bool = True,
         now: Callable[[], datetime] | None = None,
@@ -35,6 +45,7 @@ class CachedMarketDataProvider(MarketDataProvider):
         self.provider = provider
         self.cache = cache
         self.refresh_overlap_days = refresh_overlap_days
+        self.retention_years = retention_years
         self.force_refresh = force_refresh
         self.enabled = enabled
         self.now = now or datetime.now
@@ -96,6 +107,7 @@ class CachedMarketDataProvider(MarketDataProvider):
             interval=interval,
             history=fetched_history,
         )
+        self._prune_retained_history(ticker=ticker, interval=interval)
         self.cache.record_fetch(
             request=request,
             status="success",
@@ -180,6 +192,7 @@ class CachedMarketDataProvider(MarketDataProvider):
                     interval=interval,
                     history=fetched_history,
                 )
+                self._prune_retained_history(ticker=ticker, interval=interval)
                 self.cache.record_fetch(
                     request=request,
                     status="success",
@@ -199,6 +212,82 @@ class CachedMarketDataProvider(MarketDataProvider):
                 )
 
         return {ticker: results.get(ticker, pd.DataFrame()) for ticker in tickers}
+
+    def cache_requirement(self, ticker: str, period: str = "1y") -> CacheRequirement:
+        interval = "1d"
+        today = self.now().date()
+        start_date = period_start_date(period=period, today=today)
+        request = CacheFetchRequest(
+            provider=self.name,
+            ticker=ticker,
+            interval=interval,
+            period=period,
+            start_date=start_date,
+            end_date=None,
+            auto_adjust=True,
+        )
+        cached_history = self.cache.load_history(
+            provider=self.name,
+            ticker=ticker,
+            interval=interval,
+            start_date=start_date,
+        )
+
+        fetch_period = self._refresh_period(
+            cached_history=cached_history,
+            requested_period=period,
+            requested_start_date=start_date,
+        )
+
+        if not self.enabled:
+            return CacheRequirement(
+                ticker=ticker,
+                cached_rows=len(cached_history),
+                needs_provider=True,
+                fetch_period=fetch_period,
+                reason="cache_disabled",
+            )
+
+        if self.force_refresh:
+            return CacheRequirement(
+                ticker=ticker,
+                cached_rows=len(cached_history),
+                needs_provider=True,
+                fetch_period=fetch_period,
+                reason="force_refresh",
+            )
+
+        if self._can_use_cache(cached_history, request):
+            return CacheRequirement(
+                ticker=ticker,
+                cached_rows=len(cached_history),
+                needs_provider=False,
+                fetch_period=fetch_period,
+                reason="fresh_cache",
+            )
+
+        reason = "missing_cache" if cached_history.empty else "stale_cache"
+        if start_date is not None and not cached_history.empty:
+            if not cache_covers_start(cached_history, start_date):
+                reason = "incomplete_cache"
+
+        return CacheRequirement(
+            ticker=ticker,
+            cached_rows=len(cached_history),
+            needs_provider=True,
+            fetch_period=fetch_period,
+            reason=reason,
+        )
+
+    def cache_requirements(
+        self,
+        tickers: list[str],
+        period: str = "1y",
+    ) -> list[CacheRequirement]:
+        return [
+            self.cache_requirement(ticker=ticker, period=period)
+            for ticker in tickers
+        ]
 
     def _fetch_from_provider(self, ticker: str, period: str) -> pd.DataFrame:
         self.stats.provider_calls += 1
@@ -241,6 +330,24 @@ class CachedMarketDataProvider(MarketDataProvider):
 
         overlap_days = max(1, self.refresh_overlap_days)
         return f"{overlap_days}d"
+
+    def _prune_retained_history(self, ticker: str, interval: str) -> None:
+        if self.retention_years is None:
+            return
+
+        if self.retention_years <= 0:
+            return
+
+        cutoff_date = (
+            pd.Timestamp(self.now().date())
+            - pd.DateOffset(years=self.retention_years)
+        ).date()
+        self.cache.prune_price_bars_before(
+            provider=self.name,
+            ticker=ticker,
+            interval=interval,
+            cutoff_date=cutoff_date,
+        )
 
     def _can_use_cache(
         self,

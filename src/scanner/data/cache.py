@@ -188,6 +188,27 @@ class SQLiteMarketDataCache:
 
         return len(rows)
 
+    def prune_price_bars_before(
+        self,
+        provider: str,
+        ticker: str,
+        cutoff_date: date,
+        interval: str = "1d",
+    ) -> int:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM price_bars
+                WHERE provider = ?
+                  AND ticker = ?
+                  AND interval = ?
+                  AND bar_date < ?
+                """,
+                (provider, ticker.upper(), interval, cutoff_date.isoformat()),
+            )
+
+        return int(cursor.rowcount or 0)
+
     def record_fetch(
         self,
         request: CacheFetchRequest,

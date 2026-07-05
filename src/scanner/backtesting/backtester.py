@@ -2,7 +2,10 @@ from dataclasses import replace
 
 import pandas as pd
 
-from scanner.backtesting.backtest_config import BacktestConfig
+from scanner.backtesting.backtest_config import (
+    ENTRY_RESET_POLICY_SIGNAL_OFF,
+    BacktestConfig,
+)
 from scanner.backtesting.backtest_result import BacktestResult
 from scanner.backtesting.trade import Trade
 from scanner.indicators.relative_strength import calculate_relative_strength
@@ -35,6 +38,7 @@ class Backtester:
 
         trades = []
         last_exit_index = -1
+        waiting_for_signal_reset = False
 
         for index in range(
             backtest_config.min_history_days,
@@ -65,6 +69,11 @@ class Backtester:
                 market_data=market_data,
                 relative_strength=relative_strength,
             )
+
+            if waiting_for_signal_reset:
+                if not result.triggered:
+                    waiting_for_signal_reset = False
+                continue
 
             if result.triggered:
                 entry_index = index + 1
@@ -114,6 +123,12 @@ class Backtester:
                     )
                 )
                 last_exit_index = exit_index
+
+                if (
+                    backtest_config.entry_reset_policy
+                    == ENTRY_RESET_POLICY_SIGNAL_OFF
+                ):
+                    waiting_for_signal_reset = True
 
         return BacktestResult(
             ticker=ticker,

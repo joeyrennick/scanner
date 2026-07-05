@@ -98,6 +98,7 @@ def test_build_candidates_expands_backtest_and_strategy_parameters():
         "hold_days": 3,
         "min_history_days": 126,
         "allow_overlapping_trades": True,
+        "entry_reset_policy": "none",
         "max_distance_from_ma20": 0.03,
         "min_relative_volume": 1.0,
     }
@@ -115,17 +116,22 @@ def test_sweep_parameters_ranks_results_and_passes_config_to_service():
         hold_days=[3, 7],
         min_history_days=[126],
         allow_overlapping_trades=[False, True],
+        entry_reset_policies=["none", "signal_off"],
         strategy_parameters={"min_relative_volume": [1.0, 1.5]},
         sort_by="expectancy",
     )
 
-    assert len(results) == 8
-    assert len(service.calls) == 8
+    assert len(results) == 16
+    assert len(service.calls) == 16
 
     best = results[0]
     assert best.candidate.backtest_config.hold_days == 7
     assert best.candidate.backtest_config.allow_overlapping_trades is True
     assert best.candidate.strategy_parameters["min_relative_volume"] == 1.5
+    assert best.candidate.backtest_config.entry_reset_policy in {
+        "none",
+        "signal_off",
+    }
     assert best.to_dict()["Profit Factor"] > 1
 
 
@@ -175,6 +181,7 @@ def test_export_results_writes_ranked_sweep_csv(tmp_path):
         "Hold Days",
         "Min History Days",
         "Allow Overlap",
+        "Entry Reset Policy",
         "Trades",
         "Win Rate",
         "Average Return",

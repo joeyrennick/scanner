@@ -209,7 +209,7 @@ Show today's trade candidates.
 Controls row:
 
 - universe selector
-- strategy segmented control: All / Pullback / Breakout
+- strategy segmented control populated from backend metadata: All / Pullback / Breakout / Bounce
 - min/max price
 - history period
 - cache-only toggle
@@ -249,6 +249,7 @@ Example rows:
 
 - `AAPL`, Pullback, score `82`, current price `211.43`, source `Yahoo`, as of `Today 10:42 AM`
 - `NVDA`, Breakout, score `88`, current price `147.20`, source `Yahoo`, as of `Today 10:42 AM`
+- `SMCI`, Bounce, score `74`, current price `812.45`, source `Yahoo`, as of `Today 10:42 AM`
 - `MSFT`, Pullback, score `79`, current price `494.10`, source `Cached Close`, as of `2026-07-02`
 
 Price behavior:
@@ -326,6 +327,7 @@ Right section:
 
 - trade checklist
 - recommendation summary
+- strategy-specific checks, including configurable Bounce checks when applicable
 - risk controls
 - edited-state indicators when chart levels have been moved
 - Reset to Suggested button in the top-right of the Manual Trade Checklist header
@@ -610,7 +612,7 @@ Show historical strategy performance.
 Controls:
 
 - source selector: ticker / universe / watchlist
-- strategy
+- strategy selector populated from backend metadata, including Bounce
 - hold days
 - history period
 - price range
@@ -744,6 +746,12 @@ Primary settings:
 - ATR period, initially `14`
 - entry zone method, initially `Strategy default`
 - default risk per trade, initially `1%`
+
+Strategy rule settings:
+
+- Pullback: max distance from MA20, minimum relative volume, minimum relative strength
+- Breakout: max distance from 52-week high, minimum relative volume, minimum relative strength
+- Bounce: anchor MA (`MA20` / `MA50`), max distance from anchor, prior-day-high confirmation, optional relative-volume threshold, minimum relative strength
 
 Chart and checklist settings:
 

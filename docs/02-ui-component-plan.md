@@ -93,7 +93,7 @@ The first screen should be the scanner workspace, not a marketing page.
 Primary first-run workflow:
 
 1. User chooses universe: `sp500`, `djia`, `nasdaq`, `nyse`, or `all`.
-2. User chooses strategy: pullback, breakout, or both.
+2. User chooses strategy from backend strategy metadata: all enabled strategies or one/more of Pullback, Breakout, Bounce, and future registered strategies.
 3. User sets optional price range, for example `$20` to `$50`.
 4. UI shows current cache status:
    - cached tickers
@@ -133,7 +133,7 @@ Purpose: generate today's watchlist.
 Controls:
 
 - universe selector
-- strategy selector
+- strategy selector populated from backend strategy metadata
 - min/max price
 - history period
 - cache-only toggle
@@ -146,7 +146,7 @@ Output:
 
 - watchlist table
 - score columns
-- pullback/breakout flags
+- strategy flags, including Pullback, Breakout, Bounce, and future registered strategies
 - current price, price as of, price source
 - moving averages, ATR, volume, relative strength
 - entry area, stop, target/exit, hold time
@@ -271,7 +271,7 @@ Purpose: test a strategy over a selected universe, watchlist, or ticker.
 Controls:
 
 - ticker/universe/watchlist source
-- strategy
+- strategy selector populated from backend strategy metadata
 - hold days
 - history period
 - price range
@@ -450,6 +450,7 @@ Initial endpoints:
 - `GET /api/cache/overview`
 - `POST /api/cache/warmup`
 - `GET /api/jobs/{job_id}`
+- `GET /api/strategies`
 - `POST /api/scans`
 - `GET /api/scans/{job_id}`
 - `GET /api/watchlist/latest`
@@ -460,6 +461,8 @@ Initial endpoints:
 - `GET /api/reports/{report_id}`
 
 Long-running work should run as tracked jobs. The UI should poll job status first; WebSockets or server-sent events can be added later.
+
+`GET /api/strategies` should return strategy metadata used by scanner, backtest, and settings screens: strategy key, display name, category, default config values, configurable fields, allowed enum values, and field labels/help text. The UI should render strategy selectors and Strategy Rules settings from this response instead of hard-coding strategy names.
 
 ## Job Progress Model
 
@@ -927,6 +930,23 @@ Recommendation defaults:
 - default stop method, initially `2 * ATR`
 
 The default reward/risk multiple should be configurable under Settings and used when calculating the suggested target/exit shown in Candidate Detail, the manual trade checklist, journal planned trades, exports, and daily HTML reports. The Daily Scanner table should not display reward/risk directly.
+
+### Strategy Rules
+
+Purpose: let users tune strategy thresholds without editing code.
+
+Implementation notes:
+
+- expose strategy settings from backend strategy config metadata where possible
+- do not hard-code the frontend to Pullback/Breakout only
+- persist rule changes locally and apply them to future scanner runs, backtests, and generated recommendations
+- store the strategy config snapshot with planned trades so old recommendations do not silently change
+
+Initial rule controls:
+
+- Pullback: max distance from MA20, minimum relative volume, minimum relative strength
+- Breakout: max distance from 52-week high, minimum relative volume, minimum relative strength
+- Bounce: anchor MA segmented control (`MA20` / `MA50`), max distance from anchor, prior-day-high confirmation toggle, optional relative-volume threshold, minimum relative strength
 
 There are two separate authentication concerns.
 

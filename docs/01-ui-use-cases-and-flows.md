@@ -127,7 +127,7 @@ Show:
 
 ### Purpose
 
-Generate today's watchlist for pullback and breakout strategy candidates.
+Generate today's watchlist for configured strategy candidates.
 
 ### Entry Point
 
@@ -140,7 +140,7 @@ Dashboard primary action:
 1. User opens Daily Scanner.
 2. User selects:
    - universe
-   - strategy: pullback, breakout, or both
+   - strategy: all enabled strategies or one/more backend-defined strategies, initially Pullback, Breakout, and Bounce
    - price range
    - history period
    - cache-only mode
@@ -218,6 +218,10 @@ Watchlist table with:
 - suggested hold time
 
 Reward/risk should not appear in the scanner table. It should appear in Candidate Detail, where the UI can show the configured multiple and explain the calculation.
+
+Strategy options should come from backend strategy metadata rather than being hard-coded in the UI. The first configurable strategy set includes Pullback, Breakout, and Bounce.
+
+The Bounce strategy is configurable and should expose MA20/MA50 anchor, maximum distance from anchor, prior-day-high confirmation, and optional relative-volume threshold settings.
 
 ### Empty State
 
@@ -315,7 +319,7 @@ Actions:
 
 ### Purpose
 
-Evaluate pullback/breakout strategy behavior over a ticker, watchlist, or universe.
+Evaluate configured strategy behavior over a ticker, watchlist, selected scanner candidates, or universe.
 
 ### Flow
 
@@ -325,7 +329,7 @@ Evaluate pullback/breakout strategy behavior over a ticker, watchlist, or univer
    - universe
    - watchlist CSV
 3. User selects:
-   - strategy
+   - strategy from backend metadata, initially Pullback, Breakout, Bounce, and any future registered strategies
    - hold days
    - history period
    - optional price filter
@@ -825,6 +829,7 @@ Settings navigation:
    - default reward/risk multiple
    - default suggested hold period
    - default stop method
+   - strategy-specific rule defaults
    - default chart range and chart resize behavior
    - export/report defaults
 4. User updates the reward/risk multiple.
@@ -843,6 +848,15 @@ Settings navigation:
 - remember resized candidate chart setting
 - default CSV export scope
 - include adjusted checklist values in exports and reports
+
+Strategy rule settings:
+
+- strategy settings should be generated from backend strategy config metadata where possible
+- Pullback should expose maximum distance from MA20, minimum relative volume, and minimum relative strength
+- Breakout should expose maximum distance from 52-week high, minimum relative volume, and minimum relative strength
+- Bounce should expose anchor MA (`MA20` or `MA50`), maximum distance from anchor, prior-day-high confirmation, optional relative-volume threshold, and minimum relative strength
+- changes apply to future scans, backtests, and recommendations
+- existing planned trades should keep the original strategy settings used when they were created
 
 ### Display Rules
 

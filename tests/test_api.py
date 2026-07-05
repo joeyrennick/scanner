@@ -75,10 +75,21 @@ def test_cache_warmup_job_lifecycle(monkeypatch):
     from scanner.api import app as api_app
 
     class FakeCacheWarmupService:
-        def __init__(self, context=None, logger=None):
-            pass
+        def __init__(self, context=None, logger=None, progress_callback=None):
+            self.progress_callback = progress_callback
 
         def run(self, config):
+            if self.progress_callback:
+                self.progress_callback(
+                    current_step="Cache-only preview complete",
+                    symbols_total=1,
+                    symbols_checked=1,
+                    symbols_kept=1,
+                    symbols_skipped=0,
+                    provider_batches_attempted=0,
+                    provider_symbols_attempted=0,
+                    message="Cache-only preview complete",
+                )
             return CacheWarmupResult(
                 statuses=[
                     CacheWarmupTickerStatus(
@@ -115,6 +126,9 @@ def test_cache_warmup_job_lifecycle(monkeypatch):
     assert response.status_code == 200
     payload = wait_for_job(response.json()["job_id"])
     assert payload["status"] == "complete"
+    assert payload["progress"]["current_step"] == "Cache-only preview complete"
+    assert payload["progress"]["elapsed_seconds"] is not None
+    assert payload["symbols_checked"] == 1
     assert payload["result"]["available"] == 1
     assert payload["result"]["provider_calls_attempted"] == 0
 
@@ -123,10 +137,20 @@ def test_scan_job_lifecycle(monkeypatch, tmp_path):
     from scanner.api import app as api_app
 
     class FakeScanService:
-        def __init__(self, context=None, logger=None):
-            pass
+        def __init__(self, context=None, logger=None, progress_callback=None):
+            self.progress_callback = progress_callback
 
         def run(self, config):
+            if self.progress_callback:
+                self.progress_callback(
+                    current_step="Scan complete",
+                    symbols_total=1,
+                    symbols_checked=1,
+                    symbols_kept=1,
+                    symbols_skipped=0,
+                    output_paths={"watchlist_csv": str(tmp_path / "watchlist.csv")},
+                    message="Scan complete",
+                )
             dataframe = pd.DataFrame(
                 [
                     {
@@ -160,6 +184,8 @@ def test_scan_job_lifecycle(monkeypatch, tmp_path):
     assert response.status_code == 200
     payload = wait_for_job(response.json()["job_id"])
     assert payload["status"] == "complete"
+    assert payload["progress"]["current_step"] == "Scan complete"
+    assert payload["output_paths"]["watchlist_csv"] == str(tmp_path / "watchlist.csv")
     assert payload["result"]["rows"] == [{"Ticker": "AAPL", "Composite Score": 88}]
 
 
@@ -167,10 +193,19 @@ def test_backtest_job_lifecycle(monkeypatch):
     from scanner.api import app as api_app
 
     class FakeBacktestService:
-        def __init__(self, config=None):
-            pass
+        def __init__(self, config=None, progress_callback=None):
+            self.progress_callback = progress_callback
 
         def run(self, ticker, universe, strategy):
+            if self.progress_callback:
+                self.progress_callback(
+                    current_step="Backtest complete",
+                    symbols_total=1,
+                    symbols_checked=1,
+                    symbols_kept=1,
+                    symbols_skipped=0,
+                    message="Backtest complete",
+                )
             return BacktestResult(
                 ticker=ticker,
                 strategy_name=strategy.name,
@@ -201,6 +236,8 @@ def test_backtest_job_lifecycle(monkeypatch):
     assert response.status_code == 200
     payload = wait_for_job(response.json()["job_id"])
     assert payload["status"] == "complete"
+    assert payload["progress"]["current_step"] == "Backtest complete"
+    assert payload["symbols_checked"] == 1
     assert payload["result"]["statistics"]["total_trades"] == 1
     assert payload["result"]["trades"][0]["Return %"] == 10.0
 

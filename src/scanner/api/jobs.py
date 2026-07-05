@@ -9,6 +9,48 @@ from uuid import uuid4
 
 
 JobStatus = str
+ProgressUpdater = Callable[..., None]
+
+
+@dataclass
+class JobProgress:
+    current_step: str | None = None
+    total_steps: int | None = None
+    symbols_total: int | None = None
+    symbols_checked: int | None = None
+    symbols_kept: int | None = None
+    symbols_skipped: int | None = None
+    provider_batches_attempted: int | None = None
+    provider_batch_limit: int | None = None
+    provider_symbols_attempted: int | None = None
+    provider_symbol_limit: int | None = None
+    elapsed_seconds: float | None = None
+    estimated_seconds_remaining: float | None = None
+    rate_limited: bool = False
+    output_paths: dict[str, str] = field(default_factory=dict)
+
+    def update(self, **changes: Any) -> None:
+        for name, value in changes.items():
+            if hasattr(self, name):
+                setattr(self, name, value)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "current_step": self.current_step,
+            "total_steps": self.total_steps,
+            "symbols_total": self.symbols_total,
+            "symbols_checked": self.symbols_checked,
+            "symbols_kept": self.symbols_kept,
+            "symbols_skipped": self.symbols_skipped,
+            "provider_batches_attempted": self.provider_batches_attempted,
+            "provider_batch_limit": self.provider_batch_limit,
+            "provider_symbols_attempted": self.provider_symbols_attempted,
+            "provider_symbol_limit": self.provider_symbol_limit,
+            "elapsed_seconds": self.elapsed_seconds,
+            "estimated_seconds_remaining": self.estimated_seconds_remaining,
+            "rate_limited": self.rate_limited,
+            "output_paths": self.output_paths,
+        }
 
 
 @dataclass
@@ -22,8 +64,13 @@ class JobRecord:
     message: str = ""
     result: dict[str, Any] | None = None
     error: str | None = None
+    progress: JobProgress = field(default_factory=JobProgress)
 
     def to_dict(self) -> dict[str, Any]:
+        progress = self.progress.to_dict()
+        if self.started_at and progress["elapsed_seconds"] is None:
+            end_time = self.finished_at or datetime.now(UTC)
+            progress["elapsed_seconds"] = (end_time - self.started_at).total_seconds()
         return {
             "job_id": self.job_id,
             "job_type": self.job_type,
@@ -34,6 +81,8 @@ class JobRecord:
             "message": self.message,
             "result": self.result,
             "error": self.error,
+            "progress": progress,
+            **progress,
         }
 
 
@@ -46,7 +95,7 @@ class JobRegistry:
     def start(
         self,
         job_type: str,
-        work: Callable[[], dict[str, Any]],
+        work: Callable[[ProgressUpdater], dict[str, Any]],
     ) -> JobRecord:
         job = JobRecord(job_id=str(uuid4()), job_type=job_type)
 
@@ -60,7 +109,11 @@ class JobRegistry:
         with self._lock:
             return self._jobs.get(job_id)
 
-    def _run(self, job_id: str, work: Callable[[], dict[str, Any]]) -> None:
+    def _run(
+        self,
+        job_id: str,
+        work: Callable[[ProgressUpdater], dict[str, Any]],
+    ) -> None:
         self._update(
             job_id,
             status="running",
@@ -69,7 +122,7 @@ class JobRegistry:
         )
 
         try:
-            result = work()
+            result = work(lambda **changes: self.update_progress(job_id, **changes))
         except Exception as error:
             self._update(
                 job_id,
@@ -81,6 +134,9 @@ class JobRegistry:
             return
 
         status = "stopped" if result.get("stopped_for_rate_limit") else "complete"
+        output_paths = result.get("output_paths")
+        if isinstance(output_paths, dict):
+            self.update_progress(job_id, output_paths=output_paths)
         self._update(
             job_id,
             status=status,
@@ -88,6 +144,16 @@ class JobRegistry:
             message="Stopped" if status == "stopped" else "Complete",
             result=result,
         )
+
+    def update_progress(self, job_id: str, **changes: Any) -> None:
+        message = changes.pop("message", None)
+
+        with self._lock:
+            job = self._jobs[job_id]
+            job.progress.update(**changes)
+
+            if message is not None:
+                job.message = message
 
     def _update(self, job_id: str, **changes: Any) -> None:
         with self._lock:
@@ -97,4 +163,3 @@ class JobRegistry:
 
 
 jobs = JobRegistry()
-

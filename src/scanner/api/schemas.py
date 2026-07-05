@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from scanner.backtesting.backtest_config import ENTRY_RESET_POLICY_NONE
 from scanner.config.settings import settings
@@ -64,6 +64,21 @@ class JobResponse(BaseModel):
     message: str = ""
     result: dict[str, Any] | None = None
     error: str | None = None
+    progress: dict[str, Any]
+    current_step: str | None = None
+    total_steps: int | None = None
+    symbols_total: int | None = None
+    symbols_checked: int | None = None
+    symbols_kept: int | None = None
+    symbols_skipped: int | None = None
+    provider_batches_attempted: int | None = None
+    provider_batch_limit: int | None = None
+    provider_symbols_attempted: int | None = None
+    provider_symbol_limit: int | None = None
+    elapsed_seconds: float | None = None
+    estimated_seconds_remaining: float | None = None
+    rate_limited: bool = False
+    output_paths: dict[str, str] = Field(default_factory=dict)
 
 
 class StrategyField(BaseModel):

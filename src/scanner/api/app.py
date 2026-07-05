@@ -59,7 +59,7 @@ def get_cache_overview() -> dict[str, Any]:
 def start_cache_warmup(request: CacheWarmupRequest) -> dict[str, Any]:
     job = jobs.start(
         "cache_warmup",
-        lambda: _run_cache_warmup(request),
+        lambda progress: _run_cache_warmup(request, progress),
     )
     return job.to_dict()
 
@@ -83,7 +83,7 @@ def get_strategies() -> list[StrategyMetadata]:
 def start_scan(request: ScanRequest) -> dict[str, Any]:
     job = jobs.start(
         "scan",
-        lambda: _run_scan(request),
+        lambda progress: _run_scan(request, progress),
     )
     return job.to_dict()
 
@@ -122,7 +122,7 @@ def start_backtest(request: BacktestRequest) -> dict[str, Any]:
 
     job = jobs.start(
         "backtest",
-        lambda: _run_backtest(request),
+        lambda progress: _run_backtest(request, progress),
     )
     return job.to_dict()
 
@@ -178,7 +178,7 @@ def download_report(report_id: str) -> FileResponse:
     return FileResponse(path, filename=path.name)
 
 
-def _run_cache_warmup(request: CacheWarmupRequest) -> dict[str, Any]:
+def _run_cache_warmup(request: CacheWarmupRequest, progress) -> dict[str, Any]:
     logger = setup_logging()
     context = ScannerContext(
         settings=replace(settings, market_data_provider=request.market_data_provider),
@@ -186,7 +186,11 @@ def _run_cache_warmup(request: CacheWarmupRequest) -> dict[str, Any]:
         market_data_cache_enabled=True,
     )
     tickers = _resolve_tickers(request.universe, request.tickers)
-    result = CacheWarmupService(context=context, logger=logger).run(
+    result = CacheWarmupService(
+        context=context,
+        logger=logger,
+        progress_callback=progress,
+    ).run(
         CacheWarmupConfig(
             tickers=[settings.benchmark_ticker] + tickers,
             period=request.history_period,
@@ -217,14 +221,18 @@ def _run_cache_warmup(request: CacheWarmupRequest) -> dict[str, Any]:
     )
 
 
-def _run_scan(request: ScanRequest) -> dict[str, Any]:
+def _run_scan(request: ScanRequest, progress) -> dict[str, Any]:
     logger = setup_logging()
     context = ScannerContext(
         settings=replace(settings, market_data_provider=request.market_data_provider),
         logger=logger,
         market_data_cache_enabled=True,
     )
-    result = ScanService(context=context, logger=logger).run(
+    result = ScanService(
+        context=context,
+        logger=logger,
+        progress_callback=progress,
+    ).run(
         ScanConfig(
             universe=request.universe,
             market_data_provider=request.market_data_provider,
@@ -259,7 +267,7 @@ def _run_scan(request: ScanRequest) -> dict[str, Any]:
     )
 
 
-def _run_backtest(request: BacktestRequest) -> dict[str, Any]:
+def _run_backtest(request: BacktestRequest, progress) -> dict[str, Any]:
     strategy = StrategyRegistry.get(request.strategy)
     result = BacktestService(
         config=BacktestConfig(
@@ -268,7 +276,8 @@ def _run_backtest(request: BacktestRequest) -> dict[str, Any]:
             min_history_days=request.min_history_days,
             allow_overlapping_trades=request.allow_overlapping_trades,
             entry_reset_policy=request.entry_reset_policy,
-        )
+        ),
+        progress_callback=progress,
     ).run(
         ticker=request.ticker,
         universe=request.universe,

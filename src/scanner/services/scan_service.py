@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import logging
 import time
+from typing import Callable
 
 import pandas as pd
 
@@ -71,17 +72,32 @@ class ScanService:
         context: ScannerContext | None = None,
         logger: logging.Logger | None = None,
         universe_provider: UniverseProvider | None = None,
+        progress_callback: Callable[..., None] | None = None,
     ):
         self.context = context or ScannerContext()
         self.logger = logger or self.context.logger
         self.universe_provider = universe_provider or UniverseProvider()
+        self.progress_callback = progress_callback
 
     def run(self, config: ScanConfig) -> ScanResult:
         start = time.perf_counter()
         tickers = self.universe_provider.get_universe_tickers(config.universe)
+        self._progress(
+            current_step="Loaded universe",
+            symbols_total=len(tickers),
+            symbols_checked=0,
+            symbols_kept=0,
+            symbols_skipped=0,
+            message=f"Loaded {len(tickers)} tickers",
+        )
         price_filter_result = None
 
         if config.min_price is not None or config.max_price is not None:
+            self._progress(
+                current_step="Applying price filter",
+                symbols_total=len(tickers),
+                message="Applying price filter",
+            )
             self.logger.info(
                 "Applying price filter: "
                 f"min={config.min_price if config.min_price is not None else 'none'}, "
@@ -104,6 +120,23 @@ class ScanService:
                 logger=self.logger,
             )
             tickers = price_filter_result.tickers
+            self._progress(
+                current_step="Price filter complete",
+                symbols_total=price_filter_result.checked_count,
+                symbols_checked=price_filter_result.checked_count,
+                symbols_kept=price_filter_result.passed_count,
+                symbols_skipped=price_filter_result.skipped_count,
+                provider_batches_attempted=(
+                    price_filter_result.provider_batches_attempted
+                ),
+                provider_batch_limit=price_filter_result.provider_batches_allowed,
+                provider_symbols_attempted=(
+                    price_filter_result.provider_calls_attempted
+                ),
+                provider_symbol_limit=price_filter_result.provider_calls_allowed,
+                rate_limited=price_filter_result.stopped_for_rate_limit,
+                message="Price filter complete",
+            )
             self.logger.info(
                 "Price filter kept "
                 f"{price_filter_result.passed_count}/{price_filter_result.checked_count} "
@@ -129,6 +162,7 @@ class ScanService:
             cache_warmup_result = CacheWarmupService(
                 context=self.context,
                 logger=self.logger,
+                progress_callback=self._prefixed_cache_progress,
             ).run(
                 CacheWarmupConfig(
                     tickers=warmup_tickers,
@@ -140,6 +174,19 @@ class ScanService:
                 )
             )
             self.logger.info(cache_warmup_result.summary())
+            self._progress(
+                current_step="Cache warmup complete",
+                symbols_total=len(tickers),
+                provider_batches_attempted=(
+                    cache_warmup_result.provider_batches_attempted
+                ),
+                provider_batch_limit=cache_warmup_result.provider_batches_allowed,
+                provider_symbols_attempted=(
+                    cache_warmup_result.provider_symbols_attempted
+                ),
+                rate_limited=cache_warmup_result.stopped_for_rate_limit,
+                message="Cache warmup complete",
+            )
 
             if cache_warmup_result.stopped_for_rate_limit:
                 available_tickers = set(cache_warmup_result.available_tickers)
@@ -147,6 +194,15 @@ class ScanService:
                 self.logger.warning(
                     "Scan will continue using only tickers with usable cached data "
                     f"after cache warmup stopped: {len(tickers)} tickers"
+                )
+                self._progress(
+                    current_step="Cache warmup stopped",
+                    symbols_total=len(available_tickers),
+                    symbols_skipped=(
+                        cache_warmup_result.skipped_count
+                    ),
+                    rate_limited=True,
+                    message="Cache warmup stopped for rate limit",
                 )
 
         benchmark_ticker = self.context.settings.benchmark_ticker.upper()
@@ -173,6 +229,14 @@ class ScanService:
         self.logger.info(f"Loaded {len(tickers)} tickers")
         self.logger.info(
             f"Starting scan with {self.context.settings.max_workers} workers"
+        )
+        self._progress(
+            current_step="Analyzing symbols",
+            symbols_total=len(tickers),
+            symbols_checked=0,
+            symbols_kept=0,
+            symbols_skipped=0,
+            message="Analyzing symbols",
         )
 
         with ThreadPoolExecutor(max_workers=self.context.settings.max_workers) as executor:
@@ -201,6 +265,14 @@ class ScanService:
                     self.logger.warning(
                         f"[{completed}/{len(tickers)}] Skipping {ticker}: {error}"
                     )
+                self._progress(
+                    current_step="Analyzing symbols",
+                    symbols_total=len(tickers),
+                    symbols_checked=completed,
+                    symbols_kept=len(self._trade_candidates(analyses)),
+                    symbols_skipped=len(skipped),
+                    message=f"Analyzed {completed}/{len(tickers)} symbols",
+                )
 
         trade_candidates = self._trade_candidates(analyses)
         dataframe = self._dataframe_for_candidates(trade_candidates)
@@ -209,6 +281,15 @@ class ScanService:
             self.logger.info("No trade candidates found.")
 
         self._write_watchlist(dataframe, config.output_file)
+        self._progress(
+            current_step="Writing watchlist",
+            symbols_total=len(tickers),
+            symbols_checked=len(tickers),
+            symbols_kept=len(trade_candidates),
+            symbols_skipped=len(skipped),
+            output_paths={"watchlist_csv": config.output_file},
+            message="Writing watchlist",
+        )
 
         elapsed = time.perf_counter() - start
         cache_summary = format_cache_summary(
@@ -230,6 +311,15 @@ class ScanService:
             self.logger.info("Skipped tickers:")
             for ticker, reason in skipped:
                 self.logger.info(f"  - {ticker}: {reason}")
+        self._progress(
+            current_step="Scan complete",
+            symbols_total=len(tickers),
+            symbols_checked=len(tickers),
+            symbols_kept=len(trade_candidates),
+            symbols_skipped=len(skipped),
+            output_paths={"watchlist_csv": config.output_file},
+            message="Scan complete",
+        )
 
         return ScanResult(
             tickers=tickers,
@@ -282,3 +372,14 @@ class ScanService:
         output_path = Path(output_file)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         dataframe.to_csv(output_path, index=False)
+
+    def _progress(self, **changes) -> None:
+        if self.progress_callback is not None:
+            self.progress_callback(**changes)
+
+    def _prefixed_cache_progress(self, **changes) -> None:
+        current_step = changes.get("current_step")
+        if current_step:
+            changes["current_step"] = f"Cache warmup: {current_step}"
+
+        self._progress(**changes)

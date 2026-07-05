@@ -1,5 +1,6 @@
 from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Callable
 
 from scanner.backtesting.backtest_config import BacktestConfig
 from scanner.backtesting.backtest_result import BacktestResult
@@ -15,11 +16,13 @@ class BacktestService:
         self,
         history_period: str | None = None,
         config: BacktestConfig | None = None,
+        progress_callback: Callable[..., None] | None = None,
     ):
         self.market_data_service = MarketDataService()
         self.config = config or BacktestConfig(
             history_period=history_period or settings.backtest_history_period,
         )
+        self.progress_callback = progress_callback
 
     def run_single_ticker(
         self,
@@ -29,6 +32,14 @@ class BacktestService:
         config: BacktestConfig | None = None,
     ) -> BacktestResult:
         backtest_config = self._resolve_config(config=config, hold_days=hold_days)
+        self._progress(
+            current_step="Loading backtest data",
+            symbols_total=1,
+            symbols_checked=0,
+            symbols_kept=0,
+            symbols_skipped=0,
+            message=f"Loading backtest data for {ticker.upper()}",
+        )
         history = self.market_data_service.get_history(
             ticker,
             period=backtest_config.history_period,
@@ -38,13 +49,22 @@ class BacktestService:
             period=backtest_config.history_period,
         )
 
-        return Backtester().run(
+        result = Backtester().run(
             ticker=ticker.upper(),
             history=history,
             strategy=strategy,
             benchmark_history=benchmark,
             config=backtest_config,
         )
+        self._progress(
+            current_step="Backtest complete",
+            symbols_total=1,
+            symbols_checked=1,
+            symbols_kept=1 if result.trades else 0,
+            symbols_skipped=0,
+            message="Backtest complete",
+        )
+        return result
 
     def run_universe(
         self,
@@ -74,6 +94,14 @@ class BacktestService:
         benchmark = self.market_data_service.get_history(
             "SPY",
             period=backtest_config.history_period,
+        )
+        self._progress(
+            current_step="Running backtest",
+            symbols_total=len(tickers),
+            symbols_checked=0,
+            symbols_kept=0,
+            symbols_skipped=0,
+            message=f"Running backtest for {len(tickers)} symbols",
         )
 
         all_trades = []
@@ -113,8 +141,24 @@ class BacktestService:
                 except Exception as e:
                     skipped.append((ticker, str(e)))
                     print(f"[{completed}/{len(tickers)}] Skipped {ticker}: {e}")
+                self._progress(
+                    current_step="Running backtest",
+                    symbols_total=len(tickers),
+                    symbols_checked=completed,
+                    symbols_kept=len({trade.ticker for trade in all_trades}),
+                    symbols_skipped=len(skipped),
+                    message=f"Backtested {completed}/{len(tickers)} symbols",
+                )
 
         print(f"Skipped: {len(skipped)}")
+        self._progress(
+            current_step="Backtest complete",
+            symbols_total=len(tickers),
+            symbols_checked=len(tickers),
+            symbols_kept=len({trade.ticker for trade in all_trades}),
+            symbols_skipped=len(skipped),
+            message="Backtest complete",
+        )
 
         return BacktestResult(
             ticker=result_ticker,
@@ -166,3 +210,7 @@ class BacktestService:
             return replace(backtest_config, hold_days=hold_days)
 
         return backtest_config
+
+    def _progress(self, **changes) -> None:
+        if self.progress_callback is not None:
+            self.progress_callback(**changes)

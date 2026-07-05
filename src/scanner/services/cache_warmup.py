@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import logging
 import time
+from typing import Callable
 
 import pandas as pd
 
@@ -112,9 +113,11 @@ class CacheWarmupService:
         self,
         context: ScannerContext | None = None,
         logger: logging.Logger | None = None,
+        progress_callback: Callable[..., None] | None = None,
     ):
         self.context = context or ScannerContext()
         self.logger = logger or self.context.logger
+        self.progress_callback = progress_callback
 
     def run(self, config: CacheWarmupConfig) -> CacheWarmupResult:
         if config.batch_size <= 0:
@@ -173,6 +176,29 @@ class CacheWarmupService:
                     reason="Provider batch limit reached",
                 )
 
+        self._progress(
+            current_step="Planning cache warmup",
+            total_steps=len(allowed_batches),
+            symbols_total=len(unique_tickers),
+            symbols_checked=len(statuses_by_ticker),
+            symbols_kept=sum(
+                1
+                for status in statuses_by_ticker.values()
+                if status.status == "cached"
+            ),
+            symbols_skipped=sum(
+                1
+                for status in statuses_by_ticker.values()
+                if status.status.startswith("skipped")
+            ),
+            provider_batches_attempted=0,
+            provider_batch_limit=config.max_provider_batches,
+            provider_symbols_attempted=0,
+            provider_symbol_limit=None,
+            rate_limited=False,
+            message="Planning cache warmup",
+        )
+
         if config.cache_only_preview:
             for batch in allowed_batches:
                 for ticker in batch:
@@ -182,6 +208,23 @@ class CacheWarmupService:
                         reason="Would require provider data",
                     )
 
+            self._progress(
+                current_step="Cache-only preview complete",
+                symbols_checked=len(unique_tickers),
+                symbols_kept=sum(
+                    1
+                    for status in statuses_by_ticker.values()
+                    if status.status == "cached"
+                ),
+                symbols_skipped=sum(
+                    1
+                    for status in statuses_by_ticker.values()
+                    if status.status.startswith("skipped")
+                ),
+                provider_batches_attempted=0,
+                provider_symbols_attempted=0,
+                message="Cache-only preview complete",
+            )
             return self._result(
                 config=config,
                 statuses_by_ticker=statuses_by_ticker,
@@ -211,6 +254,16 @@ class CacheWarmupService:
         for batch_number, batch in enumerate(allowed_batches, start=1):
             provider_batches_attempted += 1
             provider_symbols_attempted += len(batch)
+            self._progress(
+                current_step="Fetching cache warmup batch",
+                provider_batches_attempted=provider_batches_attempted,
+                provider_symbols_attempted=provider_symbols_attempted,
+                symbols_checked=len(statuses_by_ticker),
+                message=(
+                    f"Fetching cache warmup batch "
+                    f"{batch_number}/{len(allowed_batches)}"
+                ),
+            )
 
             try:
                 histories = self.context.download_price_data_batch(
@@ -236,6 +289,17 @@ class CacheWarmupService:
                     self.logger.warning(
                         "Cache warmup stopped after a provider rate-limit response. "
                         "Rerun later to resume from the cache."
+                    )
+                    self._progress(
+                        current_step="Stopped for rate limit",
+                        symbols_checked=len(statuses_by_ticker),
+                        symbols_skipped=sum(
+                            1
+                            for status in statuses_by_ticker.values()
+                            if status.status.startswith("skipped")
+                        ),
+                        rate_limited=True,
+                        message="Stopped for rate limit",
                     )
                     break
 
@@ -263,12 +327,43 @@ class CacheWarmupService:
                     "Cache warmup stopped after a provider batch returned no "
                     "price rows. This is treated as a possible rate-limit response."
                 )
+                self._progress(
+                    current_step="Stopped for possible rate limit",
+                    symbols_checked=len(statuses_by_ticker),
+                    symbols_skipped=sum(
+                        1
+                        for status in statuses_by_ticker.values()
+                        if status.status.startswith("skipped")
+                        or status.status == "empty"
+                    ),
+                    rate_limited=True,
+                    message="Stopped for possible rate limit",
+                )
                 break
 
             self.logger.info(
                 f"Cache warmup batch {batch_number}/{len(allowed_batches)} "
                 f"finished: symbols={len(batch)}, "
                 f"elapsed={_format_seconds(time.perf_counter() - started_at)}"
+            )
+            self._progress(
+                current_step="Cache warmup batch complete",
+                symbols_checked=len(statuses_by_ticker),
+                symbols_kept=sum(
+                    1
+                    for status in statuses_by_ticker.values()
+                    if status.status in {"cached", "fetched"}
+                ),
+                symbols_skipped=sum(
+                    1
+                    for status in statuses_by_ticker.values()
+                    if status.status.startswith("skipped")
+                    or status.status == "empty"
+                ),
+                message=(
+                    f"Cache warmup batch {batch_number}/"
+                    f"{len(allowed_batches)} complete"
+                ),
             )
 
             if (
@@ -277,7 +372,7 @@ class CacheWarmupService:
             ):
                 time.sleep(config.batch_delay_seconds)
 
-        return self._result(
+        result = self._result(
             config=config,
             statuses_by_ticker=statuses_by_ticker,
             unique_tickers=unique_tickers,
@@ -289,6 +384,17 @@ class CacheWarmupService:
             stopped_for_rate_limit=stopped_for_rate_limit,
             started_at=started_at,
         )
+        self._progress(
+            current_step="Cache warmup complete",
+            symbols_checked=len(unique_tickers),
+            symbols_kept=result.available_count,
+            symbols_skipped=result.skipped_count,
+            provider_batches_attempted=result.provider_batches_attempted,
+            provider_symbols_attempted=result.provider_symbols_attempted,
+            rate_limited=result.stopped_for_rate_limit,
+            message="Cache warmup complete",
+        )
+        return result
 
     def _result(
         self,
@@ -344,6 +450,10 @@ class CacheWarmupService:
                     status="skipped_rate_limit",
                     reason="Stopped after provider rate limit",
                 )
+
+    def _progress(self, **changes) -> None:
+        if self.progress_callback is not None:
+            self.progress_callback(**changes)
 
 
 def _chunks(tickers: list[str], size: int) -> list[list[str]]:

@@ -641,7 +641,9 @@ Filtered analytics:
 
 If the user places paper or real trades through TradingView, the app should not depend on a TradingView user API for actual fills. TradingView's broker API is designed for broker partners, not individual users retrieving their own TradingView paper-trading data.
 
-The app should instead support broker connectors that can import actual orders, positions, executions, and closed trades from the broker account used inside TradingView.
+The app should instead support broker connectors that can import actual orders, positions, executions, and closed trades from the broker account used inside TradingView or another brokerage workflow.
+
+Fidelity must be supported as a first-class workflow. If direct Fidelity sync is not available through an authorized account-data sharing integration, the app should support Fidelity activity/history file imports and apply the same journal matching and review flow used by direct broker connectors.
 
 Flow:
 
@@ -660,6 +662,8 @@ Flow:
 Connector model:
 
 - `BrokerConnector`
+- `FidelityImportConnector`
+- `InteractiveBrokersConnector`
 - `list_open_positions()`
 - `list_orders()`
 - `list_executions(start_date, end_date)`
@@ -678,6 +682,8 @@ Initial broker sync screen:
 Security requirements:
 
 - use read-only credentials where the broker supports them
+- do not ask users to enter Fidelity website credentials into this app
+- do not screen-scrape brokerage websites
 - never place trades from this app in version one
 - keep credentials local
 - clearly show what account is connected
@@ -724,16 +730,32 @@ Let users reopen previous scanner, backtest, portfolio, and journal reports.
 ### Flow
 
 1. User opens Reports.
-2. UI lists reports from output folders.
+2. UI indexes generated report files from configured output folders.
 3. User filters by type/date.
-4. User opens report or downloads file.
+4. User opens, downloads, reveals, or copies the path for a report file.
+5. If a file is missing, UI shows a clear file-not-found state without rerunning analysis.
 
 ### Report Types
 
 - daily scanner report
+- backtest report
 - trade analysis report
 - portfolio report
 - journal report
+- CSV export
+
+### Report Actions
+
+- `Open`: open generated HTML reports in the browser and CSVs in the default app where supported.
+- `Download`: stream the file through the local API.
+- `Reveal File`: open Finder/Explorer to the file location where supported.
+- `Copy Path`: fallback action when reveal is unavailable.
+
+### Retention
+
+- Version one should not auto-delete generated reports.
+- Reports page should show file size and modified date so users can manually manage files.
+- Retention automation can be added later if users need cleanup options.
 
 ## Use Case 8: Broker Connection Setup
 
@@ -741,7 +763,7 @@ Let users reopen previous scanner, backtest, portfolio, and journal reports.
 
 Allow users to connect a broker account so the app can sync actual fills, positions, and closed trades into the journal.
 
-This is separate from app login. For a local-only app, version one does not need user accounts or app authentication. Broker authentication is still required for broker sync.
+This is separate from app login. For a local-only app, version one does not need user accounts or app authentication. The app should bind to `127.0.0.1` by default and rely on the user's operating system login for local access. Broker authentication is still required for broker sync or file import workflows where applicable.
 
 ### Entry Point
 
@@ -764,6 +786,7 @@ If no broker is connected, the Journal should route the user to Broker Connectio
 1. User opens Settings / Broker Connections.
 2. User selects broker.
 3. UI shows required auth method:
+   - file import for Fidelity
    - API key / secret
    - OAuth login
    - refresh token
@@ -889,7 +912,9 @@ Settings navigation:
 - prefer read-only credentials where broker supports them
 - do not place, modify, or cancel trades from this app in version one
 - keep credentials local
-- consider OS keychain/keyring storage
+- store broker API secrets in OS keychain/keyring where practical
+- use encrypted local config only as a fallback
+- do not store Fidelity website credentials for file import mode
 - clearly display connected account and paper/live status
 - require confirmation before applying matched broker fills to the journal
 

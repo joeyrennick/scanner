@@ -14,11 +14,77 @@ Do not create a separate repository yet. The scanner, cache, backtester, portfol
 - Frontend: React + TypeScript + Vite
 - Styling: plain CSS modules or a small component layer, no heavy design framework initially
 - Charts: Recharts or lightweight charting library
-- State: React Query or simple fetch hooks
+- Server state: TanStack Query with a thin plain `fetch` API client underneath
 - Storage: existing SQLite cache and CSV outputs
 - Runtime: local dev server started from one command
 
 FastAPI is a good fit because the app already has Python service logic. React/Vite is a good fit because the UI will need interactive tables, progress updates, cache status, filters, and reports.
+
+## Frontend Data Layer
+
+Use TanStack Query for all server state in the React app. Do not build custom `useEffect`/`useState` fetch hooks for normal API reads, polling, mutation state, or cache invalidation.
+
+Keep a thin plain `fetch` wrapper underneath TanStack Query:
+
+- `ui/src/lib/apiClient.ts`
+  - owns base URL handling
+  - sends JSON requests
+  - parses JSON responses
+  - turns HTTP failures into typed errors
+  - supports `AbortSignal`
+  - stays independent of React
+
+Add typed API modules that call the shared client:
+
+- `ui/src/api/cache.ts`
+- `ui/src/api/scanner.ts`
+- `ui/src/api/backtest.ts`
+- `ui/src/api/portfolio.ts`
+- `ui/src/api/reports.ts`
+- `ui/src/api/journal.ts`
+- `ui/src/api/settings.ts`
+
+Wrap those API modules with TanStack Query hooks:
+
+- `useCacheOverview()`
+- `useCacheWarmupJob(jobId)`
+- `useDailyScanJob(jobId)`
+- `useWatchlistLatest(filters)`
+- `useBacktestJob(jobId)`
+- `useReportsIndex(filters)`
+- `useJournalSummary(filters)`
+- `useSettings()`
+
+Use centralized query keys in `ui/src/api/queryKeys.ts`:
+
+- `['cache', 'overview']`
+- `['jobs', jobId]`
+- `['scanner', 'watchlist', filters]`
+- `['backtests', jobId]`
+- `['reports', 'index', filters]`
+- `['journal', 'summary', filters]`
+- `['settings']`
+
+Use mutations for commands:
+
+- start cache warmup
+- run daily scan
+- run backtest
+- run portfolio simulation
+- save settings
+- sync broker trades
+- apply broker journal matches
+
+After successful mutations, invalidate the related queries instead of manually pushing data through unrelated components. For example, saving settings invalidates `['settings']`, starting a scan invalidates scanner job/watchlist queries when the job completes, and applying broker matches invalidates journal summary and journal table queries.
+
+Use TanStack Query polling for long-running jobs before adding WebSockets or server-sent events. Cache warmup, scanner runs, backtests, portfolio simulations, and broker sync should poll `GET /api/jobs/{job_id}` until the job reaches `complete`, `failed`, or `stopped`.
+
+Testing expectations:
+
+- Unit test the plain API client without React.
+- Unit test query hooks with mocked API responses.
+- Component-test loading, empty, success, and API error states.
+- Component-test rate-limit and provider-warning states where the backend exposes them.
 
 ## First User Experience
 
@@ -123,6 +189,81 @@ Output:
 - skipped symbols
 - rate-limit warning if detected
 
+### Cache Warmup CLI
+
+Add a dedicated cache warmup command in addition to the UI flow. The command should be safe for first-time users and should reuse the same service code as the UI/API.
+
+Proposed command:
+
+```bash
+PYTHONPATH=src venv/bin/python src/warm_cache.py \
+  --universe all \
+  --min-price 20 \
+  --max-price 50 \
+  --history-period 6mo \
+  --batch-size 100 \
+  --max-batches 10 \
+  --batch-delay 500 \
+  --stop-on-rate-limit
+```
+
+Preview command:
+
+```bash
+PYTHONPATH=src venv/bin/python src/warm_cache.py \
+  --universe all \
+  --min-price 20 \
+  --max-price 50 \
+  --cache-only-preview
+```
+
+CLI options:
+
+- `--universe`: `sp500`, `djia`, `nasdaq`, `nyse`, or `all`
+- `--tickers`: optional comma-separated ticker override
+- `--min-price` and `--max-price`: optional price filter
+- `--history-period`: default `6mo`
+- `--batch-size`: default from settings
+- `--max-batches`: optional cap for safe incremental warmups
+- `--batch-delay`: delay between provider batches in milliseconds
+- `--cache-only-preview`: inspect existing cache only and make no provider calls
+- `--refresh-stale-only`: fetch only symbols whose cache is stale or missing
+- `--stop-on-rate-limit`: stop provider calls immediately if rate limiting is detected
+- `--export-summary`: optional path for a CSV or JSON summary
+
+Shared service boundary:
+
+- Create a cache warmup service under `src/scanner/services/`.
+- The CLI, FastAPI endpoint, and future UI should call this same service.
+- The service should own batching, stale-cache checks, cache-only preview, rate-limit handling, progress events, and summary output.
+- The CLI should be a thin argument parser plus terminal progress renderer.
+- The FastAPI endpoint should start the same service as a tracked background job.
+
+Terminal output:
+
+- show selected universe, price range, history period, provider, and cache database path
+- estimate symbols to inspect, maximum provider batches, and minimum wait time before starting
+- show progress with current batch, symbols checked, kept, skipped, provider batches attempted, elapsed time, ETA, and rate-limit status
+- clearly label cache-only preview as `no provider calls`
+- print final cache summary, rows fetched, rows served from cache, provider calls avoided, skipped symbols, and output paths
+
+Safety behavior:
+
+- default to conservative batching and delay values from settings
+- never continue provider calls after a detected Yahoo rate-limit error when `--stop-on-rate-limit` is enabled
+- preserve all cached data if a provider error or rate limit occurs
+- allow the user to resume later without refetching fresh cached data
+- return a non-zero exit code only for hard failures, not for a controlled rate-limit stop
+
+Tests:
+
+- unit test cache-only preview makes zero provider calls
+- unit test stale-only mode skips fresh cached symbols
+- unit test provider batching respects `batch_size`, `max_batches`, and `batch_delay`
+- unit test rate-limit handling stops subsequent provider calls and preserves cache
+- unit test CLI argument parsing maps to the shared service request model
+- integration test CLI summary output with a fake provider
+
 ### Backtest
 
 Purpose: test a strategy over a selected universe, watchlist, or ticker.
@@ -185,6 +326,118 @@ Output:
 - closed trades
 - realized returns
 - journal summary
+
+## Reports Index Service
+
+Keep reports file-based in version one. Do not add a reports database until there is a clear need for report annotations, sharing, retention automation, or multi-user access.
+
+Create:
+
+- `src/scanner/reports/report_index.py`
+
+Purpose:
+
+- scan configured report/output folders
+- identify generated report and export files
+- infer report metadata from filenames and file stats
+- return a structured report list to the API/UI
+- handle missing or moved files without crashing the Reports page
+
+Default discovery roots:
+
+- `output/`
+- any configured report folders from settings
+
+Included file types:
+
+- `.html`
+- `.csv`
+- `.json`
+- `.png` only if generated chart/report assets need to be shown later
+
+Ignored files:
+
+- hidden files
+- temp files
+- cache databases
+- lock files
+- unknown binary files
+- partial downloads
+- files outside configured report roots
+
+Report type inference:
+
+- `daily_scanner_report_*.html` -> `daily_scanner`
+- `backtest_*.html` -> `backtest`
+- `portfolio_report*.html` -> `portfolio`
+- `trade_analysis*.html` -> `trade_analysis`
+- `journal*.html` -> `journal`
+- `ticker_summary*.csv` -> `ticker_summary_csv`
+- `*.csv` -> `csv_export`
+- unknown included file -> `other`
+
+Report metadata model:
+
+```python
+class ReportMetadata:
+    id: str
+    name: str
+    type: str
+    created_at: datetime | None
+    modified_at: datetime
+    path: str
+    relative_path: str
+    size_bytes: int
+    source: str | None
+    strategy: str | None
+    ticker_or_scope: str | None
+    exists: bool
+    openable: bool
+```
+
+Report IDs:
+
+- use a stable id derived from normalized relative path plus modified timestamp or content hash
+- do not expose arbitrary absolute paths as public API ids
+- reject path traversal attempts when opening or downloading files
+
+API behavior:
+
+- `GET /api/reports` returns indexed report metadata with optional filters
+- `GET /api/reports/{report_id}` returns one report metadata object
+- `GET /api/reports/{report_id}/download` streams the file
+- `POST /api/reports/{report_id}/open` opens the local file in the default browser/app where supported
+- `POST /api/reports/{report_id}/reveal` opens Finder/Explorer to the file location where supported
+- if reveal is not practical on a platform, return the local path and let the UI offer `Copy Path`
+
+UI behavior:
+
+- Reports page indexes files without rerunning analysis
+- `Open` opens HTML reports in the browser and CSVs in the default app where supported
+- `Download` streams the file through the local API
+- `Reveal File` opens Finder/Explorer when available
+- broken or missing files should show a clear `File not found` state
+- filtered report tables should not fail if one file disappears between index and open
+
+Retention:
+
+- do not auto-delete reports in version one
+- show file size and modified date so users can manually manage files
+- defer retention settings until users need cleanup automation
+- future retention options can include keep forever, keep last N days, or keep last N reports
+
+Tests:
+
+- unit test indexing from a temp `output/` folder
+- unit test ignored files are excluded
+- unit test report type inference
+- unit test stable report ids
+- unit test path traversal is rejected
+- unit test missing files return a clean not-found result
+- API test `GET /api/reports`
+- API test download returns 404 for missing files
+- component-test Reports page broken file state
+- component-test Open, Download, and Reveal/Copy Path actions
 
 ## Backend API Design
 
@@ -288,10 +541,71 @@ This gives the UI enough information to show meaningful first-run progress.
 
 ### Phase 7: Packaging
 
-- Add one command to run backend and frontend in development.
-- Add production build command.
+- Add one command to run the local web UI.
+- Add frontend production build command.
+- Serve the built frontend from the FastAPI backend for normal local use.
 - Document Mac and PC setup.
-- Consider Electron or Tauri only if users need a double-click desktop app.
+- Defer Electron, Tauri, or other native desktop packaging until the local web UI is stable.
+
+## Local Web UI Launch Strategy
+
+Build the UI as a local browser-based application first. Version one should run on Mac and PC without requiring a hosted server or native desktop packaging.
+
+Development mode:
+
+- backend runs with `uvicorn` from the existing Python environment
+- frontend runs with Vite dev server from `ui/`
+- Vite proxies API requests to the local FastAPI backend
+- frontend hot reload stays available for UI development
+
+Production/local-user mode:
+
+- build the frontend with `npm run build`
+- write static assets to `ui/dist/`
+- serve `ui/dist/` from the FastAPI app
+- keep API routes under `/api/...`
+- route all non-API paths back to the frontend app shell
+- run everything from one Python command
+
+The final launch command should be:
+
+```bash
+PYTHONPATH=src venv/bin/python src/run_ui.py
+```
+
+`src/run_ui.py` should:
+
+- verify required Python dependencies are installed
+- verify the frontend build exists, or print the command needed to build it
+- start the FastAPI backend on a local port, default `127.0.0.1:8000`
+- detect if the default port is busy and either choose the next available port or show a clear error
+- print the local URL, for example `http://127.0.0.1:8000`
+- optionally open the browser automatically unless `--no-browser` is passed
+- write backend logs to the terminal and preserve existing CLI logging behavior
+- shut down cleanly on Ctrl+C
+
+Useful launch options:
+
+- `--host`, default `127.0.0.1`
+- `--port`, default `8000`
+- `--no-browser`
+- `--reload` for development
+- `--frontend-dev-server` to point at Vite during development
+
+Native desktop packaging is explicitly deferred. Reevaluate packaging only after the local web UI proves stable and one of these needs becomes real:
+
+- non-technical users need a double-click installer
+- users struggle with Python/Node setup
+- background/tray behavior is needed
+- file association or OS-level notifications become important
+- credential storage requires tighter OS integration
+- distributing to multiple machines becomes a normal workflow
+
+If packaging becomes necessary later, evaluate:
+
+- Tauri, if small bundle size and OS integration matter most
+- Electron, if the team needs the broadest mature desktop ecosystem
+- a Python launcher or installer, if the main goal is easier startup while keeping the browser UI
 
 ## Testing Strategy
 
@@ -331,9 +645,271 @@ PYTHONPATH=src venv/bin/python src/run_ui.py
 - View reports as generated local HTML/files in version one. The UI should index, open, download, and reveal report files instead of rebuilding every report as native UI.
 - Add a dedicated cache warmup CLI command in addition to the UI flow. The CLI and UI should call the same backend/cache service code so request throttling, cache-only preview, and rate-limit handling stay consistent.
 - Build the local web UI first. Defer native desktop packaging until the web UI stabilizes and there is a clear need for installation, tray integration, file association, or simpler non-technical setup.
-- Implement Interactive Brokers as the first broker connector for read-only sync because it supports paper/live accounts, API access, and the broker-sync model needed for open positions, executions, and closed trades.
+- Support Fidelity as a first-class broker workflow because the primary user trades there. Implement Fidelity support through a guaranteed file-import connector first, then add authorized data-sharing sync if a practical Fidelity Access or aggregator integration is available. Keep Interactive Brokers as the first direct API broker connector because it supports the read-only API model needed for automated positions, executions, and closed-trade sync.
 - Store broker credentials in the OS keychain/keyring where practical. Use encrypted local config only as a fallback when keychain/keyring support is unavailable.
 - Do not add app login while the application remains local-only. Add app accounts, sessions, roles, and hosted authentication only if the app becomes hosted or multi-user.
+
+## Broker Connector Strategy
+
+Broker support should be adapter-based. The Journal, Broker Connections UI, and matching logic should work against normalized broker models, not against a broker-specific API.
+
+Version-one priority:
+
+1. Fidelity file import connector for the user's current brokerage workflow.
+2. Interactive Brokers direct API connector for automated read-only sync.
+3. Fidelity authorized data-sharing connector if a practical Fidelity Access or aggregator path is available.
+
+This avoids blocking Fidelity users on direct API availability while still preserving the long-term read-only broker-sync architecture.
+
+## Fidelity Connector
+
+Fidelity must work for journal review even if direct automated sync is limited. Public Fidelity material describes Fidelity Access as a way for customers to share account data with authorized third-party websites and applications. Treat this as an account-data sharing path, not as a guaranteed retail trading/execution API for this app.
+
+Initial Fidelity support should be file-import based:
+
+- add `FidelityImportConnector`
+- allow the user to import Fidelity activity/history exports from the local filesystem
+- parse executions, positions, closed trades, fees, and account identifiers when present in the export
+- normalize imported rows into the same broker models used by direct broker connectors
+- show an import preview before journal data changes
+- match imported Fidelity executions to planned trades by ticker, side, date/time window, quantity, and expected entry area
+- route matched active trades to `Open Trades`
+- route matched closed trades to `Historical Ledger`
+- keep imported actual execution fields read-only after confirmation
+- support repeated imports without duplicating previously imported executions
+
+Fidelity import UI:
+
+- Settings / Broker Connections should include broker selector option `Fidelity`
+- Fidelity connection mode should show `File Import` initially
+- user selects one or more Fidelity export files
+- UI shows detected account, date range, row counts, matched trades, unmatched executions, and duplicate rows
+- user reviews and applies selected matches
+- app stores import history and source file metadata locally, but not the user's Fidelity website credentials
+
+Fidelity future sync path:
+
+- investigate Fidelity Access or a supported data aggregator only for read-only account/transaction sync
+- do not ask users to paste Fidelity website credentials into this app
+- do not screen-scrape Fidelity
+- do not build trade placement for Fidelity
+- if an authorized sync path is added, keep the same `BrokerConnector` interface and journal matching flow
+
+Fidelity-specific failure states:
+
+- unsupported export format
+- missing required columns
+- ambiguous account
+- date range already imported
+- duplicate execution detected
+- unmatched symbol or option contract
+- split/partial fill requiring manual review
+- import file contains no trades for selected range
+
+Fidelity tests:
+
+- unit test Fidelity export parsing with representative fixture files
+- unit test duplicate detection across repeated imports
+- unit test partial-fill grouping
+- unit test matching imported executions to planned trades
+- unit test missing-column and unsupported-format errors
+- integration-test import preview and apply flow with fake Fidelity export data
+- component-test Fidelity import mode in Broker Connections
+
+## Interactive Brokers Connector
+
+Implement Interactive Brokers as the first direct API broker connector for read-only journal sync. The connector should be isolated behind the same broker adapter interface so the Journal, Broker Connections UI, and matching logic do not depend directly on IBKR-specific API calls.
+
+Initial integration path:
+
+- Start with IBKR's current API documentation on IBKR Campus.
+- Prefer an HTTP/API-gateway style integration for the local app where practical.
+- Keep the connector design compatible with TWS API / IB Gateway if a local gateway is required for reliable positions, executions, or paper-account support.
+- Do not use deprecated standalone TWS API documentation as the source of truth when implementing.
+
+Connector interface:
+
+```python
+class BrokerConnector:
+    def validate_connection(self) -> BrokerConnectionStatus: ...
+    def list_accounts(self) -> list[BrokerAccount]: ...
+    def get_account_profile(self, account_id: str) -> BrokerAccountProfile: ...
+    def list_open_positions(self, account_id: str) -> list[BrokerPosition]: ...
+    def list_orders(self, account_id: str, start_date: date, end_date: date) -> list[BrokerOrder]: ...
+    def list_executions(self, account_id: str, start_date: date, end_date: date) -> list[BrokerExecution]: ...
+    def list_closed_trades(self, account_id: str, start_date: date, end_date: date) -> list[BrokerClosedTrade]: ...
+```
+
+Version one must not expose connector methods for placing, modifying, or canceling orders.
+
+Connection setup:
+
+- add `src/scanner/brokers/`
+- add `InteractiveBrokersConnector`
+- add Settings / Broker Connections API endpoints for connection test, account list, sync preview, and apply matches
+- support paper/live account labeling
+- show connected account identifier, account mode, last sync time, token/session status, and read-only status
+- require the user to confirm the connected account before syncing journal data
+
+Credential/session handling:
+
+- store secrets in the OS keychain/keyring where practical
+- store only non-secret connection metadata in local app config
+- do not write API secrets, session tokens, or passwords into CSV, logs, reports, or screenshots
+- mask credentials in the UI
+- support disconnect/revoke locally by deleting stored credentials/session data
+- handle expired sessions with a clear reconnect prompt
+
+Broker data models:
+
+- `BrokerAccount`
+- `BrokerAccountProfile`
+- `BrokerConnectionStatus`
+- `BrokerPosition`
+- `BrokerOrder`
+- `BrokerExecution`
+- `BrokerClosedTrade`
+- `BrokerSyncPreview`
+- `BrokerSyncMatch`
+
+Normalize IBKR data before it reaches the journal:
+
+- ticker/symbol
+- instrument type
+- side
+- quantity
+- average fill price
+- order id
+- execution id
+- commission/fees when available
+- trade date/time with timezone
+- account id
+- paper/live mode
+- source broker
+
+Sync flow:
+
+1. User opens Settings / Broker Connections.
+2. User connects Interactive Brokers in read-only sync mode.
+3. App validates connection and lists available accounts.
+4. User selects account and confirms paper/live mode.
+5. User opens Journal and clicks Sync Broker Trades.
+6. App fetches open positions, recent orders, executions, and closed trades for the selected date range.
+7. App builds a sync preview before changing journal data.
+8. App matches broker executions to planned trades by ticker, side, date/time window, and expected entry area.
+9. User reviews matched and unmatched broker records.
+10. App applies selected matches only after user confirmation.
+
+Journal update rules:
+
+- matched active positions appear in `Open Trades`
+- matched closed trades appear in `Historical Ledger`
+- broker-synced actual execution fields are read-only in journal tables
+- planned trades remain editable until matched to broker activity
+- unmatched executions can be linked manually to a planned trade
+- unmatched planned trades remain planned unless the user cancels/deletes them
+- corrections to actual fills happen through broker sync review, matching/linking, or broker-side correction
+
+Failure states:
+
+- not connected
+- session expired
+- invalid credentials
+- insufficient permissions
+- paper/live account mismatch
+- no accounts found
+- no executions found for selected date range
+- API unavailable
+- partial sync completed
+- duplicate broker execution already imported
+
+Testing:
+
+- unit test IBKR connector mapping from raw broker payloads into normalized broker models
+- unit test connection-state handling for valid, expired, invalid, and insufficient-permission states
+- unit test matching planned trades to broker executions by ticker, side, date window, and entry area
+- unit test duplicate execution detection
+- unit test that no order-placement methods exist on the version-one connector interface
+- integration-test sync preview with fake broker data
+- component-test Broker Connections states and Journal sync preview/apply flow
+
+## Local Credential Storage
+
+Broker credential storage should be local-only and broker-specific. The app should never require a hosted account system just to store broker credentials.
+
+Storage rules by broker mode:
+
+- Fidelity file import mode stores no Fidelity login credentials.
+- Fidelity file import mode may store non-secret import metadata such as source file name, import timestamp, detected account label, date range, row count, and import hash.
+- Direct API broker connectors may store API keys, secrets, refresh tokens, or session references only in the OS keychain/keyring where practical.
+- Encrypted local config is allowed only as a fallback when OS keychain/keyring support is unavailable or explicitly disabled.
+- Plaintext local config must never contain broker API secrets, session tokens, refresh tokens, or brokerage passwords.
+
+Implementation plan:
+
+- add `src/scanner/security/credential_store.py`
+- expose a small `CredentialStore` interface:
+  - `set_secret(service, account, value)`
+  - `get_secret(service, account)`
+  - `delete_secret(service, account)`
+  - `has_secret(service, account)`
+  - `list_metadata()`
+- implement an OS keychain/keyring backend first
+- implement encrypted local fallback only after keychain/keyring behavior is defined
+- keep non-secret connection metadata in app settings, not in the secret store
+- separate secret identifiers by broker, account id, environment, and credential type
+
+Suggested secret identifiers:
+
+- service: `swing-scanner.broker.interactive-brokers`
+- account: `{account_id}:api_key`
+- account: `{account_id}:api_secret`
+- account: `{account_id}:refresh_token`
+- account: `{account_id}:session_token`
+
+Non-secret metadata allowed in local config:
+
+- broker name
+- account label
+- masked account id
+- paper/live mode
+- connection mode, for example `file_import`, `api`, or `oauth`
+- last sync timestamp
+- last import timestamp
+- import file hash
+- read-only permission status
+- credential presence flags, for example `has_api_key: true`
+
+UI behavior:
+
+- mask all credential fields by default
+- never display full stored secrets after save
+- show whether credentials are present, missing, expired, or invalid
+- provide `Test Connection`, `Disconnect`, and `Delete Stored Credentials` actions
+- explain that Fidelity file import does not require Fidelity website credentials
+- require confirmation before deleting stored credentials or disconnecting an account
+
+Logging and export rules:
+
+- never log secrets or full tokens
+- never include secrets in reports, CSV exports, screenshots, or debug bundles
+- redact suspicious credential-shaped values in error messages where practical
+- include only masked account ids and broker labels in user-facing logs
+
+Fallback behavior:
+
+- if OS keychain/keyring is unavailable, show a warning before using encrypted local fallback
+- if encrypted local fallback is unavailable, allow file-import broker modes but disable direct API broker connection save
+- if credentials cannot be read, mark the broker connection as `Reauthentication required`
+
+Tests:
+
+- unit test keychain-backed `CredentialStore` with a fake backend
+- unit test metadata is separated from secrets
+- unit test secrets are not written to local settings files
+- unit test disconnect deletes stored secrets and preserves non-secret journal history
+- unit test logs and errors redact known secret values
+- component-test masked credential fields and delete confirmation flow
 
 ## Authentication Model
 
@@ -355,13 +931,42 @@ There are two separate authentication concerns.
 
 For version one, do not add user login if the app runs locally on the user's machine.
 
-The app should run at a local address such as:
+The app should bind to loopback by default:
 
 ```text
-http://localhost:8000
+http://127.0.0.1:8000
 ```
 
-The user's operating system login is enough for local access. App accounts, sessions, roles, password reset, and hosted authentication should only be added if the app later becomes hosted or multi-user.
+The user's operating system login is enough for local access. App accounts, sessions, roles, password reset, and hosted authentication are out of scope for version one.
+
+Implementation rules:
+
+- default host is `127.0.0.1`, not `0.0.0.0`
+- `src/run_ui.py` should print the exact local URL it starts
+- browser auto-open should open the loopback URL only
+- API routes should assume a local trusted user, not an authenticated web session
+- do not add app user tables, password storage, login forms, sessions, roles, email verification, or password reset flows in version one
+- do not expose the local API over the public network by default
+- if a user explicitly overrides `--host`, show a warning when the host is not loopback
+
+App login should be reconsidered only if one of these becomes true:
+
+- the app is hosted outside the user's machine
+- more than one user shares the same running app instance
+- the app is exposed on a LAN or public network
+- roles or permissions are needed
+- remote browser access becomes a supported workflow
+- broker or journal data is stored on a shared server
+
+Broker authentication is separate from app login. Even without app login, broker sync can still require API credentials, OAuth, tokens, or file imports, depending on the selected broker.
+
+Tests:
+
+- unit test `run_ui.py` defaults to `127.0.0.1`
+- unit test non-loopback `--host` shows a warning
+- API smoke test should not require an app login session in local mode
+- component tests should not include app login screens for version one
+- broker connection tests should still require broker-specific authentication or import files where applicable
 
 ### Broker Authentication
 

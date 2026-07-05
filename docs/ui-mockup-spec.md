@@ -548,6 +548,23 @@ Connection panel:
 - connect/test button
 - disconnect button
 
+Broker selector should include:
+
+- Fidelity
+- Interactive Brokers
+
+Fidelity mode should support:
+
+- file import connection mode
+- selected import file list
+- import preview button
+- note that Fidelity website credentials are not entered into this app
+
+Interactive Brokers mode should support:
+
+- direct read-only API connection
+- paper/live account labeling
+
 Connected account panel:
 
 - broker

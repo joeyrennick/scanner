@@ -647,12 +647,18 @@ Tables:
 
 - top tickers by average return
 - top tickers by win rate
+- analyzer bucket summaries:
+  - strategy summary
+  - composite score buckets, if source data includes scores
+  - relative strength buckets, if source data includes relative strength
+  - relative volume buckets, if source data includes relative volume
 
 Do not show a Recent Trades table on Backtest Results. This page should focus on aggregate historical backtest metrics, charts, and ticker rankings. Trade-level detail belongs in the exported trade CSV, generated HTML report, or a separate drill-down view.
 
 Actions:
 
 - Export Trade CSV
+- Export Analyzer Bucket CSVs
 - Generate HTML Report
 - Simulate Portfolio
 

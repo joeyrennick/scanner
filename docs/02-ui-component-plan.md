@@ -287,7 +287,22 @@ Output:
 - return distribution
 - monthly summary
 - ticker summary
+- analyzer bucket summaries:
+  - strategy summary
+  - composite score buckets
+  - relative strength buckets
+  - relative volume buckets
 - HTML report link
+
+Analyzer bucket behavior:
+
+- call the backend trade analyzer bucket API after a backtest completes or when a trade CSV is selected for analysis
+- show only bucket sections supported by the available trade columns
+- strategy summary should be available for normal exported backtest trades because they include `Strategy`
+- composite score, relative strength, and relative volume summaries should appear when the trade source preserves scanner candidate metadata
+- each bucket table should include trades, win rate, average return, median return, best trade, worst trade, and profit factor
+- provide an `Export Analyzer Bucket CSVs` action that writes one CSV per available bucket table
+- generated HTML trade analysis reports should include the same available bucket sections
 
 ### Portfolio Simulation
 
@@ -377,6 +392,8 @@ Report type inference:
 - `trade_analysis*.html` -> `trade_analysis`
 - `journal*.html` -> `journal`
 - `ticker_summary*.csv` -> `ticker_summary_csv`
+- `strategy_summary.csv` -> `analyzer_bucket_csv`
+- `*_buckets.csv` -> `analyzer_bucket_csv`
 - `*.csv` -> `csv_export`
 - unknown included file -> `other`
 

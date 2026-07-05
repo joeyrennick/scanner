@@ -9,8 +9,16 @@ import pandas as pd
 class TradeAnalyzer:
     RETURN_COLUMN = "Return %"
     TICKER_COLUMN = "Ticker"
+    STRATEGY_COLUMN = "Strategy"
     ENTRY_DATE_COLUMN = "Entry Date"
     EXIT_DATE_COLUMN = "Exit Date"
+    COMPOSITE_SCORE_COLUMN = "Composite Score"
+    RELATIVE_STRENGTH_COLUMN = "Relative Strength"
+    RELATIVE_VOLUME_COLUMN = "Relative Volume"
+
+    COMPOSITE_SCORE_BUCKETS = [-np.inf, 50, 70, 85, np.inf]
+    RELATIVE_STRENGTH_BUCKETS = [-np.inf, 0, 10, 20, np.inf]
+    RELATIVE_VOLUME_BUCKETS = [-np.inf, 0.8, 1.0, 1.5, 2.0, np.inf]
 
     def __init__(self, trade_csv_path: str):
         self.trade_csv_path = Path(trade_csv_path)
@@ -32,6 +40,17 @@ class TradeAnalyzer:
             self.trades[self.RETURN_COLUMN],
             errors="raise",
         )
+
+        for column in [
+            self.COMPOSITE_SCORE_COLUMN,
+            self.RELATIVE_STRENGTH_COLUMN,
+            self.RELATIVE_VOLUME_COLUMN,
+        ]:
+            if column in self.trades.columns:
+                self.trades[column] = pd.to_numeric(
+                    self.trades[column],
+                    errors="coerce",
+                )
 
         for column in [self.ENTRY_DATE_COLUMN, self.EXIT_DATE_COLUMN]:
             if column in self.trades.columns:
@@ -184,6 +203,61 @@ class TradeAnalyzer:
         )
         return summary.sort_values("Weekday").reset_index(drop=True)
 
+    def strategy_summary(self) -> pd.DataFrame:
+        self._require_column(self.STRATEGY_COLUMN)
+        return self._group_summary(self.trades, self.STRATEGY_COLUMN)
+
+    def composite_score_bucket_summary(
+        self,
+        bins: list[float] | None = None,
+    ) -> pd.DataFrame:
+        return self._numeric_bucket_summary(
+            source_column=self.COMPOSITE_SCORE_COLUMN,
+            bucket_column="Composite Score Bucket",
+            bins=bins or self.COMPOSITE_SCORE_BUCKETS,
+        )
+
+    def relative_strength_bucket_summary(
+        self,
+        bins: list[float] | None = None,
+    ) -> pd.DataFrame:
+        return self._numeric_bucket_summary(
+            source_column=self.RELATIVE_STRENGTH_COLUMN,
+            bucket_column="Relative Strength Bucket",
+            bins=bins or self.RELATIVE_STRENGTH_BUCKETS,
+        )
+
+    def relative_volume_bucket_summary(
+        self,
+        bins: list[float] | None = None,
+    ) -> pd.DataFrame:
+        return self._numeric_bucket_summary(
+            source_column=self.RELATIVE_VOLUME_COLUMN,
+            bucket_column="Relative Volume Bucket",
+            bins=bins or self.RELATIVE_VOLUME_BUCKETS,
+        )
+
+    def bucket_summaries(self) -> dict[str, pd.DataFrame]:
+        summaries = {}
+
+        if self.STRATEGY_COLUMN in self.trades.columns:
+            summaries["Strategy Summary"] = self.strategy_summary()
+
+        if self.COMPOSITE_SCORE_COLUMN in self.trades.columns:
+            summaries["Composite Score Buckets"] = (
+                self.composite_score_bucket_summary()
+            )
+
+        if self.RELATIVE_STRENGTH_COLUMN in self.trades.columns:
+            summaries["Relative Strength Buckets"] = (
+                self.relative_strength_bucket_summary()
+            )
+
+        if self.RELATIVE_VOLUME_COLUMN in self.trades.columns:
+            summaries["Relative Volume Buckets"] = self.relative_volume_bucket_summary()
+
+        return summaries
+
     def longest_winning_streak(self) -> int:
         return self._longest_streak(winning=True)
 
@@ -268,6 +342,19 @@ class TradeAnalyzer:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         self.ticker_summary(min_trades=min_trades).to_csv(output_path, index=False)
 
+    def export_bucket_summaries(self, output_dir: str) -> list[Path]:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        exports = []
+        for title, summary in self.bucket_summaries().items():
+            filename = f"{title.lower().replace(' ', '_')}.csv"
+            output_path = output_dir / filename
+            summary.to_csv(output_path, index=False)
+            exports.append(output_path)
+
+        return exports
+
     def generate_html_report(
         self,
         output_path: str,
@@ -296,6 +383,7 @@ class TradeAnalyzer:
             monthly_summary=self.monthly_summary(),
             weekday_summary=self.weekday_summary(),
             return_distribution=self.return_distribution(),
+            bucket_summaries=self.bucket_summaries(),
         )
 
         output_path.write_text(report_html, encoding="utf-8")
@@ -323,6 +411,86 @@ class TradeAnalyzer:
             }
         )
 
+    def _group_summary(
+        self,
+        trades: pd.DataFrame,
+        group_column: str,
+        sort_by_performance: bool = True,
+    ) -> pd.DataFrame:
+        columns = [
+            group_column,
+            "Trades",
+            "Win Rate",
+            "Average Return",
+            "Median Return",
+            "Best Trade",
+            "Worst Trade",
+            "Profit Factor",
+        ]
+
+        trades = trades.dropna(subset=[group_column])
+        if trades.empty:
+            return pd.DataFrame(columns=columns)
+
+        grouped = trades.groupby(group_column, observed=True, sort=True)
+        summary = grouped[self.RETURN_COLUMN].agg(
+            Trades="count",
+            Average_Return="mean",
+            Median_Return="median",
+            Best_Trade="max",
+            Worst_Trade="min",
+        )
+        summary["Win_Rate"] = grouped[self.RETURN_COLUMN].apply(
+            lambda returns: (returns > 0).mean() * 100
+        )
+        summary["Profit_Factor"] = grouped[self.RETURN_COLUMN].apply(
+            self._profit_factor_for_returns
+        )
+
+        summary = summary.reset_index().rename(
+            columns={
+                "Average_Return": "Average Return",
+                "Median_Return": "Median Return",
+                "Best_Trade": "Best Trade",
+                "Worst_Trade": "Worst Trade",
+                "Win_Rate": "Win Rate",
+                "Profit_Factor": "Profit Factor",
+            }
+        )
+
+        if sort_by_performance:
+            summary = summary.sort_values(
+                by=["Average Return", "Win Rate", "Trades"],
+                ascending=[False, False, False],
+            )
+
+        return summary[columns].reset_index(drop=True)
+
+    def _numeric_bucket_summary(
+        self,
+        source_column: str,
+        bucket_column: str,
+        bins: list[float],
+    ) -> pd.DataFrame:
+        self._require_column(source_column)
+        trades = self.trades.copy()
+        labels = [
+            self._format_numeric_bin_label(left, right)
+            for left, right in zip(bins[:-1], bins[1:])
+        ]
+        trades[bucket_column] = pd.cut(
+            trades[source_column],
+            bins=bins,
+            labels=labels,
+            include_lowest=True,
+            right=True,
+        )
+        return self._group_summary(
+            trades,
+            bucket_column,
+            sort_by_performance=False,
+        )
+
     def _longest_streak(self, winning: bool) -> int:
         trades = self.trades
 
@@ -347,6 +515,10 @@ class TradeAnalyzer:
         if column not in self.trades.columns:
             raise ValueError(f"Trade CSV is missing required columns: {column}")
 
+    def _require_column(self, column: str):
+        if column not in self.trades.columns:
+            raise ValueError(f"Trade CSV is missing required columns: {column}")
+
     @staticmethod
     def _profit_factor_for_returns(returns: pd.Series) -> float:
         gross_profit = returns[returns > 0].sum()
@@ -365,6 +537,14 @@ class TradeAnalyzer:
             return f"> {left:g}%"
         return f"> {left:g}% to <= {right:g}%"
 
+    @staticmethod
+    def _format_numeric_bin_label(left: float, right: float) -> str:
+        if left == -np.inf:
+            return f"<= {right:g}"
+        if right == np.inf:
+            return f"> {left:g}"
+        return f"> {left:g} to <= {right:g}"
+
     def _build_html_report(
         self,
         title: str,
@@ -375,6 +555,7 @@ class TradeAnalyzer:
         monthly_summary: pd.DataFrame,
         weekday_summary: pd.DataFrame,
         return_distribution: pd.DataFrame,
+        bucket_summaries: dict[str, pd.DataFrame],
     ) -> str:
         metric_cards = "\n".join(
             f"""
@@ -396,6 +577,16 @@ class TradeAnalyzer:
                 <strong>{self.longest_losing_streak()}</strong>
             </div>
         """
+
+        bucket_sections = "\n".join(
+            f"""
+        <section>
+            <h2>{escape(title)}</h2>
+            {self._dataframe_to_html(table)}
+        </section>
+            """
+            for title, table in bucket_summaries.items()
+        )
 
         return f"""<!doctype html>
 <html lang="en">
@@ -507,6 +698,8 @@ class TradeAnalyzer:
             </div>
             {self._dataframe_to_html(return_distribution)}
         </section>
+
+        {bucket_sections}
 
         <section>
             <h2>Top Tickers by Average Return</h2>

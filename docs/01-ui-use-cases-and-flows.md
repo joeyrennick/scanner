@@ -356,6 +356,11 @@ Tables/charts:
 - trades table
 - top tickers by return
 - top tickers by win rate
+- analyzer buckets:
+  - strategy summary
+  - composite score buckets when the trade source includes `Composite Score`
+  - relative strength buckets when the trade source includes `Relative Strength`
+  - relative volume buckets when the trade source includes `Relative Volume`
 - monthly results
 - weekday results
 - return distribution
@@ -363,6 +368,7 @@ Tables/charts:
 Actions:
 
 - Export Trade CSV
+- Export Analyzer Bucket CSVs
 - Generate HTML Report
 - Simulate Portfolio
 
@@ -373,6 +379,7 @@ Backtest source behavior:
 - the user should not need to export a CSV before running this backtest
 - Backtest Results should show the `BacktestConfig` used for the run so users can interpret results correctly
 - When a portfolio simulation is launched from a backtest result, the simulation should retain and display the source backtest config
+- Analyzer bucket sections should be shown only when the backtest result has the required source columns. Older trade CSVs may only show strategy-level buckets.
 
 ## Use Case 5: Portfolio Simulation
 

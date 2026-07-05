@@ -43,6 +43,54 @@ def create_analyzer():
     return TradeAnalyzer.from_dataframe(trades)
 
 
+def create_bucket_analyzer():
+    trades = pd.DataFrame(
+        [
+            {
+                "Ticker": "AAA",
+                "Strategy": "Pullback Strategy",
+                "Entry Date": "2026-01-05",
+                "Exit Date": "2026-01-10",
+                "Composite Score": 45,
+                "Relative Strength": -2,
+                "Relative Volume": 0.7,
+                "Return %": 5.0,
+            },
+            {
+                "Ticker": "BBB",
+                "Strategy": "Pullback Strategy",
+                "Entry Date": "2026-01-12",
+                "Exit Date": "2026-01-17",
+                "Composite Score": 72,
+                "Relative Strength": 12,
+                "Relative Volume": 1.2,
+                "Return %": -2.0,
+            },
+            {
+                "Ticker": "CCC",
+                "Strategy": "Breakout Strategy",
+                "Entry Date": "2026-02-03",
+                "Exit Date": "2026-02-08",
+                "Composite Score": 91,
+                "Relative Strength": 24,
+                "Relative Volume": 2.4,
+                "Return %": 4.0,
+            },
+            {
+                "Ticker": "DDD",
+                "Strategy": "Breakout Strategy",
+                "Entry Date": "2026-02-10",
+                "Exit Date": "2026-02-15",
+                "Composite Score": 66,
+                "Relative Strength": 7,
+                "Relative Volume": 0.95,
+                "Return %": 2.0,
+            },
+        ]
+    )
+    return TradeAnalyzer.from_dataframe(trades)
+
+
 def test_summary_calculates_core_statistics():
     summary = create_analyzer().summary()
 
@@ -102,6 +150,80 @@ def test_return_distribution_counts_all_trades():
     assert distribution["Percent"].tolist() == [40.0, 20.0, 40.0]
 
 
+def test_strategy_summary_groups_trades_by_strategy():
+    summary = create_bucket_analyzer().strategy_summary()
+
+    breakout = summary[summary["Strategy"] == "Breakout Strategy"].iloc[0]
+    pullback = summary[summary["Strategy"] == "Pullback Strategy"].iloc[0]
+
+    assert breakout["Trades"] == 2
+    assert breakout["Average Return"] == 3.0
+    assert breakout["Win Rate"] == 100.0
+    assert pullback["Trades"] == 2
+    assert pullback["Average Return"] == 1.5
+    assert pullback["Profit Factor"] == 2.5
+
+
+def test_analyzer_bucket_summaries_group_metric_ranges():
+    analyzer = create_bucket_analyzer()
+
+    composite = analyzer.composite_score_bucket_summary()
+    relative_strength = analyzer.relative_strength_bucket_summary()
+    relative_volume = analyzer.relative_volume_bucket_summary()
+
+    assert composite["Composite Score Bucket"].tolist() == [
+        "<= 50",
+        "> 50 to <= 70",
+        "> 70 to <= 85",
+        "> 85",
+    ]
+    assert composite["Trades"].tolist() == [1, 1, 1, 1]
+    assert relative_strength["Relative Strength Bucket"].tolist() == [
+        "<= 0",
+        "> 0 to <= 10",
+        "> 10 to <= 20",
+        "> 20",
+    ]
+    assert relative_strength["Trades"].tolist() == [1, 1, 1, 1]
+    assert relative_volume["Relative Volume Bucket"].tolist() == [
+        "<= 0.8",
+        "> 0.8 to <= 1",
+        "> 1 to <= 1.5",
+        "> 2",
+    ]
+    assert relative_volume["Trades"].tolist() == [1, 1, 1, 1]
+
+
+def test_bucket_summaries_only_include_available_columns():
+    analyzer = create_analyzer()
+
+    assert analyzer.bucket_summaries() == {}
+
+
+def test_export_bucket_summaries_writes_available_csv_files(tmp_path):
+    output_dir = tmp_path / "buckets"
+
+    exports = create_bucket_analyzer().export_bucket_summaries(output_dir)
+
+    assert {path.name for path in exports} == {
+        "strategy_summary.csv",
+        "composite_score_buckets.csv",
+        "relative_strength_buckets.csv",
+        "relative_volume_buckets.csv",
+    }
+    exported = pd.read_csv(output_dir / "composite_score_buckets.csv")
+    assert list(exported.columns) == [
+        "Composite Score Bucket",
+        "Trades",
+        "Win Rate",
+        "Average Return",
+        "Median Return",
+        "Best Trade",
+        "Worst Trade",
+        "Profit Factor",
+    ]
+
+
 def test_plot_return_distribution_writes_png(tmp_path):
     output_path = tmp_path / "return_distribution.png"
 
@@ -127,6 +249,18 @@ def test_generate_html_report_writes_report_and_chart(tmp_path):
     assert "trade_report_return_distribution.png" in html
     assert chart_path.exists()
     assert chart_path.read_bytes().startswith(b"\x89PNG")
+
+
+def test_generate_html_report_includes_available_bucket_summaries(tmp_path):
+    output_path = tmp_path / "trade_report.html"
+
+    create_bucket_analyzer().generate_html_report(output_path, min_trades=1, top=2)
+
+    html = output_path.read_text(encoding="utf-8")
+    assert "Strategy Summary" in html
+    assert "Composite Score Buckets" in html
+    assert "Relative Strength Buckets" in html
+    assert "Relative Volume Buckets" in html
 
 
 def test_export_ticker_summary_writes_csv(tmp_path):

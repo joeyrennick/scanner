@@ -86,12 +86,24 @@ def main():
         help="Display return distribution buckets.",
     )
     parser.add_argument(
+        "--buckets",
+        action="store_true",
+        help=(
+            "Display strategy, composite score, relative strength, and relative "
+            "volume bucket summaries when those columns are present."
+        ),
+    )
+    parser.add_argument(
         "--plot-return-distribution",
         help="Path to save a return distribution chart as a PNG.",
     )
     parser.add_argument(
         "--html-report",
         help="Path to save a full HTML analysis report.",
+    )
+    parser.add_argument(
+        "--export-bucket-summaries",
+        help="Directory to export available analyzer bucket summaries as CSV files.",
     )
 
     args = parser.parse_args()
@@ -123,6 +135,14 @@ def main():
     if args.distribution:
         print_table("Return Distribution", analyzer.return_distribution())
 
+    if args.buckets:
+        bucket_summaries = analyzer.bucket_summaries()
+        if not bucket_summaries:
+            print()
+            print("No analyzer bucket columns found.")
+        for title, table in bucket_summaries.items():
+            print_table(title, table)
+
     if args.plot_return_distribution:
         analyzer.plot_return_distribution(args.plot_return_distribution)
         print()
@@ -144,6 +164,14 @@ def main():
         )
         print()
         print(f"Exported ticker summary to {args.export_ticker_summary}")
+
+    if args.export_bucket_summaries:
+        exports = analyzer.export_bucket_summaries(args.export_bucket_summaries)
+        print()
+        if not exports:
+            print("No analyzer bucket columns found; no bucket summaries exported.")
+        for output_path in exports:
+            print(f"Exported bucket summary to {output_path}")
 
 
 if __name__ == "__main__":

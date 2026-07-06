@@ -71,8 +71,17 @@ def test_cache_overview_endpoint(tmp_path, monkeypatch):
     assert response.json()["cached_tickers"] == 0
 
 
-def test_cache_warmup_job_lifecycle(monkeypatch):
+def test_cache_warmup_job_lifecycle(tmp_path, monkeypatch):
     from scanner.api import app as api_app
+
+    monkeypatch.setattr(
+        api_app,
+        "settings",
+        replace(
+            api_app.settings,
+            market_data_cache_path=str(tmp_path / "market_data.sqlite"),
+        ),
+    )
 
     class FakeCacheWarmupService:
         def __init__(self, context=None, logger=None, progress_callback=None):
@@ -136,6 +145,8 @@ def test_cache_warmup_job_lifecycle(monkeypatch):
 def test_scan_job_lifecycle(monkeypatch, tmp_path):
     from scanner.api import app as api_app
 
+    monkeypatch.chdir(tmp_path)
+
     class FakeScanService:
         def __init__(self, context=None, logger=None, progress_callback=None):
             self.progress_callback = progress_callback
@@ -195,8 +206,11 @@ def test_scan_job_lifecycle(monkeypatch, tmp_path):
     assert payload["status"] == "complete"
     assert payload["progress"]["current_step"] == "Scan complete"
     assert payload["output_paths"]["watchlist_csv"] == str(tmp_path / "watchlist.csv")
+    assert payload["output_paths"]["scan_log"].startswith("output/logs/scanner_run_")
+    assert Path(payload["output_paths"]["scan_log"]).exists()
     assert payload["result"]["scanner_run_id"] == 1
     assert payload["result"]["rows"] == [{"Ticker": "AAPL", "Composite Score": 88}]
+    assert payload["result"]["log_path"] == payload["output_paths"]["scan_log"]
 
 
 def test_backtest_job_lifecycle(monkeypatch):
@@ -601,11 +615,14 @@ def test_reports_endpoint_lists_output_files(tmp_path, monkeypatch):
     (output_dir / "daily_scanner_report_2026-07-05.html").write_text(
         "<html></html>"
     )
+    (output_dir / "scanner.log").write_text("scan log")
 
     response = client.get("/api/reports")
 
     assert response.status_code == 200
-    assert response.json()[0]["type"] == "daily_scanner"
+    report_types = {report["type"] for report in response.json()}
+    assert "daily_scanner" in report_types
+    assert "log" in report_types
 
 
 def test_generate_daily_scanner_report_from_rows(tmp_path, monkeypatch):

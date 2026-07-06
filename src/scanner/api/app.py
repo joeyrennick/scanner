@@ -5,6 +5,7 @@ from datetime import date, datetime
 from pathlib import Path
 import base64
 import math
+from uuid import uuid4
 from typing import Any, Literal, get_args, get_origin
 
 from fastapi import FastAPI, HTTPException
@@ -45,7 +46,7 @@ from scanner.services.scan_service import ScanConfig, ScanService
 from scanner.strategies.strategy_registry import StrategyRegistry
 from scanner.universe.universe_provider import UniverseProvider
 from scanner.utils.cache_summary import format_cache_summary
-from scanner.utils.logger import setup_logging
+from scanner.utils.logger import add_file_handler, remove_handler, setup_logging
 
 
 app = FastAPI(title="Swing Scanner API")
@@ -252,7 +253,7 @@ def list_reports() -> list[dict[str, Any]]:
     reports = []
 
     for path in sorted(output_dir.rglob("*")):
-        if not path.is_file() or path.suffix.lower() not in {".html", ".csv"}:
+        if not path.is_file() or path.suffix.lower() not in {".html", ".csv", ".log"}:
             continue
 
         reports.append(_report_metadata(path))
@@ -530,49 +531,86 @@ def _run_cache_warmup(request: CacheWarmupRequest, progress) -> dict[str, Any]:
 
 def _run_scan(request: ScanRequest, progress) -> dict[str, Any]:
     logger = setup_logging()
-    context = ScannerContext(
-        settings=replace(settings, market_data_provider=request.market_data_provider),
-        logger=logger,
-        market_data_cache_enabled=True,
-    )
-    result = ScanService(
-        context=context,
-        logger=logger,
-        progress_callback=progress,
-    ).run(
-        ScanConfig(
-            universe=request.universe,
-            market_data_provider=request.market_data_provider,
-            history_period=request.history_period,
-            min_price=request.min_price,
-            max_price=request.max_price,
-            warm_market_data_cache=request.warm_market_data_cache,
-            cache_warmup_batch_size=request.cache_warmup_batch_size,
-            cache_warmup_max_provider_batches=request.cache_warmup_max_provider_batches,
-            cache_warmup_batch_delay_seconds=(
-                request.cache_warmup_batch_delay_ms / 1000
-            ),
+    log_path = _scan_log_path()
+    file_handler = add_file_handler(logger, log_path)
+    scan_log_output = {"scan_log": str(log_path)}
+
+    def scan_progress(**changes):
+        output_paths = changes.get("output_paths")
+        if isinstance(output_paths, dict):
+            changes["output_paths"] = {**scan_log_output, **output_paths}
+        else:
+            changes["output_paths"] = scan_log_output
+
+        progress(**changes)
+
+    scan_progress(output_paths={})
+
+    try:
+        logger.info("Starting UI scanner run")
+        logger.info(
+            "Scan request: "
+            f"universe={request.universe}, "
+            f"provider={request.market_data_provider}, "
+            f"history_period={request.history_period}, "
+            f"min_price={request.min_price}, "
+            f"max_price={request.max_price}, "
+            f"warm_cache={request.warm_market_data_cache}"
         )
-    )
-    cache_warmup_result = result.cache_warmup_result
-    return _json_safe(
-        {
-            "scanner_run_id": result.scanner_run_id,
-            "tickers": result.tickers,
-            "analyses": len(result.analyses),
-            "candidates": len(result.trade_candidates),
-            "skipped": result.skipped,
-            "watchlist_path": result.output_file,
-            "elapsed_seconds": result.elapsed_seconds,
-            "rows": _records_from_dataframe(result.dataframe),
-            "cache_summary": result.cache_summary,
-            "stopped_for_rate_limit": (
-                cache_warmup_result.stopped_for_rate_limit
-                if cache_warmup_result
-                else False
-            ),
-        }
-    )
+        context = ScannerContext(
+            settings=replace(settings, market_data_provider=request.market_data_provider),
+            logger=logger,
+            market_data_cache_enabled=True,
+        )
+        result = ScanService(
+            context=context,
+            logger=logger,
+            progress_callback=scan_progress,
+        ).run(
+            ScanConfig(
+                universe=request.universe,
+                market_data_provider=request.market_data_provider,
+                history_period=request.history_period,
+                min_price=request.min_price,
+                max_price=request.max_price,
+                warm_market_data_cache=request.warm_market_data_cache,
+                cache_warmup_batch_size=request.cache_warmup_batch_size,
+                cache_warmup_max_provider_batches=request.cache_warmup_max_provider_batches,
+                cache_warmup_batch_delay_seconds=(
+                    request.cache_warmup_batch_delay_ms / 1000
+                ),
+            )
+        )
+        cache_warmup_result = result.cache_warmup_result
+        logger.info("UI scanner run complete")
+        return _json_safe(
+            {
+                "scanner_run_id": result.scanner_run_id,
+                "tickers": result.tickers,
+                "analyses": len(result.analyses),
+                "candidates": len(result.trade_candidates),
+                "skipped": result.skipped,
+                "watchlist_path": result.output_file,
+                "log_path": str(log_path),
+                "elapsed_seconds": result.elapsed_seconds,
+                "rows": _records_from_dataframe(result.dataframe),
+                "cache_summary": result.cache_summary,
+                "stopped_for_rate_limit": (
+                    cache_warmup_result.stopped_for_rate_limit
+                    if cache_warmup_result
+                    else False
+                ),
+                "output_paths": {
+                    "watchlist_csv": result.output_file,
+                    "scan_log": str(log_path),
+                },
+            }
+        )
+    except Exception:
+        logger.exception("UI scanner run failed")
+        raise
+    finally:
+        remove_handler(logger, file_handler)
 
 
 def _run_backtest(request: BacktestRequest, progress) -> dict[str, Any]:
@@ -773,6 +811,11 @@ def _parse_report_date(value: str | None) -> date:
         ) from error
 
 
+def _scan_log_path() -> Path:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return Path("output/logs") / f"scanner_run_{timestamp}_{uuid4().hex[:8]}.log"
+
+
 def _daily_report_watchlist_path(
     request: DailyScannerReportRequest,
     output_dir: Path,
@@ -870,5 +913,7 @@ def _report_type(path: Path) -> str:
         return "portfolio"
     if path.suffix == ".csv":
         return "csv_export"
+    if path.suffix == ".log":
+        return "log"
 
     return "other"

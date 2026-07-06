@@ -240,7 +240,7 @@ def test_backtest_service_uses_configured_history_period(monkeypatch):
     assert calls == [("AAPL", "6mo"), ("SPY", "6mo")]
 
 
-def test_backtest_service_uses_shared_worker_setting(monkeypatch):
+def test_backtest_service_uses_backtest_worker_setting(monkeypatch):
     service = BacktestService()
     service.market_data_service.get_history = lambda ticker, period: pd.DataFrame(
         {"Close": [100, 101]},
@@ -289,7 +289,7 @@ def test_backtest_service_uses_shared_worker_setting(monkeypatch):
 
     monkeypatch.setattr(
         "scanner.backtesting.backtest_service.settings",
-        ScannerSettings(max_workers=7),
+        ScannerSettings(max_workers=7, backtest_max_workers=80),
     )
     monkeypatch.setattr(
         "scanner.backtesting.backtest_service.ThreadPoolExecutor",
@@ -307,5 +307,5 @@ def test_backtest_service_uses_shared_worker_setting(monkeypatch):
         hold_days=5,
     )
 
-    assert FakeExecutor.captured_max_workers == 7
+    assert FakeExecutor.captured_max_workers == 80
     assert result.ticker == "Watchlist"

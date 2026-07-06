@@ -25,6 +25,7 @@ class ScannerSettings:
     cache_warmup_max_provider_batches: int | None = None
     cache_warmup_stop_on_rate_limit: bool = True
     max_workers: int = 40
+    backtest_max_workers: int = 80
     relative_strength_lookback_days: int = 63
 
 

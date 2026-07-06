@@ -497,6 +497,28 @@ input:disabled {
   font-weight: 700;
 }
 
+.output-path-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.output-path-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #0a64d8;
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
 .page-indicator {
   color: #334155;
   font-size: 13px;

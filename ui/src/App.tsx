@@ -2646,6 +2646,7 @@ function JobProgressPanel({ job, percent }: { job?: JobResponse; percent: number
   const complete = job?.status === 'complete';
   const failed = job?.status === 'failed';
   const stopped = job?.status === 'stopped' || progress?.rate_limited;
+  const outputPaths = Object.entries(progress?.output_paths ?? {});
   const [detailsExpanded, setDetailsExpanded] = useState(true);
 
   useEffect(() => {
@@ -2697,6 +2698,17 @@ function JobProgressPanel({ job, percent }: { job?: JobResponse; percent: number
           <Detail label="Provider Symbols" value={formatNumber(progress?.provider_symbols_attempted)} />
           <Detail label="Elapsed" value={formatDuration(progress?.elapsed_seconds)} />
           <Detail label="ETA" value={formatDuration(progress?.estimated_seconds_remaining)} />
+        </div>
+      )}
+
+      {outputPaths.length > 0 && (
+        <div className="output-path-list">
+          {outputPaths.map(([label, path]) => (
+            <a key={label} className="output-path-link" href={downloadHrefForOutputPath(path)}>
+              <Download size={15} />
+              {label.replaceAll('_', ' ')}
+            </a>
+          ))}
         </div>
       )}
 
@@ -2915,6 +2927,19 @@ function formatUnknown(value: unknown): string {
   }
 
   return String(value);
+}
+
+function downloadHrefForOutputPath(path: string): string {
+  const normalized = path.replace(/\\/g, '/');
+  const relative = normalized.startsWith('output/')
+    ? normalized.slice('output/'.length)
+    : normalized;
+  const encoded = window
+    .btoa(relative)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_');
+
+  return `/api/reports/${encoded}/download`;
 }
 
 function parseDisplayNumber(value: string): number | null {

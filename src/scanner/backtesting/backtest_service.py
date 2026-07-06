@@ -18,7 +18,7 @@ class BacktestService:
         config: BacktestConfig | None = None,
         progress_callback: Callable[..., None] | None = None,
     ):
-        self.market_data_service = MarketDataService()
+        self.market_data_service = MarketDataService(cache_only=True)
         self.config = config or BacktestConfig(
             history_period=history_period or settings.backtest_history_period,
         )
@@ -106,7 +106,7 @@ class BacktestService:
 
         all_trades = []
         skipped = []
-        max_workers = settings.max_workers
+        max_workers = settings.backtest_max_workers
 
         def run_one(ticker: str):
             history = self.market_data_service.get_history(

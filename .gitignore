@@ -17,6 +17,11 @@ venv/
 output/
 *.csv
 
+# Frontend
+ui/node_modules/
+ui/dist/
+ui/coverage/
+
 # Testing
 .pytest_cache/
 .mypy_cache/

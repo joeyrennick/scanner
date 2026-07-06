@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { candidateFromWatchlistRow, mergeWatchlistRows, rowMatchesStrategy } from './watchlist';
+import {
+  candidateFromWatchlistRow,
+  mergeWatchlistRows,
+  rowMatchesDisplaySettings,
+  rowMatchesStrategy,
+  stopDistancePercent
+} from './watchlist';
 
 describe('watchlist display helpers', () => {
   it('maps existing scanner rows into display candidates', () => {
@@ -12,7 +18,8 @@ describe('watchlist display helpers', () => {
         'Stop 2ATR': 203.43,
         'Relative Strength': 12.345,
         'Relative Volume': 1.25,
-        ATR14: 4.1
+        ATR14: 4.1,
+        '5D Range': 12
       },
       0,
       '2026-07-02'
@@ -23,6 +30,7 @@ describe('watchlist display helpers', () => {
       currentPrice: '$211.43',
       priceSource: 'Cached Close',
       targetExit: '$227.43',
+      fiveDayRange: '12',
       holdTime: '5 trading days'
     });
   });
@@ -62,9 +70,9 @@ describe('watchlist display helpers', () => {
   it('merges refreshed rows by ticker', () => {
     expect(
       mergeWatchlistRows(
-        [
-          { Ticker: 'AAPL', Price: 200 },
-          { Ticker: 'MSFT', Price: 400 }
+      [
+        { Ticker: 'AAPL', Price: 200 },
+        { Ticker: 'MSFT', Price: 400 }
         ],
         [{ Ticker: 'AAPL', 'Current Price': 212.5 }]
       )
@@ -72,5 +80,34 @@ describe('watchlist display helpers', () => {
       { Ticker: 'AAPL', Price: 200, 'Current Price': 212.5 },
       { Ticker: 'MSFT', Price: 400 }
     ]);
+  });
+
+  it('calculates and filters by stop distance and 5D range settings', () => {
+    const row = {
+      Ticker: 'AAPL',
+      Price: 100,
+      'Stop 2ATR': 98,
+      '5D Range': 11
+    };
+
+    expect(stopDistancePercent(row)).toBe(2);
+    expect(
+      rowMatchesDisplaySettings(row, {
+        minStopDistancePercent: 1,
+        minFiveDayRange: 10
+      })
+    ).toBe(true);
+    expect(
+      rowMatchesDisplaySettings(row, {
+        minStopDistancePercent: 3,
+        minFiveDayRange: 10
+      })
+    ).toBe(false);
+    expect(
+      rowMatchesDisplaySettings(row, {
+        minStopDistancePercent: 1,
+        minFiveDayRange: 12
+      })
+    ).toBe(false);
   });
 });

@@ -29,9 +29,11 @@ import { formatDuration, formatNumber, isJobActive, progressPercent } from './li
 import {
   candidateFromWatchlistRow,
   mergeWatchlistRows,
+  rowMatchesDisplaySettings,
   rowMatchesStrategy,
   type DisplayCandidate
 } from './lib/watchlist';
+import { useScannerDisplaySettings } from './lib/scannerSettings';
 import { appRoutes, getRouteMeta } from './routes';
 
 const universes = ['all', 'sp500', 'djia', 'nasdaq', 'nyse'];
@@ -61,7 +63,7 @@ export function App() {
         <Route path="journal" element={<PlaceholderPage title="Journal" />} />
         <Route path="reports" element={<PlaceholderPage title="Reports" />} />
         <Route path="cache-warmup" element={<CacheWarmupPage />} />
-        <Route path="settings" element={<PlaceholderPage title="Settings" />} />
+        <Route path="settings" element={<SettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
@@ -191,6 +193,7 @@ function DailyScannerPage() {
   const latestWatchlist = useLatestWatchlist();
   const startScan = useStartScan();
   const refreshPrices = useRefreshWatchlistPrices();
+  const [displaySettings] = useScannerDisplaySettings();
   const [jobId, setJobId] = useState<string | null>(null);
   const autoRefreshedJobId = useRef<string | null>(null);
   const jobQuery = useJob(jobId);
@@ -216,8 +219,13 @@ function DailyScannerPage() {
   ]);
   const rawRows = refreshedRows ?? baseRows;
   const filteredRows = useMemo(
-    () => rawRows.filter((row) => rowMatchesStrategy(row, selectedStrategy)),
-    [rawRows, selectedStrategy]
+    () =>
+      rawRows.filter(
+        (row) =>
+          rowMatchesStrategy(row, selectedStrategy) &&
+          rowMatchesDisplaySettings(row, displaySettings)
+      ),
+    [displaySettings, rawRows, selectedStrategy]
   );
   const candidates = useMemo(
     () =>
@@ -538,7 +546,7 @@ function DailyScannerPage() {
             <h2 id="scanner-results-title">Scanner Results</h2>
             <p>
               {latestWatchlist.data?.exists
-                ? `${candidates.length} filtered candidates from ${latestWatchlist.data.path}`
+                ? `${candidates.length} displayed candidates from ${latestWatchlist.data.path}`
                 : 'No watchlist has been generated yet'}
             </p>
           </div>
@@ -584,7 +592,10 @@ function DailyScannerPage() {
 
         <div className="selection-strip">
           <span>{selectedCount > 0 ? `${selectedCount} selected` : 'No rows selected'}</span>
-          <span>Export defaults to filtered candidates when nothing is selected.</span>
+          <span>
+            Min stop {displaySettings.minStopDistancePercent}% · Min 5D range{' '}
+            {displaySettings.minFiveDayRange}
+          </span>
         </div>
 
         <div className="table-wrap">
@@ -616,6 +627,7 @@ function DailyScannerPage() {
                 <th>RS</th>
                 <th>RVOL</th>
                 <th>ATR</th>
+                <th>5D Range</th>
                 <th>Entry</th>
                 <th>Stop</th>
                 <th>Target/Exit</th>
@@ -653,6 +665,7 @@ function DailyScannerPage() {
                   <td>{candidate.relativeStrength}</td>
                   <td>{candidate.relativeVolume}</td>
                   <td>{candidate.atr}</td>
+                  <td>{candidate.fiveDayRange}</td>
                   <td>{candidate.entryArea}</td>
                   <td>{candidate.stop}</td>
                   <td>{candidate.targetExit}</td>
@@ -667,7 +680,7 @@ function DailyScannerPage() {
               ))}
               {candidates.length === 0 && (
                 <tr>
-                  <td colSpan={15} className="empty-cell">
+                  <td colSpan={16} className="empty-cell">
                     {activeJob ? 'Scan is running.' : 'No candidates match the current filter.'}
                   </td>
                 </tr>
@@ -841,6 +854,63 @@ function CacheWarmupPage() {
 
         <JobProgressPanel job={job} percent={percent} />
       </div>
+    </div>
+  );
+}
+
+function SettingsPage() {
+  const [settings, setSettings] = useScannerDisplaySettings();
+
+  return (
+    <div className="settings-grid">
+      <section className="panel" aria-labelledby="scanner-display-settings-title">
+        <div className="panel-header">
+          <div>
+            <h2 id="scanner-display-settings-title">Scanner Display</h2>
+            <p>Filter scanner candidates by practical trade range</p>
+          </div>
+        </div>
+
+        <div className="settings-form">
+          <label>
+            Minimum Stop Distance
+            <div className="input-with-suffix">
+              <input
+                type="number"
+                min="0"
+                step="0.1"
+                value={settings.minStopDistancePercent}
+                onChange={(event) =>
+                  setSettings({
+                    ...settings,
+                    minStopDistancePercent: inputNumberOrNull(event.target.value) ?? 0
+                  })
+                }
+              />
+              <span>%</span>
+            </div>
+          </label>
+
+          <label>
+            Minimum 5D Range
+            <div className="input-with-suffix">
+              <input
+                type="number"
+                min="0"
+                step="1"
+                value={settings.minFiveDayRange}
+                onChange={(event) =>
+                  setSettings({
+                    ...settings,
+                    minFiveDayRange: inputNumberOrNull(event.target.value) ?? 0
+                  })
+                }
+              />
+              <span>integer</span>
+            </div>
+          </label>
+        </div>
+      </section>
     </div>
   );
 }

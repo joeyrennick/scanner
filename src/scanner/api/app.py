@@ -225,10 +225,14 @@ def _refresh_watchlist_prices(
             )
             price_as_of = _string_value(updated.get("Price As Of")) or "Cached"
             price_source = "Cached Close"
+            five_day_range = _float_value(updated.get("5D Range"))
         else:
             refreshed_count += 1
             price, price_as_of = latest
             price_source = _provider_display_name(request.market_data_provider)
+            five_day_range = _five_day_range_percent(
+                histories.get(ticker, pd.DataFrame())
+            )
 
         if price is None:
             updated["Price Source"] = "Unavailable"
@@ -238,6 +242,7 @@ def _refresh_watchlist_prices(
                 price=price,
                 price_as_of=price_as_of,
                 price_source=price_source,
+                five_day_range=five_day_range,
                 reward_risk_multiple=request.reward_risk_multiple,
                 suggested_hold_days=request.suggested_hold_days,
             )
@@ -266,11 +271,32 @@ def _latest_price_from_history(history: pd.DataFrame) -> tuple[float, str] | Non
     return float(latest_price), str(latest_timestamp.date())
 
 
+def _five_day_range_percent(history: pd.DataFrame) -> float | None:
+    if history.empty or not {"High", "Low", "Close"}.issubset(history.columns):
+        return None
+
+    recent = history[["High", "Low", "Close"]].dropna().tail(5)
+
+    if recent.empty:
+        return None
+
+    latest_close = recent["Close"].iloc[-1].item()
+
+    if latest_close <= 0:
+        return None
+
+    high = recent["High"].max().item()
+    low = recent["Low"].min().item()
+
+    return ((high - low) / latest_close) * 100
+
+
 def _apply_refreshed_trade_levels(
     row: dict[str, Any],
     price: float,
     price_as_of: str,
     price_source: str,
+    five_day_range: float | None,
     reward_risk_multiple: float,
     suggested_hold_days: int,
 ) -> None:
@@ -284,14 +310,19 @@ def _apply_refreshed_trade_levels(
     row["Entry Area"] = round(price, 2)
     row["Suggested Hold Time"] = f"{suggested_hold_days} trading days"
 
+    if five_day_range is not None:
+        row["5D Range"] = round(five_day_range)
+
     if stop is None:
         return
 
     risk_per_share = price - stop
     target = price + (risk_per_share * reward_risk_multiple)
+    stop_distance_percent = (risk_per_share / price) * 100
     row["Stop 2ATR"] = round(stop, 2)
     row["Suggested Stop"] = round(stop, 2)
     row["Risk / Share"] = round(risk_per_share, 2)
+    row["Stop Distance %"] = round(stop_distance_percent, 2)
     row["Target/Exit"] = round(target, 2)
     row["Suggested Exit"] = round(target, 2)
 

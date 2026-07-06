@@ -292,7 +292,11 @@ def test_refresh_watchlist_prices_recalculates_trade_levels(monkeypatch):
             assert period == "5d"
             return {
                 "AAPL": pd.DataFrame(
-                    {"Close": [210.0, 212.5]},
+                    {
+                        "High": [214.0, 215.0],
+                        "Low": [205.0, 206.0],
+                        "Close": [210.0, 212.5],
+                    },
                     index=pd.to_datetime(["2026-07-01", "2026-07-02"]),
                 )
             }
@@ -336,8 +340,10 @@ def test_refresh_watchlist_prices_recalculates_trade_levels(monkeypatch):
         "Price Source": "Yahoo",
         "Entry Area": 212.5,
         "Suggested Hold Time": "5 trading days",
+        "5D Range": 5,
         "Suggested Stop": 204.5,
         "Risk / Share": 8.0,
+        "Stop Distance %": 3.76,
         "Target/Exit": 228.5,
         "Suggested Exit": 228.5,
     }
@@ -371,6 +377,7 @@ def test_refresh_watchlist_prices_falls_back_to_cached_close(monkeypatch):
     assert payload["fallback_count"] == 1
     assert payload["rows"][0]["Current Price"] == 200.0
     assert payload["rows"][0]["Price Source"] == "Cached Close"
+    assert payload["rows"][0]["Stop Distance %"] == 4.0
 
 
 def test_reports_endpoint_lists_output_files(tmp_path, monkeypatch):

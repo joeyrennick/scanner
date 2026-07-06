@@ -1,4 +1,5 @@
 import type { WatchlistRow } from '../api/types';
+import type { ScannerDisplaySettings } from './scannerSettings';
 
 export type DisplayCandidate = {
   id: string;
@@ -11,6 +12,7 @@ export type DisplayCandidate = {
   relativeStrength: string;
   relativeVolume: string;
   atr: string;
+  fiveDayRange: string;
   entryArea: string;
   stop: string;
   targetExit: string;
@@ -38,12 +40,26 @@ export function candidateFromWatchlistRow(
     relativeStrength: formatPercentLike(row['Relative Strength']),
     relativeVolume: formatNumber(row['Relative Volume']),
     atr: formatCurrency(numericValue(row.ATR14)),
+    fiveDayRange: formatInteger(row['5D Range']),
     entryArea: formatCurrency(numericValue(row['Entry Area']) ?? price),
     stop: formatCurrency(stop),
     targetExit: formatCurrency(target ?? targetFromPriceAndStop(price, stop)),
     holdTime:
       stringValue(row['Hold Time']) || stringValue(row['Suggested Hold Time']) || '5 trading days'
   };
+}
+
+export function rowMatchesDisplaySettings(
+  row: WatchlistRow,
+  settings: ScannerDisplaySettings
+): boolean {
+  const stopDistance = stopDistancePercent(row);
+  const fiveDayRange = numericValue(row['5D Range']);
+
+  return (
+    (stopDistance === undefined || stopDistance >= settings.minStopDistancePercent) &&
+    (fiveDayRange === undefined || fiveDayRange >= settings.minFiveDayRange)
+  );
 }
 
 export function mergeWatchlistRows(
@@ -58,6 +74,17 @@ export function mergeWatchlistRows(
     const refreshed = refreshedByTicker.get(stringValue(row.Ticker).toUpperCase());
     return refreshed ? { ...row, ...refreshed } : row;
   });
+}
+
+export function stopDistancePercent(row: WatchlistRow): number | undefined {
+  const price = numericValue(row['Entry Area']) ?? numericValue(row['Current Price']) ?? numericValue(row.Price);
+  const stop = numericValue(row['Suggested Stop']) ?? numericValue(row['Stop 2ATR']);
+
+  if (price === undefined || stop === undefined || stop >= price || price <= 0) {
+    return undefined;
+  }
+
+  return ((price - stop) / price) * 100;
 }
 
 export function rowMatchesStrategy(row: WatchlistRow, strategy: string): boolean {
@@ -93,6 +120,11 @@ function formatCurrency(value?: number): string {
 function formatNumber(value: unknown): string {
   const numeric = numericValue(value);
   return numeric === undefined ? 'n/a' : numeric.toFixed(2);
+}
+
+function formatInteger(value: unknown): string {
+  const numeric = numericValue(value);
+  return numeric === undefined ? 'n/a' : String(Math.round(numeric));
 }
 
 function formatPercentLike(value: unknown): string {

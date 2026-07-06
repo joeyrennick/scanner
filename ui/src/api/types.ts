@@ -52,6 +52,26 @@ export interface CacheWarmupRequest {
   stop_on_rate_limit: boolean;
 }
 
+export interface ScanRequest {
+  universe: string;
+  market_data_provider?: string;
+  history_period: string;
+  min_price?: number | null;
+  max_price?: number | null;
+  warm_market_data_cache: boolean;
+  cache_warmup_batch_size: number;
+  cache_warmup_max_provider_batches?: number | null;
+  cache_warmup_batch_delay_ms: number;
+}
+
+export type WatchlistRow = Record<string, string | number | boolean | null>;
+
+export interface WatchlistResponse {
+  exists: boolean;
+  path: string;
+  rows: WatchlistRow[];
+}
+
 export interface StrategyMetadata {
   key: string;
   display_name: string;

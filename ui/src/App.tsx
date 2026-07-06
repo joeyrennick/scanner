@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   Clock3,
   Database,
+  Download,
   FileText,
   Info,
   LayoutDashboard,
@@ -21,9 +22,15 @@ import {
 import { Link, Navigate, NavLink, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 import { useCacheOverview, useStartCacheWarmup } from './api/cache';
 import { useJob } from './api/jobs';
+import { useLatestWatchlist, useStartScan } from './api/scans';
 import { useStrategies } from './api/strategies';
-import type { CacheWarmupRequest, JobResponse } from './api/types';
+import type { CacheWarmupRequest, JobResponse, ScanRequest, WatchlistRow } from './api/types';
 import { formatDuration, formatNumber, isJobActive, progressPercent } from './lib/progress';
+import {
+  candidateFromWatchlistRow,
+  rowMatchesStrategy,
+  type DisplayCandidate
+} from './lib/watchlist';
 import { appRoutes, getRouteMeta } from './routes';
 
 const universes = ['all', 'sp500', 'djia', 'nasdaq', 'nyse'];
@@ -46,7 +53,7 @@ export function App() {
     <Routes>
       <Route element={<AppShell />}>
         <Route index element={<DashboardPage />} />
-        <Route path="daily-scanner" element={<PlaceholderPage title="Daily Scanner" />} />
+        <Route path="daily-scanner" element={<DailyScannerPage />} />
         <Route path="candidates" element={<PlaceholderPage title="Candidates" />} />
         <Route path="backtest" element={<PlaceholderPage title="Backtest" />} />
         <Route path="portfolio" element={<PlaceholderPage title="Portfolio" />} />
@@ -173,6 +180,438 @@ function DashboardPage() {
           </div>
         </section>
       </div>
+    </div>
+  );
+}
+
+function DailyScannerPage() {
+  const cacheOverview = useCacheOverview();
+  const strategies = useStrategies();
+  const latestWatchlist = useLatestWatchlist();
+  const startScan = useStartScan();
+  const [jobId, setJobId] = useState<string | null>(null);
+  const jobQuery = useJob(jobId);
+  const job = jobQuery.data;
+  const activeJob = isJobActive(job);
+  const [selectedStrategy, setSelectedStrategy] = useState('all');
+  const [selectedTickers, setSelectedTickers] = useState<Set<string>>(new Set());
+  const [form, setForm] = useState<ScanRequest>({
+    universe: 'all',
+    history_period: '6mo',
+    min_price: 20,
+    max_price: 50,
+    warm_market_data_cache: true,
+    cache_warmup_batch_size: 50,
+    cache_warmup_max_provider_batches: 10,
+    cache_warmup_batch_delay_ms: 500
+  });
+
+  const rawRows = useMemo(() => scanRowsFromJob(job) ?? latestWatchlist.data?.rows ?? [], [
+    job,
+    latestWatchlist.data?.rows
+  ]);
+  const filteredRows = useMemo(
+    () => rawRows.filter((row) => rowMatchesStrategy(row, selectedStrategy)),
+    [rawRows, selectedStrategy]
+  );
+  const candidates = useMemo(
+    () =>
+      filteredRows.map((row, index) =>
+        candidateFromWatchlistRow(row, index, cacheOverview.data?.latest_bar_date)
+      ),
+    [cacheOverview.data?.latest_bar_date, filteredRows]
+  );
+  const selectedCandidates = candidates.filter((candidate) => selectedTickers.has(candidate.id));
+  const selectedCount = selectedCandidates.length;
+  const exportScope = selectedCount > 0 ? `${selectedCount} selected` : `${candidates.length} filtered`;
+  const percent = progressPercent(job?.progress);
+  const activeStrategies = strategies.data?.filter((strategy) => strategy.category === 'entry') ?? [];
+  const anyCachedPrice = candidates.some((candidate) => candidate.priceSource === 'Cached Close');
+
+  async function submitScan() {
+    setSelectedTickers(new Set());
+    const response = await startScan.mutateAsync({
+      ...form,
+      min_price: emptyNumberToNull(form.min_price),
+      max_price: emptyNumberToNull(form.max_price)
+    });
+    setJobId(response.job_id);
+  }
+
+  function toggleTicker(ticker: string) {
+    setSelectedTickers((current) => {
+      const next = new Set(current);
+      if (next.has(ticker)) {
+        next.delete(ticker);
+      } else {
+        next.add(ticker);
+      }
+      return next;
+    });
+  }
+
+  function toggleAllCandidates() {
+    setSelectedTickers((current) => {
+      const visibleIds = new Set(candidates.map((candidate) => candidate.id));
+      const visibleSelectedCount = candidates.filter((candidate) => current.has(candidate.id)).length;
+
+      if (visibleSelectedCount === candidates.length) {
+        const next = new Set(current);
+        visibleIds.forEach((id) => next.delete(id));
+        return next;
+      }
+
+      return new Set([...current, ...visibleIds]);
+    });
+  }
+
+  function exportCsv() {
+    const rowsToExport = selectedCandidates.length > 0 ? selectedCandidates : candidates;
+    downloadCandidatesCsv(rowsToExport);
+  }
+
+  return (
+    <div className="page-stack">
+      <section className="panel scanner-controls" aria-labelledby="scanner-controls-title">
+        <div className="panel-header">
+          <div>
+            <h2 id="scanner-controls-title">Run Scanner</h2>
+            <p>Cache-aware scan using local history and controlled provider calls</p>
+          </div>
+          <button
+            className="icon-button"
+            title="The scanner uses cached history for indicators and refreshes final candidate prices when backend support is available. Verify live prices in your trading platform before trading."
+            aria-label="Scanner price information"
+          >
+            <Info size={18} />
+          </button>
+        </div>
+
+        <div className="scanner-control-grid">
+          <label>
+            Universe
+            <select
+              value={form.universe}
+              onChange={(event) => setForm({ ...form, universe: event.target.value })}
+              disabled={activeJob}
+            >
+              {universes.map((universe) => (
+                <option key={universe} value={universe}>
+                  {universe.toUpperCase()}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label>
+            History
+            <select
+              value={form.history_period}
+              onChange={(event) => setForm({ ...form, history_period: event.target.value })}
+              disabled={activeJob}
+            >
+              {historyPeriods.map((period) => (
+                <option key={period} value={period}>
+                  {period}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label>
+            Min Price
+            <input
+              type="number"
+              min="0"
+              value={form.min_price ?? ''}
+              onChange={(event) =>
+                setForm({ ...form, min_price: inputNumberOrNull(event.target.value) })
+              }
+              disabled={activeJob}
+            />
+          </label>
+
+          <label>
+            Max Price
+            <input
+              type="number"
+              min="0"
+              value={form.max_price ?? ''}
+              onChange={(event) =>
+                setForm({ ...form, max_price: inputNumberOrNull(event.target.value) })
+              }
+              disabled={activeJob}
+            />
+          </label>
+
+          <label>
+            Batch Size
+            <input
+              type="number"
+              min="1"
+              value={form.cache_warmup_batch_size}
+              onChange={(event) =>
+                setForm({ ...form, cache_warmup_batch_size: Number(event.target.value) })
+              }
+              disabled={activeJob}
+            />
+          </label>
+
+          <label>
+            Max Batches
+            <input
+              type="number"
+              min="0"
+              value={form.cache_warmup_max_provider_batches ?? ''}
+              onChange={(event) =>
+                setForm({
+                  ...form,
+                  cache_warmup_max_provider_batches: inputNumberOrNull(event.target.value)
+                })
+              }
+              disabled={activeJob}
+            />
+          </label>
+
+          <label>
+            Batch Delay
+            <input
+              type="number"
+              min="0"
+              step="100"
+              value={form.cache_warmup_batch_delay_ms}
+              onChange={(event) =>
+                setForm({ ...form, cache_warmup_batch_delay_ms: Number(event.target.value) })
+              }
+              disabled={activeJob}
+            />
+          </label>
+
+          <label className="toggle-row">
+            Warm cache first
+            <input
+              type="checkbox"
+              checked={form.warm_market_data_cache}
+              onChange={(event) =>
+                setForm({ ...form, warm_market_data_cache: event.target.checked })
+              }
+              disabled={activeJob}
+            />
+          </label>
+        </div>
+
+        <div className="scanner-toolbar">
+          <div className="segmented-control" aria-label="Strategy filter">
+            <button
+              className={selectedStrategy === 'all' ? 'active' : ''}
+              onClick={() => setSelectedStrategy('all')}
+              disabled={activeJob}
+            >
+              All
+            </button>
+            {activeStrategies.map((strategy) => (
+              <button
+                key={strategy.key}
+                className={selectedStrategy === strategy.key ? 'active' : ''}
+                onClick={() => setSelectedStrategy(strategy.key)}
+                disabled={activeJob}
+              >
+                {strategy.display_name.replace(' Strategy', '')}
+              </button>
+            ))}
+          </div>
+
+          <button
+            className="primary-button"
+            onClick={() => void submitScan()}
+            disabled={activeJob || startScan.isPending}
+          >
+            {activeJob ? <LoaderCircle className="spin" size={18} /> : <Play size={18} />}
+            Run Scan
+          </button>
+        </div>
+
+        {startScan.isError && (
+          <div className="alert alert-danger">
+            <AlertTriangle size={18} />
+            <span>{startScan.error.message}</span>
+          </div>
+        )}
+      </section>
+
+      <section className="summary-grid" aria-label="Scan summary">
+        <MetricCard
+          icon={<ListChecks />}
+          label="Analyzed"
+          value={formatNumber(job?.progress.symbols_checked ?? rowCountFromJob(job))}
+          tone="neutral"
+        />
+        <MetricCard icon={<CheckCircle2 />} label="Candidates" value={formatNumber(candidates.length)} tone="green" />
+        <MetricCard
+          icon={<Database />}
+          label="Provider Symbols"
+          value={formatNumber(job?.progress.provider_symbols_attempted)}
+          tone="blue"
+        />
+        <MetricCard
+          icon={<Clock3 />}
+          label="Elapsed"
+          value={formatDuration(job?.progress.elapsed_seconds)}
+          tone={job?.progress.rate_limited ? 'amber' : 'neutral'}
+        />
+      </section>
+
+      {activeJob && (
+        <section className="panel compact-progress" aria-label="Scanner progress">
+          <div className="progress-track">
+            <div className="progress-fill" style={{ width: `${percent}%` }} />
+          </div>
+          <div className="progress-summary">
+            <strong>{job?.progress.current_step ?? 'Starting scan'}</strong>
+            <span>{percent}%</span>
+          </div>
+        </section>
+      )}
+
+      {job?.progress.rate_limited && (
+        <div className="alert alert-warning">
+          <AlertTriangle size={18} />
+          <span>Rate limit stopped provider calls. Results may be partial and use cached history.</span>
+        </div>
+      )}
+
+      {anyCachedPrice && (
+        <div className="alert alert-warning">
+          <Info size={18} />
+          <span>Some rows use Cached Close because current-price refresh data is not available.</span>
+        </div>
+      )}
+
+      <section className="panel scanner-results" aria-labelledby="scanner-results-title">
+        <div className="panel-header">
+          <div>
+            <h2 id="scanner-results-title">Scanner Results</h2>
+            <p>
+              {latestWatchlist.data?.exists
+                ? `${candidates.length} filtered candidates from ${latestWatchlist.data.path}`
+                : 'No watchlist has been generated yet'}
+            </p>
+          </div>
+          <div className="button-row inline-actions">
+            <button
+              className="secondary-button"
+              onClick={exportCsv}
+              disabled={candidates.length === 0}
+              title={`Export ${exportScope} candidates`}
+            >
+              <Download size={18} />
+              Export CSV
+            </button>
+            <button className="secondary-button" disabled={candidates.length === 0}>
+              <BarChart3 size={18} />
+              {selectedCount > 0 ? 'Backtest Selected' : 'Backtest Filtered'}
+            </button>
+            <button className="secondary-button" disabled={candidates.length === 0}>
+              <FileText size={18} />
+              Generate Daily Report
+            </button>
+          </div>
+        </div>
+
+        <div className="selection-strip">
+          <span>{selectedCount > 0 ? `${selectedCount} selected` : 'No rows selected'}</span>
+          <span>Export defaults to filtered candidates when nothing is selected.</span>
+        </div>
+
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>
+                  <input
+                    type="checkbox"
+                    checked={candidates.length > 0 && selectedCount === candidates.length}
+                    onChange={toggleAllCandidates}
+                    aria-label="Select all scanner candidates"
+                  />
+                </th>
+                <th>Ticker</th>
+                <th>Strategy</th>
+                <th>Score</th>
+                <th>
+                  <span className="th-with-info">
+                    Current Price
+                    <Info
+                      size={14}
+                      aria-label="Current Price comes from Yahoo/latest provider data and may be delayed or stale. Confirm the live price in your trading platform, such as TradingView or thinkorswim, before placing a trade."
+                    />
+                  </span>
+                </th>
+                <th>Price As Of</th>
+                <th>Source</th>
+                <th>RS</th>
+                <th>RVOL</th>
+                <th>ATR</th>
+                <th>Entry</th>
+                <th>Stop</th>
+                <th>Target/Exit</th>
+                <th>Hold</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {candidates.map((candidate) => (
+                <tr key={candidate.id}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={selectedTickers.has(candidate.id)}
+                      onChange={() => toggleTicker(candidate.id)}
+                      aria-label={`Select ${candidate.ticker}`}
+                    />
+                  </td>
+                  <td className="ticker-cell">{candidate.ticker}</td>
+                  <td>{candidate.strategy}</td>
+                  <td>{candidate.score}</td>
+                  <td>{candidate.currentPrice}</td>
+                  <td>{candidate.priceAsOf}</td>
+                  <td>
+                    <span
+                      className={
+                        candidate.priceSource === 'Cached Close'
+                          ? 'source-pill cached'
+                          : 'source-pill'
+                      }
+                    >
+                      {candidate.priceSource}
+                    </span>
+                  </td>
+                  <td>{candidate.relativeStrength}</td>
+                  <td>{candidate.relativeVolume}</td>
+                  <td>{candidate.atr}</td>
+                  <td>{candidate.entryArea}</td>
+                  <td>{candidate.stop}</td>
+                  <td>{candidate.targetExit}</td>
+                  <td>{candidate.holdTime}</td>
+                  <td>
+                    <div className="row-actions">
+                      <button className="link-button">Open</button>
+                      <button className="link-button">Add To Journal</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {candidates.length === 0 && (
+                <tr>
+                  <td colSpan={15} className="empty-cell">
+                    {activeJob ? 'Scan is running.' : 'No candidates match the current filter.'}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   );
 }
@@ -480,6 +919,74 @@ function JobProgressPanel({ job, percent }: { job?: JobResponse; percent: number
       )}
     </section>
   );
+}
+
+function scanRowsFromJob(job?: JobResponse): WatchlistRow[] | null {
+  const rows = job?.result?.rows;
+  return Array.isArray(rows) ? (rows as WatchlistRow[]) : null;
+}
+
+function rowCountFromJob(job?: JobResponse): number | undefined {
+  const analyses = job?.result?.analyses;
+  return typeof analyses === 'number' ? analyses : undefined;
+}
+
+function inputNumberOrNull(value: string): number | null {
+  if (value.trim() === '') {
+    return null;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function emptyNumberToNull(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function downloadCandidatesCsv(candidates: DisplayCandidate[]) {
+  const header = [
+    'Ticker',
+    'Strategy',
+    'Score',
+    'Current Price',
+    'Price As Of',
+    'Price Source',
+    'Relative Strength',
+    'Relative Volume',
+    'ATR',
+    'Entry Area',
+    'Stop',
+    'Target Exit',
+    'Hold Time'
+  ];
+  const rows = candidates.map((candidate) => [
+    candidate.ticker,
+    candidate.strategy,
+    candidate.score,
+    candidate.currentPrice,
+    candidate.priceAsOf,
+    candidate.priceSource,
+    candidate.relativeStrength,
+    candidate.relativeVolume,
+    candidate.atr,
+    candidate.entryArea,
+    candidate.stop,
+    candidate.targetExit,
+    candidate.holdTime
+  ]);
+  const csv = [header, ...rows].map((row) => row.map(csvCell).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = 'scanner_candidates.csv';
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+function csvCell(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`;
 }
 
 function StatusPill({ status }: { status: string }) {

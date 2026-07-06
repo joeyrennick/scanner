@@ -51,9 +51,39 @@ class WatchlistPriceRefreshResponse(BaseModel):
     fallback_count: int
 
 
+class CandidateTradeLevelsRequest(BaseModel):
+    run_id: int | None = None
+    entry_area: float | None = None
+    suggested_stop: float | None = None
+    target_exit: float | None = None
+    reset: bool = False
+
+
+class CandidateTradeLevelsResponse(BaseModel):
+    run_id: int
+    ticker: str
+    row: dict[str, Any]
+
+
+class DailyScannerReportRequest(BaseModel):
+    rows: list[dict[str, Any]] | None = None
+    report_date: str | None = None
+    archive_watchlist: bool = True
+    account_size: float | None = None
+    risk_per_trade_percent: float | None = None
+    suggested_hold_days: int = 5
+    reward_risk_multiple: float = 2.0
+
+
+class DailyScannerReportResponse(BaseModel):
+    report: dict[str, Any]
+    archived_watchlist: str | None = None
+
+
 class BacktestRequest(BaseModel):
     ticker: str | None = None
     universe: str | None = None
+    tickers: list[str] | None = None
     strategy: str = "pullback"
     history_period: str = settings.backtest_history_period
     hold_days: int = 5
@@ -66,7 +96,13 @@ class PortfolioSimulationRequest(BaseModel):
     trades_csv: str
     initial_cash: float = 100_000
     max_open_positions: int = 10
+    max_positions_per_ticker: int | None = None
     position_size_percent: float = 0.10
+    commission_per_trade: float = 0.0
+    commission_per_share: float = 0.0
+    slippage_percent: float = 0.0
+    stop_loss_percent: float | None = None
+    trailing_stop_percent: float | None = None
 
 
 class JobResponse(BaseModel):

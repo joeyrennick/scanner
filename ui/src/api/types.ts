@@ -89,6 +89,69 @@ export interface WatchlistPriceRefreshResponse {
   fallback_count: number;
 }
 
+export interface CandidateTradeLevelsRequest {
+  run_id?: number | null;
+  entry_area?: number | null;
+  suggested_stop?: number | null;
+  target_exit?: number | null;
+  reset?: boolean;
+}
+
+export interface CandidateTradeLevelsResponse {
+  run_id: number;
+  ticker: string;
+  row: WatchlistRow;
+}
+
+export interface BacktestRequest {
+  ticker?: string | null;
+  universe?: string | null;
+  tickers?: string[] | null;
+  strategy: string;
+  history_period: string;
+  hold_days: number;
+  min_history_days: number;
+  allow_overlapping_trades: boolean;
+  entry_reset_policy: string;
+}
+
+export interface PortfolioSimulationRequest {
+  trades_csv: string;
+  initial_cash: number;
+  max_open_positions: number;
+  max_positions_per_ticker?: number | null;
+  position_size_percent: number;
+  commission_per_trade: number;
+  commission_per_share: number;
+  slippage_percent: number;
+  stop_loss_percent?: number | null;
+  trailing_stop_percent?: number | null;
+}
+
+export interface ReportMetadata {
+  id: string;
+  name: string;
+  path: string;
+  type: string;
+  size_bytes: number;
+  modified_at: string;
+}
+
+export interface DailyScannerReportRequest {
+  rows?: WatchlistRow[] | null;
+  report_date?: string | null;
+  archive_watchlist?: boolean;
+  account_size?: number | null;
+  risk_per_trade_percent?: number | null;
+  suggested_hold_days?: number;
+  reward_risk_multiple?: number;
+}
+
+export interface DailyScannerReportResponse {
+  report: ReportMetadata;
+  archived_watchlist: string | null;
+}
+
 export interface StrategyMetadata {
   key: string;
   display_name: string;

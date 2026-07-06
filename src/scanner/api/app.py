@@ -16,6 +16,10 @@ from scanner.api.jobs import jobs
 from scanner.api.schemas import (
     BacktestRequest,
     CacheWarmupRequest,
+    CandidateTradeLevelsRequest,
+    CandidateTradeLevelsResponse,
+    DailyScannerReportRequest,
+    DailyScannerReportResponse,
     HealthResponse,
     JobResponse,
     PortfolioSimulationRequest,
@@ -32,6 +36,10 @@ from scanner.context import ScannerContext
 from scanner.data.cache import SQLiteMarketDataCache
 from scanner.data.market_data import create_market_data_provider
 from scanner.data.scanner_results import SQLiteScannerResultStore
+from scanner.portfolio.execution_model import ExecutionModel
+from scanner.portfolio.portfolio_simulator import PortfolioSimulator
+from scanner.portfolio.trade_csv_loader import load_trades_from_csv
+from scanner.reports.daily_scanner_report import DailyScannerReport
 from scanner.services.cache_warmup import CacheWarmupConfig, CacheWarmupService
 from scanner.services.scan_service import ScanConfig, ScanService
 from scanner.strategies.strategy_registry import StrategyRegistry
@@ -167,12 +175,50 @@ def refresh_watchlist_prices(
     return _json_safe(_refresh_watchlist_prices(request))
 
 
+@app.post(
+    "/api/watchlist/candidates/{ticker}/trade-levels",
+    response_model=CandidateTradeLevelsResponse,
+)
+def update_candidate_trade_levels(
+    ticker: str,
+    request: CandidateTradeLevelsRequest,
+) -> dict[str, Any]:
+    store = _scanner_result_store()
+    run_id = request.run_id
+
+    if run_id is None:
+        latest_run = store.latest_run()
+        if latest_run is None:
+            raise HTTPException(status_code=404, detail="Scanner run not found")
+        run_id = latest_run.id
+
+    try:
+        row = store.update_trade_levels(
+            run_id=run_id,
+            ticker=ticker,
+            entry_area=request.entry_area,
+            suggested_stop=request.suggested_stop,
+            target_exit=request.target_exit,
+            reset=request.reset,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+    return _json_safe(
+        {
+            "run_id": run_id,
+            "ticker": ticker.upper(),
+            "row": row,
+        }
+    )
+
+
 @app.post("/api/backtests", response_model=JobResponse)
 def start_backtest(request: BacktestRequest) -> dict[str, Any]:
-    if not request.ticker and not request.universe:
+    if not request.ticker and not request.universe and not request.tickers:
         raise HTTPException(
             status_code=422,
-            detail="Either ticker or universe is required",
+            detail="Either ticker, universe, or tickers is required",
         )
 
     job = jobs.start(
@@ -187,12 +233,13 @@ def get_backtest(job_id: str) -> dict[str, Any]:
     return get_job(job_id)
 
 
-@app.post("/api/portfolio/simulations")
-def start_portfolio_simulation(_request: PortfolioSimulationRequest) -> None:
-    raise HTTPException(
-        status_code=501,
-        detail="Portfolio simulation API endpoint is not implemented yet",
+@app.post("/api/portfolio/simulations", response_model=JobResponse)
+def start_portfolio_simulation(request: PortfolioSimulationRequest) -> dict[str, Any]:
+    job = jobs.start(
+        "portfolio_simulation",
+        lambda progress: _run_portfolio_simulation(request, progress),
     )
+    return job.to_dict()
 
 
 @app.get("/api/reports")
@@ -211,6 +258,40 @@ def list_reports() -> list[dict[str, Any]]:
         reports.append(_report_metadata(path))
 
     return reports
+
+
+@app.post("/api/reports/daily-scanner", response_model=DailyScannerReportResponse)
+def generate_daily_scanner_report(
+    request: DailyScannerReportRequest,
+) -> dict[str, Any]:
+    report_date = _parse_report_date(request.report_date)
+    output_dir = Path("output/daily_reports")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    watchlist_path = _daily_report_watchlist_path(request, output_dir, report_date)
+    report_path = output_dir / f"daily_scanner_report_{report_date.isoformat()}.html"
+
+    try:
+        report = DailyScannerReport(
+            watchlist_path=str(watchlist_path),
+            report_date=report_date,
+            account_size=request.account_size,
+            risk_per_trade_percent=request.risk_per_trade_percent,
+            suggested_hold_days=request.suggested_hold_days,
+            reward_risk_multiple=request.reward_risk_multiple,
+        )
+        report.generate_html_report(report_path)
+        archive_path = (
+            report.archive_watchlist(output_dir) if request.archive_watchlist else None
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    return _json_safe(
+        {
+            "report": _report_metadata(report_path),
+            "archived_watchlist": str(archive_path) if archive_path else None,
+        }
+    )
 
 
 @app.get("/api/reports/{report_id}")
@@ -508,6 +589,8 @@ def _run_backtest(request: BacktestRequest, progress) -> dict[str, Any]:
     ).run(
         ticker=request.ticker,
         universe=request.universe,
+        tickers=_normalize_request_tickers(request.tickers),
+        result_ticker=_backtest_result_label(request),
         strategy=strategy,
     )
     statistics = result.statistics
@@ -527,6 +610,61 @@ def _run_backtest(request: BacktestRequest, progress) -> dict[str, Any]:
                 "profit_factor": statistics.profit_factor,
             },
             "trades": [trade.to_dict() for trade in result.trades],
+        }
+    )
+
+
+def _run_portfolio_simulation(
+    request: PortfolioSimulationRequest,
+    progress,
+) -> dict[str, Any]:
+    progress(
+        current_step="Loading trades",
+        symbols_checked=0,
+        message="Loading trades",
+    )
+    trades = load_trades_from_csv(request.trades_csv)
+    progress(
+        current_step="Simulating portfolio",
+        symbols_total=len(trades),
+        symbols_checked=0,
+        message="Simulating portfolio",
+    )
+    execution_model = ExecutionModel(
+        commission_per_trade=request.commission_per_trade,
+        commission_per_share=request.commission_per_share,
+        slippage_percent=request.slippage_percent,
+        stop_loss_percent=request.stop_loss_percent,
+        trailing_stop_percent=request.trailing_stop_percent,
+    )
+    simulator = PortfolioSimulator(
+        initial_cash=request.initial_cash,
+        max_open_positions=request.max_open_positions,
+        max_positions_per_ticker=request.max_positions_per_ticker,
+        position_size_percent=request.position_size_percent,
+        execution_model=execution_model,
+    )
+    result = simulator.run(trades)
+    progress(
+        current_step="Portfolio simulation complete",
+        symbols_total=len(trades),
+        symbols_checked=len(trades),
+        symbols_kept=len(result.positions),
+        symbols_skipped=result.skipped_trades,
+        message="Portfolio simulation complete",
+    )
+    equity_curve = (
+        result.equity_curve.astype(object)
+        .where(pd.notna(result.equity_curve), None)
+        .to_dict(orient="records")
+        if not result.equity_curve.empty
+        else []
+    )
+    return _json_safe(
+        {
+            "summary": result.summary(),
+            "equity_curve": equity_curve,
+            "positions": _records_from_dataframe(result.positions_dataframe()),
         }
     )
 
@@ -582,6 +720,34 @@ def _resolve_tickers(universe: str, tickers: list[str] | None) -> list[str]:
     return UniverseProvider().get_universe_tickers(universe)
 
 
+def _normalize_request_tickers(tickers: list[str] | None) -> list[str] | None:
+    if not tickers:
+        return None
+
+    normalized = []
+    seen = set()
+
+    for ticker in tickers:
+        cleaned = ticker.strip().upper()
+
+        if not cleaned or cleaned in seen:
+            continue
+
+        normalized.append(cleaned)
+        seen.add(cleaned)
+
+    return normalized or None
+
+
+def _backtest_result_label(request: BacktestRequest) -> str | None:
+    tickers = _normalize_request_tickers(request.tickers)
+
+    if tickers:
+        return f"{len(tickers)} Candidate Tickers"
+
+    return None
+
+
 def _records_from_dataframe(dataframe: pd.DataFrame) -> list[dict[str, Any]]:
     if dataframe.empty:
         return []
@@ -592,6 +758,50 @@ def _records_from_dataframe(dataframe: pd.DataFrame) -> list[dict[str, Any]]:
 
 def _scanner_result_store() -> SQLiteScannerResultStore:
     return SQLiteScannerResultStore(settings.market_data_cache_path)
+
+
+def _parse_report_date(value: str | None) -> date:
+    if not value:
+        return date.today()
+
+    try:
+        return date.fromisoformat(value)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=422,
+            detail="report_date must be in YYYY-MM-DD format",
+        ) from error
+
+
+def _daily_report_watchlist_path(
+    request: DailyScannerReportRequest,
+    output_dir: Path,
+    report_date: date,
+) -> Path:
+    if request.rows is not None:
+        if not request.rows:
+            raise HTTPException(
+                status_code=422,
+                detail="Daily scanner report requires at least one row",
+            )
+
+        watchlist_path = output_dir / f"watchlist_report_input_{report_date.isoformat()}.csv"
+        pd.DataFrame(request.rows).to_csv(watchlist_path, index=False)
+        return watchlist_path
+
+    latest_run = _scanner_result_store().latest_run()
+
+    if latest_run is not None and latest_run.rows:
+        watchlist_path = output_dir / f"watchlist_report_input_{report_date.isoformat()}.csv"
+        pd.DataFrame(latest_run.rows).to_csv(watchlist_path, index=False)
+        return watchlist_path
+
+    path = Path(settings.output_file)
+
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+
+    return path
 
 
 def _json_safe(value: Any) -> Any:

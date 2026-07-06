@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from './client';
 import { queryKeys } from './queryKeys';
 import type {
+  CandidateTradeLevelsRequest,
+  CandidateTradeLevelsResponse,
   JobResponse,
   ScanRequest,
   WatchlistPriceRefreshRequest,
@@ -41,6 +43,30 @@ export function useRefreshWatchlistPrices() {
         method: 'POST',
         body: JSON.stringify(request)
       }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.latestWatchlist });
+    }
+  });
+}
+
+export function useUpdateCandidateTradeLevels() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      ticker,
+      request
+    }: {
+      ticker: string;
+      request: CandidateTradeLevelsRequest;
+    }) =>
+      apiClient.request<CandidateTradeLevelsResponse>(
+        `/api/watchlist/candidates/${encodeURIComponent(ticker)}/trade-levels`,
+        {
+          method: 'POST',
+          body: JSON.stringify(request)
+        }
+      ),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.latestWatchlist });
     }

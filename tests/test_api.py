@@ -206,7 +206,7 @@ def test_backtest_job_lifecycle(monkeypatch):
         def __init__(self, config=None, progress_callback=None):
             self.progress_callback = progress_callback
 
-        def run(self, ticker, universe, strategy):
+        def run(self, ticker, universe, strategy, tickers=None, result_ticker=None):
             if self.progress_callback:
                 self.progress_callback(
                     current_step="Backtest complete",
@@ -217,7 +217,7 @@ def test_backtest_job_lifecycle(monkeypatch):
                     message="Backtest complete",
                 )
             return BacktestResult(
-                ticker=ticker,
+                ticker=result_ticker or ticker,
                 strategy_name=strategy.name,
                 trades=[
                     Trade(
@@ -250,6 +250,70 @@ def test_backtest_job_lifecycle(monkeypatch):
     assert payload["symbols_checked"] == 1
     assert payload["result"]["statistics"]["total_trades"] == 1
     assert payload["result"]["trades"][0]["Return %"] == 10.0
+
+
+def test_backtest_job_accepts_ticker_list(monkeypatch):
+    from scanner.api import app as api_app
+
+    calls = []
+
+    class FakeBacktestService:
+        def __init__(self, config=None, progress_callback=None):
+            self.progress_callback = progress_callback
+
+        def run(self, ticker, universe, strategy, tickers=None, result_ticker=None):
+            calls.append(
+                {
+                    "ticker": ticker,
+                    "universe": universe,
+                    "tickers": tickers,
+                    "result_ticker": result_ticker,
+                }
+            )
+            if self.progress_callback:
+                self.progress_callback(
+                    current_step="Backtest complete",
+                    symbols_total=len(tickers),
+                    symbols_checked=len(tickers),
+                    symbols_kept=1,
+                    symbols_skipped=0,
+                    message="Backtest complete",
+                )
+            return BacktestResult(
+                ticker=result_ticker,
+                strategy_name=strategy.name,
+                trades=[
+                    Trade(
+                        ticker=tickers[0],
+                        strategy_name=strategy.name,
+                        entry_date=date(2026, 1, 1),
+                        exit_date=date(2026, 1, 6),
+                        entry_price=100,
+                        exit_price=110,
+                    )
+                ],
+            )
+
+    monkeypatch.setattr(api_app, "BacktestService", FakeBacktestService)
+
+    response = client.post(
+        "/api/backtests",
+        json={
+            "tickers": [" aapl ", "MSFT", "AAPL"],
+            "strategy": "pullback",
+            "history_period": "5d",
+            "hold_days": 5,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = wait_for_job(response.json()["job_id"])
+    assert payload["status"] == "complete"
+    assert calls[0]["ticker"] is None
+    assert calls[0]["universe"] is None
+    assert calls[0]["tickers"] == ["AAPL", "MSFT"]
+    assert calls[0]["result_ticker"] == "2 Candidate Tickers"
+    assert payload["result"]["ticker"] == "2 Candidate Tickers"
 
 
 def test_latest_watchlist_endpoint(tmp_path, monkeypatch):
@@ -482,6 +546,54 @@ def test_refresh_watchlist_prices_falls_back_to_cached_close(monkeypatch, tmp_pa
     assert payload["rows"][0]["Stop Distance %"] == 4.0
 
 
+def test_update_candidate_trade_levels_persists_to_sqlite(monkeypatch, tmp_path):
+    from scanner.api import app as api_app
+    from scanner.data.scanner_results import SQLiteScannerResultStore
+
+    db_path = tmp_path / "market_data.sqlite"
+    store = SQLiteScannerResultStore(db_path)
+    run_id = store.save_scan_results(
+        pd.DataFrame(
+            [
+                {
+                    "Ticker": "AAPL",
+                    "Price": 200.0,
+                    "Entry Area": 200.0,
+                    "Suggested Stop": 190.0,
+                    "Target/Exit": 220.0,
+                }
+            ]
+        ),
+        universe="sp500",
+        market_data_provider="yahoo",
+        history_period="6mo",
+        output_file="output/watchlist.csv",
+    )
+    monkeypatch.setattr(
+        api_app,
+        "settings",
+        replace(api_app.settings, market_data_cache_path=str(db_path)),
+    )
+
+    response = client.post(
+        "/api/watchlist/candidates/AAPL/trade-levels",
+        json={
+            "run_id": run_id,
+            "entry_area": 201.25,
+            "suggested_stop": 191.5,
+            "target_exit": 222.75,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["row"]["Entry Area"] == 201.25
+    assert payload["row"]["Suggested Stop"] == 191.5
+    assert payload["row"]["Target/Exit"] == 222.75
+    assert payload["row"]["Trade Levels Edited"] == "YES"
+    assert SQLiteScannerResultStore(db_path).latest_run().rows[0]["Entry Area"] == 201.25
+
+
 def test_reports_endpoint_lists_output_files(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     output_dir = Path("output")
@@ -494,3 +606,42 @@ def test_reports_endpoint_lists_output_files(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert response.json()[0]["type"] == "daily_scanner"
+
+
+def test_generate_daily_scanner_report_from_rows(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    response = client.post(
+        "/api/reports/daily-scanner",
+        json={
+            "report_date": "2026-07-05",
+            "rows": [
+                {
+                    "Ticker": "AAPL",
+                    "Triggered Strategies": "Pullback Strategy",
+                    "Composite Score": 90,
+                    "Price": 100,
+                    "Stop 2ATR": 95,
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    report_path = Path(payload["report"]["path"])
+    assert report_path.exists()
+    assert payload["report"]["type"] == "daily_scanner"
+    assert Path(payload["archived_watchlist"]).exists()
+    assert "Daily Scanner Report" in report_path.read_text(encoding="utf-8")
+
+
+def test_generate_daily_scanner_report_rejects_empty_rows(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    response = client.post(
+        "/api/reports/daily-scanner",
+        json={"report_date": "2026-07-05", "rows": []},
+    )
+
+    assert response.status_code == 422

@@ -16,15 +16,42 @@ import {
   LoaderCircle,
   Play,
   RefreshCw,
+  Save,
   Settings,
-  ShieldCheck
+  ShieldCheck,
+  Trash2
 } from 'lucide-react';
-import { Link, Navigate, NavLink, Outlet, Route, Routes, useLocation } from 'react-router-dom';
+import {
+  Link,
+  Navigate,
+  NavLink,
+  Outlet,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate
+} from 'react-router-dom';
 import { useCacheOverview, useStartCacheWarmup } from './api/cache';
+import { useStartBacktest } from './api/backtests';
 import { useJob } from './api/jobs';
-import { useLatestWatchlist, useRefreshWatchlistPrices, useStartScan } from './api/scans';
+import { useStartPortfolioSimulation } from './api/portfolio';
+import { useGenerateDailyScannerReport, useReports } from './api/reports';
+import {
+  useLatestWatchlist,
+  useRefreshWatchlistPrices,
+  useStartScan,
+  useUpdateCandidateTradeLevels
+} from './api/scans';
 import { useStrategies } from './api/strategies';
-import type { CacheWarmupRequest, JobResponse, ScanRequest, WatchlistRow } from './api/types';
+import type {
+  BacktestRequest,
+  CacheWarmupRequest,
+  JobResponse,
+  PortfolioSimulationRequest,
+  ReportMetadata,
+  ScanRequest,
+  WatchlistRow
+} from './api/types';
 import { formatDuration, formatNumber, isJobActive, progressPercent } from './lib/progress';
 import {
   candidateFromWatchlistRow,
@@ -60,11 +87,11 @@ export function App() {
       <Route element={<AppShell />}>
         <Route index element={<DashboardPage />} />
         <Route path="daily-scanner" element={<DailyScannerPage />} />
-        <Route path="candidates" element={<PlaceholderPage title="Candidates" />} />
-        <Route path="backtest" element={<PlaceholderPage title="Backtest" />} />
-        <Route path="portfolio" element={<PlaceholderPage title="Portfolio" />} />
-        <Route path="journal" element={<PlaceholderPage title="Journal" />} />
-        <Route path="reports" element={<PlaceholderPage title="Reports" />} />
+        <Route path="candidates" element={<CandidatesPage />} />
+        <Route path="backtest" element={<BacktestPage />} />
+        <Route path="portfolio" element={<PortfolioPage />} />
+        <Route path="journal" element={<JournalPage />} />
+        <Route path="reports" element={<ReportsPage />} />
         <Route path="cache-warmup" element={<CacheWarmupPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
@@ -191,11 +218,13 @@ function DashboardPage() {
 }
 
 function DailyScannerPage() {
+  const navigate = useNavigate();
   const cacheOverview = useCacheOverview();
   const strategies = useStrategies();
   const latestWatchlist = useLatestWatchlist();
   const startScan = useStartScan();
   const refreshPrices = useRefreshWatchlistPrices();
+  const generateDailyReport = useGenerateDailyScannerReport();
   const [displaySettings] = useScannerDisplaySettings();
   const [jobId, setJobId] = useState<string | null>(null);
   const autoRefreshedJobId = useRef<string | null>(null);
@@ -204,6 +233,7 @@ function DailyScannerPage() {
   const activeJob = isJobActive(job);
   const [selectedStrategy, setSelectedStrategy] = useState('all');
   const [selectedTickers, setSelectedTickers] = useState<Set<string>>(new Set());
+  const [journalMessage, setJournalMessage] = useState<string | null>(null);
   const [candidateSort, setCandidateSort] = useState<CandidateSort>({
     key: 'score',
     direction: 'desc'
@@ -263,6 +293,9 @@ function DailyScannerPage() {
     [candidateSort, candidates]
   );
   const selectedCandidates = sortedCandidates.filter((candidate) => selectedTickers.has(candidate.id));
+  const selectedRows = filteredRows.filter((row) =>
+    selectedTickers.has(String(row.Ticker ?? '').toUpperCase())
+  );
   const selectedCount = selectedCandidates.length;
   const exportScope = selectedCount > 0 ? `${selectedCount} selected` : `${sortedCandidates.length} filtered`;
   const percent = progressPercent(job?.progress);
@@ -351,6 +384,52 @@ function DailyScannerPage() {
   function exportCsv() {
     const rowsToExport = selectedCandidates.length > 0 ? selectedCandidates : sortedCandidates;
     downloadCandidatesCsv(rowsToExport);
+  }
+
+  async function generateReport() {
+    const rowsToReport = selectedRows.length > 0 ? selectedRows : filteredRows;
+
+    await generateDailyReport.mutateAsync({
+      rows: rowsToReport,
+      report_date: new Date().toISOString().slice(0, 10),
+      archive_watchlist: true,
+      suggested_hold_days: 5,
+      reward_risk_multiple: 2
+    });
+  }
+
+  function openCandidateBacktest() {
+    const rowsToBacktest = selectedCandidates.length > 0 ? selectedCandidates : sortedCandidates;
+    const tickers = rowsToBacktest.map((candidate) => candidate.ticker);
+
+    navigate('/backtest', {
+      state: {
+        tickers,
+        strategy: selectedStrategy === 'all' ? undefined : selectedStrategy,
+        sourceLabel: selectedCandidates.length > 0 ? 'selected scanner candidates' : 'filtered scanner candidates'
+      } satisfies ScannerBacktestState
+    });
+  }
+
+  function openCandidate(candidate: DisplayCandidate) {
+    navigate('/candidates', {
+      state: {
+        ticker: candidate.ticker
+      } satisfies CandidateDetailState
+    });
+  }
+
+  function addCandidateToJournal(candidate: DisplayCandidate) {
+    const trade = plannedTradeFromCandidate(candidate);
+    const current = readPlannedTradesFromStorage();
+
+    if (current.some((item) => item.id === trade.id)) {
+      setJournalMessage(`${candidate.ticker} is already in Planned Trades`);
+      return;
+    }
+
+    window.localStorage.setItem('planned-trades', JSON.stringify([trade, ...current]));
+    setJournalMessage(`Added ${candidate.ticker} to Planned Trades`);
   }
 
   function changeSort(key: CandidateSortKey) {
@@ -609,12 +688,24 @@ function DailyScannerPage() {
               <Download size={18} />
               Export CSV
             </button>
-            <button className="secondary-button" disabled={sortedCandidates.length === 0}>
+            <button
+              className="secondary-button"
+              onClick={openCandidateBacktest}
+              disabled={sortedCandidates.length === 0}
+            >
               <BarChart3 size={18} />
               {selectedCount > 0 ? 'Backtest Selected' : 'Backtest Filtered'}
             </button>
-            <button className="secondary-button" disabled={sortedCandidates.length === 0}>
-              <FileText size={18} />
+            <button
+              className="secondary-button"
+              onClick={() => void generateReport()}
+              disabled={sortedCandidates.length === 0 || generateDailyReport.isPending}
+            >
+              {generateDailyReport.isPending ? (
+                <LoaderCircle className="spin" size={18} />
+              ) : (
+                <FileText size={18} />
+              )}
               Generate Daily Report
             </button>
           </div>
@@ -624,6 +715,32 @@ function DailyScannerPage() {
           <div className="alert alert-danger">
             <AlertTriangle size={18} />
             <span>{refreshPrices.error.message}</span>
+          </div>
+        )}
+
+        {generateDailyReport.isError && (
+          <div className="alert alert-danger">
+            <AlertTriangle size={18} />
+            <span>{generateDailyReport.error.message}</span>
+          </div>
+        )}
+
+        {generateDailyReport.data && (
+          <div className="alert alert-success">
+            <CheckCircle2 size={18} />
+            <span>
+              Generated {generateDailyReport.data.report.name}.{' '}
+              <a href={`/api/reports/${generateDailyReport.data.report.id}/download`}>
+                Download report
+              </a>
+            </span>
+          </div>
+        )}
+
+        {journalMessage && (
+          <div className="alert alert-success">
+            <CheckCircle2 size={18} />
+            <span>{journalMessage}</span>
           </div>
         )}
 
@@ -712,8 +829,15 @@ function DailyScannerPage() {
                   <td>{candidate.targetExit}</td>
                   <td>
                     <div className="row-actions">
-                      <button className="link-button">Open</button>
-                      <button className="link-button">Add To Journal</button>
+                      <button className="link-button" onClick={() => openCandidate(candidate)}>
+                        Open
+                      </button>
+                      <button
+                        className="link-button"
+                        onClick={() => addCandidateToJournal(candidate)}
+                      >
+                        Add To Journal
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -730,6 +854,870 @@ function DailyScannerPage() {
         </div>
       </section>
     </div>
+  );
+}
+
+function CandidatesPage() {
+  const location = useLocation();
+  const candidateState = isCandidateDetailState(location.state) ? location.state : null;
+  const latestWatchlist = useLatestWatchlist();
+  const cacheOverview = useCacheOverview();
+  const [displaySettings] = useScannerDisplaySettings();
+  const updateTradeLevels = useUpdateCandidateTradeLevels();
+  const rows = latestWatchlist.data?.rows ?? [];
+  const filteredRows = useMemo(
+    () => rows.filter((row) => rowMatchesDisplaySettings(row, displaySettings)),
+    [displaySettings, rows]
+  );
+  const candidates = useMemo(
+    () =>
+      filteredRows.map((row, index) =>
+        candidateFromWatchlistRow(row, index, cacheOverview.data?.latest_bar_date)
+      ),
+    [cacheOverview.data?.latest_bar_date, filteredRows]
+  );
+  const [selectedTicker, setSelectedTicker] = useState<string | null>(
+    candidateState?.ticker ?? null
+  );
+  const selected = candidates.find((candidate) => candidate.ticker === selectedTicker) ?? candidates[0];
+  const [edits, setEdits] = useState<Record<string, CandidateTradeEdits>>({});
+  const selectedEdits = selected ? edits[selected.ticker] : undefined;
+  const entry = selectedEdits?.entry ?? selected?.entryArea ?? 'n/a';
+  const stop = selectedEdits?.stop ?? selected?.stop ?? 'n/a';
+  const target = selectedEdits?.target ?? selected?.targetExit ?? 'n/a';
+  const chartHeight = selectedEdits?.chartHeight ?? 300;
+
+  function updateSelected(changes: Partial<CandidateTradeEdits>) {
+    if (!selected) {
+      return;
+    }
+
+    setEdits((current) => ({
+      ...current,
+      [selected.ticker]: {
+        ...current[selected.ticker],
+        entry: selected.entryArea,
+        stop: selected.stop,
+        target: selected.targetExit,
+        chartHeight,
+        ...changes
+      }
+    }));
+  }
+
+  function resetSelected() {
+    if (!selected) {
+      return;
+    }
+
+    setEdits((current) => {
+      const next = { ...current };
+      delete next[selected.ticker];
+      return next;
+    });
+  }
+
+  async function saveSelected() {
+    if (!selected) {
+      return;
+    }
+
+    const entryValue = parseDisplayNumber(entry);
+    const stopValue = parseDisplayNumber(stop);
+    const targetValue = parseDisplayNumber(target);
+
+    await updateTradeLevels.mutateAsync({
+      ticker: selected.ticker,
+      request: {
+        run_id: latestWatchlist.data?.run_id ?? null,
+        entry_area: entryValue,
+        suggested_stop: stopValue,
+        target_exit: targetValue,
+        reset: false
+      }
+    });
+    resetSelected();
+  }
+
+  async function resetPersistedSelected() {
+    if (!selected) {
+      return;
+    }
+
+    await updateTradeLevels.mutateAsync({
+      ticker: selected.ticker,
+      request: {
+        run_id: latestWatchlist.data?.run_id ?? null,
+        reset: true
+      }
+    });
+    resetSelected();
+  }
+
+  return (
+    <div className="content-grid candidate-layout">
+      <section className="panel" aria-labelledby="candidate-list-title">
+        <div className="panel-header">
+          <div>
+            <h2 id="candidate-list-title">Candidates</h2>
+            <p>
+              {candidates.length} scanner-filtered candidates from {rows.length} saved rows
+            </p>
+          </div>
+        </div>
+
+        <div className="table-wrap compact-table">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Ticker</th>
+                <th>Strategy</th>
+                <th>Score</th>
+                <th>Price</th>
+                <th>Entry</th>
+                <th>Stop</th>
+              </tr>
+            </thead>
+            <tbody>
+              {candidates.map((candidate) => (
+                <tr
+                  key={candidate.ticker}
+                  className={candidate.ticker === selected?.ticker ? 'selected-row' : ''}
+                  onClick={() => setSelectedTicker(candidate.ticker)}
+                >
+                  <td className="ticker-cell">{candidate.ticker}</td>
+                  <td>{candidate.strategy}</td>
+                  <td>{candidate.score}</td>
+                  <td>{candidate.currentPrice}</td>
+                  <td>{candidate.entryArea}</td>
+                  <td>{candidate.stop}</td>
+                </tr>
+              ))}
+              {candidates.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="empty-cell">
+                    No scanner candidates available.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel" aria-labelledby="candidate-detail-title">
+        <div className="panel-header">
+          <div>
+            <h2 id="candidate-detail-title">{selected?.ticker ?? 'Candidate Detail'}</h2>
+            <p>{selected?.strategy ?? 'Select a candidate'}</p>
+          </div>
+        </div>
+
+        {selected ? (
+          <div className="detail-stack">
+            <div className="candidate-chart" style={{ minHeight: chartHeight }}>
+              <div className="chart-gridline top" />
+              <div className="chart-gridline middle" />
+              <div className="chart-gridline bottom" />
+              <TradeLevel label="Target" value={target} top="22%" />
+              <TradeLevel label="Entry" value={entry} top="48%" />
+              <TradeLevel label="Stop" value={stop} top="70%" danger />
+            </div>
+            <label>
+              Chart Height
+              <input
+                type="range"
+                min="240"
+                max="520"
+                value={chartHeight}
+                onChange={(event) => updateSelected({ chartHeight: Number(event.target.value) })}
+              />
+            </label>
+
+            <div className="checklist-panel">
+              <div className="panel-header compact-header">
+                <div>
+                  <h2>Manual Trade Checklist</h2>
+                  <p>{selected.priceSource} · {selected.priceAsOf}</p>
+                </div>
+                <button
+                  className="secondary-button"
+                  onClick={() => void resetPersistedSelected()}
+                  disabled={updateTradeLevels.isPending}
+                >
+                  <RefreshCw size={16} />
+                  Reset to suggested
+                </button>
+              </div>
+              <div className="form-grid">
+                <label>
+                  Entry Area
+                  <input
+                    value={entry}
+                    onChange={(event) => updateSelected({ entry: event.target.value })}
+                  />
+                </label>
+                <label>
+                  Suggested Stop
+                  <input
+                    value={stop}
+                    onChange={(event) => updateSelected({ stop: event.target.value })}
+                  />
+                </label>
+                <label>
+                  Target/Exit
+                  <input
+                    value={target}
+                    onChange={(event) => updateSelected({ target: event.target.value })}
+                  />
+                </label>
+                <label>
+                  Current Price
+                  <input value={selected.currentPrice} readOnly />
+                </label>
+              </div>
+              <div className="button-row">
+                <button
+                  className="primary-button"
+                  onClick={() => void saveSelected()}
+                  disabled={updateTradeLevels.isPending}
+                >
+                  {updateTradeLevels.isPending ? (
+                    <LoaderCircle className="spin" size={18} />
+                  ) : (
+                    <Save size={18} />
+                  )}
+                  Save Levels
+                </button>
+              </div>
+              {updateTradeLevels.isError && (
+                <AlertMessage tone="danger" message={updateTradeLevels.error.message} />
+              )}
+            </div>
+          </div>
+        ) : (
+          <p className="muted-text">Run the daily scanner to create candidates.</p>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function BacktestPage() {
+  const location = useLocation();
+  const candidateState = isScannerBacktestState(location.state) ? location.state : null;
+  const latestWatchlist = useLatestWatchlist();
+  const cacheOverview = useCacheOverview();
+  const [displaySettings] = useScannerDisplaySettings();
+  const strategies = useStrategies();
+  const startBacktest = useStartBacktest();
+  const [jobId, setJobId] = useState<string | null>(null);
+  const job = useJob(jobId).data;
+  const activeJob = isJobActive(job);
+  const [tickerList, setTickerList] = useState(() => candidateState?.tickers.join(', ') ?? '');
+  const [submittedBacktestRun, setSubmittedBacktestRun] = useState<BacktestSubmittedRun | null>(null);
+  const [runningBacktestKey, setRunningBacktestKey] = useState<string | null>(null);
+  const [backtestResults, setBacktestResults] = useState<Record<string, BacktestDisplayResult>>({});
+  const [form, setForm] = useState<BacktestRequest>({
+    ticker: '',
+    universe: null,
+    tickers: candidateState?.tickers ?? null,
+    strategy: candidateState?.strategy ?? 'pullback',
+    history_period: '5y',
+    hold_days: 5,
+    min_history_days: 252,
+    allow_overlapping_trades: true,
+    entry_reset_policy: 'none'
+  });
+  const parsedTickers = parseTickerList(tickerList);
+  const currentBacktestKey = backtestResultKeyForRequest({
+    ...form,
+    tickers: parsedTickers.length > 0 ? parsedTickers : null,
+    ticker:
+      parsedTickers.length === 0 && form.ticker?.trim()
+        ? form.ticker.trim().toUpperCase()
+        : null,
+    universe: parsedTickers.length === 0 && !form.ticker?.trim() ? form.universe : null
+  });
+  const recalculatingCurrentResult =
+    runningBacktestKey !== null && runningBacktestKey === currentBacktestKey;
+  const visibleBacktestResult = currentBacktestKey && !recalculatingCurrentResult
+    ? backtestResults[currentBacktestKey]
+    : undefined;
+  const stats: Record<string, number> = visibleBacktestResult?.statistics ?? {};
+  const trades = visibleBacktestResult?.trades ?? [];
+  const filteredWatchlistRows = useMemo(
+    () =>
+      (latestWatchlist.data?.rows ?? []).filter((row) =>
+        rowMatchesDisplaySettings(row, displaySettings)
+      ),
+    [displaySettings, latestWatchlist.data?.rows]
+  );
+  const backtestCandidates = useMemo(
+    () =>
+      filteredWatchlistRows
+        .map((row, index) =>
+          candidateFromWatchlistRow(row, index, cacheOverview.data?.latest_bar_date)
+        )
+        .sort((left, right) => left.ticker.localeCompare(right.ticker)),
+    [cacheOverview.data?.latest_bar_date, filteredWatchlistRows]
+  );
+  const selectedCandidate = backtestCandidates.find(
+    (candidate) => candidate.ticker === form.ticker
+  );
+  const selectedCandidateIndex = backtestCandidates.findIndex(
+    (candidate) => candidate.ticker === form.ticker
+  );
+
+  useEffect(() => {
+    if (
+      candidateState?.tickers.length ||
+      parsedTickers.length > 0 ||
+      backtestCandidates.length === 0 ||
+      selectedCandidate
+    ) {
+      return;
+    }
+
+    const firstCandidate = backtestCandidates[0];
+    setForm((current) => ({
+      ...current,
+      ticker: firstCandidate.ticker,
+      universe: null,
+      strategy: strategyKeyForCandidate(firstCandidate, strategies.data) ?? current.strategy
+    }));
+  }, [
+    backtestCandidates,
+    candidateState?.tickers.length,
+    parsedTickers.length,
+    selectedCandidate,
+    strategies.data
+  ]);
+
+  useEffect(() => {
+    if (!submittedBacktestRun || job?.job_id !== submittedBacktestRun.jobId) {
+      return;
+    }
+
+    if (job?.status === 'failed' || job?.status === 'stopped') {
+      setRunningBacktestKey((current) =>
+        current === submittedBacktestRun.resultKey ? null : current
+      );
+      return;
+    }
+
+    if (job?.status !== 'complete' || !job.result) {
+      return;
+    }
+
+    const result = job.result as Record<string, unknown>;
+    const statistics = (result.statistics ?? {}) as Record<string, number>;
+    const resultTrades = Array.isArray(result.trades)
+      ? (result.trades as Record<string, unknown>[])
+      : [];
+
+    setBacktestResults((current) => ({
+      ...current,
+      [submittedBacktestRun.resultKey]: {
+        statistics,
+        trades: resultTrades
+      }
+    }));
+    setRunningBacktestKey((current) =>
+      current === submittedBacktestRun.resultKey ? null : current
+    );
+  }, [job?.job_id, job?.result, job?.status, submittedBacktestRun]);
+
+  async function submitBacktest() {
+    const tickers = parseTickerList(tickerList);
+    const request: BacktestRequest = {
+      ...form,
+      tickers: tickers.length > 0 ? tickers : null,
+      ticker:
+        tickers.length === 0 && form.ticker?.trim()
+          ? form.ticker.trim().toUpperCase()
+          : null,
+      universe: tickers.length === 0 && !form.ticker?.trim() ? form.universe : null
+    };
+    const resultKey = backtestResultKeyForRequest(request);
+
+    if (!resultKey) {
+      return;
+    }
+
+    setRunningBacktestKey(resultKey);
+    const response = await startBacktest.mutateAsync(request);
+    setSubmittedBacktestRun({ jobId: response.job_id, resultKey });
+    setJobId(response.job_id);
+  }
+
+  function clearTickerList() {
+    setTickerList('');
+    setForm((current) => ({
+      ...current,
+      tickers: null,
+      ticker: backtestCandidates[0]?.ticker ?? current.ticker ?? ''
+    }));
+  }
+
+  function selectCandidate(ticker: string) {
+    const candidate = backtestCandidates.find((item) => item.ticker === ticker);
+
+    setTickerList('');
+    setForm((current) => ({
+      ...current,
+      ticker,
+      universe: null,
+      tickers: null,
+      strategy: candidate
+        ? strategyKeyForCandidate(candidate, strategies.data) ?? current.strategy
+        : current.strategy
+    }));
+  }
+
+  function selectAdjacentCandidate(direction: -1 | 1) {
+    if (backtestCandidates.length === 0) {
+      return;
+    }
+
+    const currentIndex = selectedCandidateIndex >= 0 ? selectedCandidateIndex : 0;
+    const nextIndex =
+      (currentIndex + direction + backtestCandidates.length) % backtestCandidates.length;
+    selectCandidate(backtestCandidates[nextIndex].ticker);
+  }
+
+  return (
+    <div className="page-stack">
+      <section className="panel" aria-labelledby="backtest-form-title">
+        <div className="panel-header">
+          <div>
+            <h2 id="backtest-form-title">Run Backtest</h2>
+            <p>
+              Standard historical strategy test using {backtestCandidates.length} scanner-filtered candidates
+            </p>
+          </div>
+          <div className="button-row inline-actions">
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => selectAdjacentCandidate(-1)}
+              disabled={backtestCandidates.length <= 1}
+            >
+              Previous
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => selectAdjacentCandidate(1)}
+              disabled={backtestCandidates.length <= 1}
+            >
+              Next
+            </button>
+          </div>
+        </div>
+        <div className="scanner-control-grid">
+          <label className="wide-field">
+            Ticker List
+            <textarea
+              value={tickerList}
+              onChange={(event) => setTickerList(event.target.value)}
+              placeholder="Optional: AAPL, MSFT, NVDA"
+              rows={3}
+            />
+          </label>
+          <label>
+            Candidate
+            <select
+              value={form.ticker ?? ''}
+              onChange={(event) => selectCandidate(event.target.value)}
+              disabled={backtestCandidates.length === 0}
+            >
+              {!form.ticker && backtestCandidates.length > 0 && (
+                <option value="">Select candidate</option>
+              )}
+              {backtestCandidates.length === 0 ? (
+                <option value="">No scanner candidates</option>
+              ) : (
+                backtestCandidates.map((candidate) => (
+                  <option key={candidate.ticker} value={candidate.ticker}>
+                    {candidate.ticker}
+                  </option>
+                ))
+              )}
+            </select>
+          </label>
+          <label>
+            Universe
+            <select
+              value={form.universe ?? ''}
+              onChange={(event) => setForm({ ...form, universe: event.target.value || null, ticker: event.target.value ? '' : form.ticker })}
+              disabled={parsedTickers.length > 0}
+            >
+              <option value="">Single ticker</option>
+              {universes.map((universe) => (
+                <option key={universe} value={universe}>{universe.toUpperCase()}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Strategy
+            <select value={form.strategy} onChange={(event) => setForm({ ...form, strategy: event.target.value })}>
+              {(strategies.data ?? []).filter((strategy) => strategy.category === 'entry').map((strategy) => (
+                <option key={strategy.key} value={strategy.key}>{strategy.display_name}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            History
+            <select value={form.history_period} onChange={(event) => setForm({ ...form, history_period: event.target.value })}>
+              {historyPeriods.map((period) => <option key={period} value={period}>{period}</option>)}
+            </select>
+          </label>
+          <label>
+            Hold Days
+            <input type="number" min="1" value={form.hold_days} onChange={(event) => setForm({ ...form, hold_days: Number(event.target.value) })} />
+          </label>
+          <label>
+            Min History Days
+            <input type="number" min="1" value={form.min_history_days} onChange={(event) => setForm({ ...form, min_history_days: Number(event.target.value) })} />
+          </label>
+          <label className="toggle-row">
+            Allow overlap
+            <input type="checkbox" checked={form.allow_overlapping_trades} onChange={(event) => setForm({ ...form, allow_overlapping_trades: event.target.checked })} />
+          </label>
+          <label>
+            Reset Policy
+            <select value={form.entry_reset_policy} onChange={(event) => setForm({ ...form, entry_reset_policy: event.target.value })}>
+              <option value="none">None</option>
+              <option value="signal-off">Signal off</option>
+            </select>
+          </label>
+        </div>
+        <div className="button-row">
+          <button className="primary-button" onClick={() => void submitBacktest()} disabled={activeJob || startBacktest.isPending}>
+            {activeJob ? <LoaderCircle className="spin" size={18} /> : <Play size={18} />}
+            Run Backtest
+          </button>
+          {parsedTickers.length > 0 && (
+            <button className="secondary-button" onClick={clearTickerList} disabled={activeJob}>
+              Clear Candidate List
+            </button>
+          )}
+        </div>
+        {parsedTickers.length > 0 && (
+          <div className="selection-strip">
+            <span>
+              {parsedTickers.length} tickers from {candidateState?.sourceLabel ?? 'ticker list'}
+            </span>
+            <span>{parsedTickers.slice(0, 8).join(', ')}{parsedTickers.length > 8 ? ', ...' : ''}</span>
+          </div>
+        )}
+        {selectedCandidate && parsedTickers.length === 0 && (
+          <div className="candidate-context">
+            <Detail label="Selected Candidate" value={selectedCandidate.ticker} />
+            <Detail label="Scanner Strategy" value={selectedCandidate.strategy} />
+            <Detail label="Current Price" value={selectedCandidate.currentPrice} />
+            <Detail label="Entry" value={selectedCandidate.entryArea} />
+            <Detail label="Stop" value={selectedCandidate.stop} />
+            <Detail label="Target/Exit" value={selectedCandidate.targetExit} />
+            <Detail label="Score" value={selectedCandidate.score} />
+            <Detail label="Price As Of" value={selectedCandidate.priceAsOf} />
+          </div>
+        )}
+        {startBacktest.isError && <AlertMessage tone="danger" message={startBacktest.error.message} />}
+      </section>
+
+      <section className="metric-grid" aria-label="Backtest summary">
+        <MetricCard icon={<ListChecks />} label="Trades" value={formatNumber(stats.total_trades)} tone="neutral" />
+        <MetricCard icon={<CheckCircle2 />} label="Win Rate" value={formatPercent(stats.win_rate)} tone="green" />
+        <MetricCard icon={<BarChart3 />} label="Average Return" value={formatPercent(stats.average_return)} tone="blue" />
+        <MetricCard icon={<ShieldCheck />} label="Profit Factor" value={formatNumber(stats.profit_factor)} tone="amber" />
+      </section>
+
+      {job && <JobProgressPanel job={job} percent={progressPercent(job.progress)} />}
+
+      <section className="panel" aria-labelledby="backtest-trades-title">
+        <div className="panel-header">
+          <div>
+            <h2 id="backtest-trades-title">Trades</h2>
+            <p>
+              {visibleBacktestResult
+                ? `${trades.length} generated trades`
+                : 'No backtest result for the current selection'}
+            </p>
+          </div>
+        </div>
+        <SimpleRecordTable
+          rows={trades.slice(0, 50)}
+          emptyMessage="Run a backtest for the selected candidate to view trades."
+        />
+      </section>
+    </div>
+  );
+}
+
+function PortfolioPage() {
+  const startSimulation = useStartPortfolioSimulation();
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [positionsPage, setPositionsPage] = useState(1);
+  const job = useJob(jobId).data;
+  const activeJob = isJobActive(job);
+  const [form, setForm] = useState<PortfolioSimulationRequest>({
+    trades_csv: 'output/sp500_pullback_trades.csv',
+    initial_cash: 100000,
+    max_open_positions: 10,
+    max_positions_per_ticker: null,
+    position_size_percent: 0.1,
+    commission_per_trade: 0,
+    commission_per_share: 0,
+    slippage_percent: 0,
+    stop_loss_percent: null,
+    trailing_stop_percent: null
+  });
+  const summary = (job?.result?.summary ?? {}) as Record<string, number>;
+  const equityCurve = Array.isArray(job?.result?.equity_curve)
+    ? (job.result?.equity_curve as Record<string, unknown>[])
+    : [];
+  const positions = Array.isArray(job?.result?.positions)
+    ? (job.result?.positions as Record<string, unknown>[])
+    : [];
+
+  async function submitSimulation() {
+    setPositionsPage(1);
+    const response = await startSimulation.mutateAsync(form);
+    setJobId(response.job_id);
+  }
+
+  return (
+    <div className="page-stack">
+      <section className="panel" aria-labelledby="portfolio-form-title">
+        <div className="panel-header">
+          <div>
+            <h2 id="portfolio-form-title">Portfolio Simulation</h2>
+            <p>Model sizing, cash, exposure, slippage, and stops from a trade CSV</p>
+          </div>
+        </div>
+        <div className="scanner-control-grid">
+          <label className="wide-field">
+            Trade CSV
+            <input value={form.trades_csv} onChange={(event) => setForm({ ...form, trades_csv: event.target.value })} />
+          </label>
+          <label>
+            Initial Cash
+            <input type="number" min="0" value={form.initial_cash} onChange={(event) => setForm({ ...form, initial_cash: Number(event.target.value) })} />
+          </label>
+          <label>
+            Max Positions
+            <input type="number" min="1" value={form.max_open_positions} onChange={(event) => setForm({ ...form, max_open_positions: Number(event.target.value) })} />
+          </label>
+          <label>
+            Position Size
+            <input type="number" min="0" step="0.01" value={form.position_size_percent} onChange={(event) => setForm({ ...form, position_size_percent: Number(event.target.value) })} />
+          </label>
+          <label>
+            Commission / Trade
+            <input type="number" min="0" step="0.01" value={form.commission_per_trade} onChange={(event) => setForm({ ...form, commission_per_trade: Number(event.target.value) })} />
+          </label>
+          <label>
+            Slippage %
+            <input type="number" min="0" step="0.01" value={form.slippage_percent} onChange={(event) => setForm({ ...form, slippage_percent: Number(event.target.value) })} />
+          </label>
+          <label>
+            Stop Loss %
+            <input type="number" min="0" step="0.1" value={form.stop_loss_percent ?? ''} onChange={(event) => setForm({ ...form, stop_loss_percent: inputNumberOrNull(event.target.value) })} />
+          </label>
+          <label>
+            Trailing Stop %
+            <input type="number" min="0" step="0.1" value={form.trailing_stop_percent ?? ''} onChange={(event) => setForm({ ...form, trailing_stop_percent: inputNumberOrNull(event.target.value) })} />
+          </label>
+        </div>
+        <div className="button-row">
+          <button className="primary-button" onClick={() => void submitSimulation()} disabled={activeJob || startSimulation.isPending}>
+            {activeJob ? <LoaderCircle className="spin" size={18} /> : <Play size={18} />}
+            Run Simulation
+          </button>
+        </div>
+        {startSimulation.isError && <AlertMessage tone="danger" message={startSimulation.error.message} />}
+      </section>
+
+      {job && <JobProgressPanel job={job} percent={progressPercent(job.progress)} />}
+
+      <section className="metric-grid" aria-label="Portfolio summary">
+        <MetricCard icon={<BarChart3 />} label="Total Return" value={formatPercent(summary['Total Return'])} tone="blue" />
+        <MetricCard icon={<Clock3 />} label="CAGR" value={formatPercent(summary.CAGR)} tone="green" />
+        <MetricCard icon={<ShieldCheck />} label="Max Drawdown" value={formatPercent(summary['Max Drawdown'])} tone="amber" />
+        <MetricCard icon={<ListChecks />} label="Positions" value={formatNumber(summary.Positions)} tone="neutral" />
+      </section>
+
+      <div className="content-grid">
+        <section className="panel" aria-labelledby="equity-title">
+          <div className="panel-header">
+            <div>
+              <h2 id="equity-title">Equity Curve</h2>
+              <p>{equityCurve.length} points</p>
+            </div>
+          </div>
+          <div className="mini-chart">
+            {equityCurve.slice(-40).map((point, index) => (
+              <span
+                key={index}
+                style={{ height: `${equityBarHeight(point.Equity, equityCurve)}%` }}
+                title={`${point.Date ?? ''}: ${point.Equity ?? ''}`}
+              />
+            ))}
+          </div>
+        </section>
+        <section className="panel" aria-labelledby="positions-title">
+          <div className="panel-header">
+            <div>
+              <h2 id="positions-title">Positions</h2>
+              <p>{positions.length} simulated positions; showing 50 per page</p>
+            </div>
+          </div>
+          <SimpleRecordTable
+            rows={positions}
+            emptyMessage="Run a simulation to view positions."
+            page={positionsPage}
+            pageSize={50}
+            onPageChange={setPositionsPage}
+          />
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function JournalPage() {
+  const latestWatchlist = useLatestWatchlist();
+  const candidates = useMemo(
+    () =>
+      (latestWatchlist.data?.rows ?? []).map((row, index) =>
+        candidateFromWatchlistRow(row, index)
+      ),
+    [latestWatchlist.data?.rows]
+  );
+  const [plannedTrades, setPlannedTrades] = useLocalStorage<PlannedTrade[]>('planned-trades', []);
+
+  function addCandidate(candidate: DisplayCandidate) {
+    setPlannedTrades((current) => {
+      if (current.some((trade) => trade.id === candidate.ticker)) {
+        return current;
+      }
+
+      return [plannedTradeFromCandidate(candidate), ...current];
+    });
+  }
+
+  function deleteTrade(id: string) {
+    setPlannedTrades((current) => current.filter((trade) => trade.id !== id));
+  }
+
+  return (
+    <div className="page-stack">
+      <section className="summary-grid" aria-label="Journal summary">
+        <MetricCard icon={<ListChecks />} label="Planned Trades" value={formatNumber(plannedTrades.length)} tone="blue" />
+        <MetricCard icon={<BriefcaseBusiness />} label="Open Trades" value="Broker sync pending" tone="neutral" />
+        <MetricCard icon={<CheckCircle2 />} label="Closed Trades" value="Broker sync pending" tone="neutral" />
+        <MetricCard icon={<BarChart3 />} label="Win/Loss" value="n/a" tone="amber" />
+      </section>
+
+      <div className="content-grid">
+        <section className="panel" aria-labelledby="planned-trades-title">
+          <div className="panel-header">
+            <div>
+              <h2 id="planned-trades-title">Planned Trades</h2>
+              <p>Editable trades created from scanner candidates</p>
+            </div>
+          </div>
+          <div className="table-wrap compact-table">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Ticker</th>
+                  <th>Strategy</th>
+                  <th>Planned</th>
+                  <th>Entry</th>
+                  <th>Stop</th>
+                  <th>Target</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {plannedTrades.map((trade) => (
+                  <tr key={trade.id}>
+                    <td className="ticker-cell">{trade.ticker}</td>
+                    <td>{trade.strategy}</td>
+                    <td>{trade.plannedAt}</td>
+                    <td>{trade.entry}</td>
+                    <td>{trade.stop}</td>
+                    <td>{trade.target}</td>
+                    <td>
+                      <button className="link-button danger-link" onClick={() => deleteTrade(trade.id)}>
+                        <Trash2 size={15} />
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {plannedTrades.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="empty-cell">No planned trades yet.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="panel" aria-labelledby="add-from-scanner-title">
+          <div className="panel-header">
+            <div>
+              <h2 id="add-from-scanner-title">Add From Scanner</h2>
+              <p>Creates planned trades that can later be reconciled with broker fills</p>
+            </div>
+          </div>
+          <div className="candidate-add-list">
+            {candidates.slice(0, 12).map((candidate) => (
+              <button key={candidate.ticker} className="candidate-add-row" onClick={() => addCandidate(candidate)}>
+                <span>
+                  <strong>{candidate.ticker}</strong>
+                  <small>{candidate.strategy}</small>
+                </span>
+                <Save size={16} />
+              </button>
+            ))}
+            {candidates.length === 0 && <p className="muted-text">Run the scanner to add planned trades.</p>}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function ReportsPage() {
+  const reports = useReports();
+  const [typeFilter, setTypeFilter] = useState('all');
+  const filteredReports = (reports.data ?? []).filter((report) => typeFilter === 'all' || report.type === typeFilter);
+  const reportTypes = Array.from(new Set((reports.data ?? []).map((report) => report.type))).sort();
+
+  return (
+    <section className="panel" aria-labelledby="reports-title">
+      <div className="panel-header">
+        <div>
+          <h2 id="reports-title">Reports</h2>
+          <p>{filteredReports.length} generated files</p>
+        </div>
+        <select className="compact-select" value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
+          <option value="all">All types</option>
+          {reportTypes.map((type) => (
+            <option key={type} value={type}>{type.replaceAll('_', ' ')}</option>
+          ))}
+        </select>
+      </div>
+
+      {reports.isError && <AlertMessage tone="danger" message={reports.error.message} />}
+      <ReportsTable reports={filteredReports} />
+    </section>
   );
 }
 
@@ -928,8 +1916,175 @@ function SortableHeader({
   );
 }
 
+function TradeLevel({
+  label,
+  value,
+  top,
+  danger = false
+}: {
+  label: string;
+  value: string;
+  top: string;
+  danger?: boolean;
+}) {
+  return (
+    <div className={danger ? 'trade-level danger' : 'trade-level'} style={{ top }}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function AlertMessage({ tone, message }: { tone: 'danger' | 'warning'; message: string }) {
+  return (
+    <div className={tone === 'danger' ? 'alert alert-danger' : 'alert alert-warning'}>
+      <AlertTriangle size={18} />
+      <span>{message}</span>
+    </div>
+  );
+}
+
+function SimpleRecordTable({
+  rows,
+  emptyMessage,
+  page,
+  pageSize,
+  onPageChange,
+}: {
+  rows: Record<string, unknown>[];
+  emptyMessage: string;
+  page?: number;
+  pageSize?: number;
+  onPageChange?: (page: number) => void;
+}) {
+  const columns = rows.length > 0 ? Object.keys(rows[0]).slice(0, 8) : [];
+  const resolvedPageSize = pageSize ?? rows.length;
+  const totalPages = Math.max(1, Math.ceil(rows.length / resolvedPageSize));
+  const currentPage = Math.min(Math.max(page ?? 1, 1), totalPages);
+  const startIndex = (currentPage - 1) * resolvedPageSize;
+  const visibleRows = rows.slice(startIndex, startIndex + resolvedPageSize);
+
+  return (
+    <>
+      <div className="table-wrap compact-table">
+        <table className="data-table">
+          <thead>
+            <tr>
+              {columns.map((column) => (
+                <th key={column}>{column}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {visibleRows.map((row, rowIndex) => (
+              <tr key={startIndex + rowIndex}>
+                {columns.map((column) => (
+                  <td key={column}>{formatUnknown(row[column])}</td>
+                ))}
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr>
+                <td colSpan={Math.max(columns.length, 1)} className="empty-cell">
+                  {emptyMessage}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {pageSize && rows.length > pageSize && onPageChange && (
+        <div className="pagination-row">
+          <span>
+            Showing {startIndex + 1}-{Math.min(startIndex + pageSize, rows.length)} of{' '}
+            {rows.length}
+          </span>
+          <div className="button-row inline-actions">
+            <button
+              className="secondary-button"
+              onClick={() => onPageChange(currentPage - 1)}
+              disabled={currentPage <= 1}
+            >
+              Previous
+            </button>
+            <span className="page-indicator">
+              Page {currentPage} of {totalPages}
+            </span>
+            <button
+              className="secondary-button"
+              onClick={() => onPageChange(currentPage + 1)}
+              disabled={currentPage >= totalPages}
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function ReportsTable({ reports }: { reports: ReportMetadata[] }) {
+  return (
+    <div className="table-wrap">
+      <table className="data-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Modified</th>
+            <th>Size</th>
+            <th>Path</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {reports.map((report) => (
+            <tr key={report.id}>
+              <td className="ticker-cell">{report.name}</td>
+              <td>{report.type.replaceAll('_', ' ')}</td>
+              <td>{formatDateTime(report.modified_at)}</td>
+              <td>{formatFileSize(report.size_bytes)}</td>
+              <td>{report.path}</td>
+              <td>
+                <a className="link-button" href={`/api/reports/${report.id}/download`}>
+                  Download
+                </a>
+              </td>
+            </tr>
+          ))}
+          {reports.length === 0 && (
+            <tr>
+              <td colSpan={6} className="empty-cell">No generated reports found.</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function SettingsPage() {
-  const [settings, setSettings] = useScannerDisplaySettings();
+  const cacheOverview = useCacheOverview();
+  const strategies = useStrategies();
+  const [displaySettings, setDisplaySettings] = useScannerDisplaySettings();
+  const [recommendationSettings, setRecommendationSettings] = useLocalStorage<RecommendationSettings>(
+    'swing-scanner.recommendation-settings',
+    defaultRecommendationSettings
+  );
+  const [cacheSettings, setCacheSettings] = useLocalStorage<CacheSettings>(
+    'swing-scanner.cache-settings',
+    defaultCacheSettings
+  );
+  const [marketDataSettings, setMarketDataSettings] = useLocalStorage<MarketDataSettings>(
+    'swing-scanner.market-data-settings',
+    defaultMarketDataSettings
+  );
+  const [appearanceSettings, setAppearanceSettings] = useLocalStorage<AppearanceSettings>(
+    'swing-scanner.appearance-settings',
+    defaultAppearanceSettings
+  );
+  const cache = cacheOverview.data;
 
   return (
     <div className="settings-grid">
@@ -949,10 +2104,10 @@ function SettingsPage() {
                 type="number"
                 min="0"
                 step="0.1"
-                value={settings.minStopDistancePercent}
+                value={displaySettings.minStopDistancePercent}
                 onChange={(event) =>
-                  setSettings({
-                    ...settings,
+                  setDisplaySettings({
+                    ...displaySettings,
                     minStopDistancePercent: inputNumberOrNull(event.target.value) ?? 0
                   })
                 }
@@ -968,16 +2123,435 @@ function SettingsPage() {
                 type="number"
                 min="0"
                 step="1"
-                value={settings.minFiveDayRange}
+                value={displaySettings.minFiveDayRange}
                 onChange={(event) =>
-                  setSettings({
-                    ...settings,
+                  setDisplaySettings({
+                    ...displaySettings,
                     minFiveDayRange: inputNumberOrNull(event.target.value) ?? 0
                   })
                 }
               />
               <span>integer</span>
             </div>
+          </label>
+        </div>
+      </section>
+
+      <section className="panel" aria-labelledby="recommendation-settings-title">
+        <div className="panel-header">
+          <div>
+            <h2 id="recommendation-settings-title">Recommendation Defaults</h2>
+            <p>Used for future checklist values, exports, and generated reports</p>
+          </div>
+        </div>
+
+        <div className="settings-form two-column-settings">
+          <label>
+            Reward/Risk Multiple
+            <div className="input-with-suffix">
+              <input
+                type="number"
+                min="0.1"
+                step="0.1"
+                value={recommendationSettings.rewardRiskMultiple}
+                onChange={(event) =>
+                  setRecommendationSettings({
+                    ...recommendationSettings,
+                    rewardRiskMultiple: inputNumberOrNull(event.target.value) ?? 2
+                  })
+                }
+              />
+              <span>x</span>
+            </div>
+          </label>
+          <label>
+            Suggested Hold
+            <div className="input-with-suffix">
+              <input
+                type="number"
+                min="1"
+                step="1"
+                value={recommendationSettings.suggestedHoldDays}
+                onChange={(event) =>
+                  setRecommendationSettings({
+                    ...recommendationSettings,
+                    suggestedHoldDays: inputNumberOrNull(event.target.value) ?? 5
+                  })
+                }
+              />
+              <span>days</span>
+            </div>
+          </label>
+          <label>
+            Stop Method
+            <select
+              value={recommendationSettings.stopMethod}
+              onChange={(event) =>
+                setRecommendationSettings({
+                  ...recommendationSettings,
+                  stopMethod: event.target.value
+                })
+              }
+            >
+              <option value="2atr">2 * ATR</option>
+              <option value="swing-low">Recent swing low</option>
+              <option value="percent">Fixed percent</option>
+            </select>
+          </label>
+          <label>
+            ATR Period
+            <input
+              type="number"
+              min="1"
+              value={recommendationSettings.atrPeriod}
+              onChange={(event) =>
+                setRecommendationSettings({
+                  ...recommendationSettings,
+                  atrPeriod: inputNumberOrNull(event.target.value) ?? 14
+                })
+              }
+            />
+          </label>
+          <label>
+            Risk Per Trade
+            <div className="input-with-suffix">
+              <input
+                type="number"
+                min="0"
+                step="0.1"
+                value={recommendationSettings.riskPerTradePercent}
+                onChange={(event) =>
+                  setRecommendationSettings({
+                    ...recommendationSettings,
+                    riskPerTradePercent: inputNumberOrNull(event.target.value) ?? 1
+                  })
+                }
+              />
+              <span>%</span>
+            </div>
+          </label>
+          <label>
+            CSV Export Scope
+            <select
+              value={recommendationSettings.defaultExportScope}
+              onChange={(event) =>
+                setRecommendationSettings({
+                  ...recommendationSettings,
+                  defaultExportScope: event.target.value
+                })
+              }
+            >
+              <option value="filtered">Filtered rows</option>
+              <option value="selected">Selected rows first</option>
+              <option value="all">All scanner rows</option>
+            </select>
+          </label>
+          <label className="toggle-row wide-field">
+            Include adjusted checklist values in exports and reports
+            <input
+              type="checkbox"
+              checked={recommendationSettings.includeAdjustedChecklistValues}
+              onChange={(event) =>
+                setRecommendationSettings({
+                  ...recommendationSettings,
+                  includeAdjustedChecklistValues: event.target.checked
+                })
+              }
+            />
+          </label>
+        </div>
+      </section>
+
+      <section className="panel" aria-labelledby="cache-settings-title">
+        <div className="panel-header">
+          <div>
+            <h2 id="cache-settings-title">Cache</h2>
+            <p>Local market data health and default refresh behavior</p>
+          </div>
+          <Link className="secondary-button" to="/cache-warmup">
+            <Database size={18} />
+            Warm Cache
+          </Link>
+        </div>
+
+        <div className="detail-grid settings-detail-grid">
+          <Detail label="Cached Tickers" value={formatNumber(cache?.cached_tickers)} />
+          <Detail label="Cached Bars" value={formatNumber(cache?.cached_bars)} />
+          <Detail label="Latest Bar" value={cache?.latest_bar_date ?? 'n/a'} />
+          <Detail
+            label="Refresh Age"
+            value={
+              cache?.days_since_refresh === 0
+                ? 'Today'
+                : `${cache?.days_since_refresh ?? 'n/a'} days`
+            }
+          />
+        </div>
+
+        <div className="settings-form two-column-settings">
+          <label>
+            History Window
+            <select
+              value={cacheSettings.historyPeriod}
+              onChange={(event) =>
+                setCacheSettings({ ...cacheSettings, historyPeriod: event.target.value })
+              }
+            >
+              {historyPeriods.map((period) => (
+                <option key={period} value={period}>
+                  {period}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Stale After
+            <div className="input-with-suffix">
+              <input
+                type="number"
+                min="0"
+                value={cacheSettings.staleAfterDays}
+                onChange={(event) =>
+                  setCacheSettings({
+                    ...cacheSettings,
+                    staleAfterDays: inputNumberOrNull(event.target.value) ?? 1
+                  })
+                }
+              />
+              <span>days</span>
+            </div>
+          </label>
+          <label>
+            Batch Size
+            <input
+              type="number"
+              min="1"
+              value={cacheSettings.batchSize}
+              onChange={(event) =>
+                setCacheSettings({
+                  ...cacheSettings,
+                  batchSize: inputNumberOrNull(event.target.value) ?? 50
+                })
+              }
+            />
+          </label>
+          <label>
+            Batch Delay
+            <div className="input-with-suffix">
+              <input
+                type="number"
+                min="0"
+                step="100"
+                value={cacheSettings.batchDelayMs}
+                onChange={(event) =>
+                  setCacheSettings({
+                    ...cacheSettings,
+                    batchDelayMs: inputNumberOrNull(event.target.value) ?? 500
+                  })
+                }
+              />
+              <span>ms</span>
+            </div>
+          </label>
+          <label className="toggle-row wide-field">
+            Stop provider calls when rate-limited
+            <input
+              type="checkbox"
+              checked={cacheSettings.stopOnRateLimit}
+              onChange={(event) =>
+                setCacheSettings({ ...cacheSettings, stopOnRateLimit: event.target.checked })
+              }
+            />
+          </label>
+        </div>
+      </section>
+
+      <section className="panel" aria-labelledby="market-data-settings-title">
+        <div className="panel-header">
+          <div>
+            <h2 id="market-data-settings-title">Market Data</h2>
+            <p>Provider preference and request safety defaults</p>
+          </div>
+          <button
+            className="icon-button"
+            title="Yahoo Finance is unofficial and can rate-limit automated requests. Cache-first mode reduces repeated provider calls."
+            aria-label="Market data provider information"
+          >
+            <Info size={18} />
+          </button>
+        </div>
+
+        <div className="settings-form two-column-settings">
+          <label>
+            Primary Provider
+            <select
+              value={marketDataSettings.primaryProvider}
+              onChange={(event) =>
+                setMarketDataSettings({
+                  ...marketDataSettings,
+                  primaryProvider: event.target.value
+                })
+              }
+            >
+              <option value="yahoo">Yahoo</option>
+              <option value="alpha_vantage">Alpha Vantage</option>
+            </select>
+          </label>
+          <label>
+            Backup Provider
+            <select
+              value={marketDataSettings.backupProvider}
+              onChange={(event) =>
+                setMarketDataSettings({
+                  ...marketDataSettings,
+                  backupProvider: event.target.value
+                })
+              }
+            >
+              <option value="none">None</option>
+              <option value="alpha_vantage">Alpha Vantage</option>
+              <option value="yahoo">Yahoo</option>
+            </select>
+          </label>
+          <label>
+            Request Mode
+            <select
+              value={marketDataSettings.requestMode}
+              onChange={(event) =>
+                setMarketDataSettings({
+                  ...marketDataSettings,
+                  requestMode: event.target.value
+                })
+              }
+            >
+              <option value="cache-first">Cache first</option>
+              <option value="provider-only">Provider only</option>
+              <option value="cache-only">Cache only</option>
+            </select>
+          </label>
+          <label>
+            Max Provider Batches
+            <input
+              type="number"
+              min="0"
+              value={marketDataSettings.maxProviderBatches}
+              onChange={(event) =>
+                setMarketDataSettings({
+                  ...marketDataSettings,
+                  maxProviderBatches: inputNumberOrNull(event.target.value) ?? 10
+                })
+              }
+            />
+          </label>
+          <label>
+            Test Symbol
+            <input
+              value={marketDataSettings.testSymbol}
+              onChange={(event) =>
+                setMarketDataSettings({
+                  ...marketDataSettings,
+                  testSymbol: event.target.value.toUpperCase()
+                })
+              }
+            />
+          </label>
+        </div>
+      </section>
+
+      <section className="panel" aria-labelledby="strategy-settings-title">
+        <div className="panel-header">
+          <div>
+            <h2 id="strategy-settings-title">Strategy Rules</h2>
+            <p>Backend strategy defaults available to scanner and backtest screens</p>
+          </div>
+        </div>
+
+        <div className="strategy-settings-list">
+          {(strategies.data ?? [])
+            .filter((strategy) => strategy.category === 'entry')
+            .map((strategy) => (
+              <div className="strategy-settings-row" key={strategy.key}>
+                <div>
+                  <strong>{strategy.display_name}</strong>
+                  <span>{strategy.key}</span>
+                </div>
+                <div className="strategy-field-list">
+                  {strategy.fields.slice(0, 5).map((field) => (
+                    <span key={field.name}>
+                      {field.name}: {formatUnknown(field.default)}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          {strategies.isError && <AlertMessage tone="danger" message={strategies.error.message} />}
+        </div>
+      </section>
+
+      <section className="panel" aria-labelledby="appearance-settings-title">
+        <div className="panel-header">
+          <div>
+            <h2 id="appearance-settings-title">Appearance</h2>
+            <p>Local display preferences only; scanner calculations are unchanged</p>
+          </div>
+        </div>
+
+        <div className="settings-form two-column-settings">
+          <label>
+            Density
+            <select
+              value={appearanceSettings.density}
+              onChange={(event) =>
+                setAppearanceSettings({ ...appearanceSettings, density: event.target.value })
+              }
+            >
+              <option value="comfortable">Comfortable</option>
+              <option value="compact">Compact</option>
+            </select>
+          </label>
+          <label>
+            Table Page Size
+            <input
+              type="number"
+              min="10"
+              step="10"
+              value={appearanceSettings.tablePageSize}
+              onChange={(event) =>
+                setAppearanceSettings({
+                  ...appearanceSettings,
+                  tablePageSize: inputNumberOrNull(event.target.value) ?? 50
+                })
+              }
+            />
+          </label>
+          <label>
+            Default Chart Range
+            <select
+              value={appearanceSettings.defaultChartRange}
+              onChange={(event) =>
+                setAppearanceSettings({
+                  ...appearanceSettings,
+                  defaultChartRange: event.target.value
+                })
+              }
+            >
+              <option value="3mo">3mo</option>
+              <option value="6mo">6mo</option>
+              <option value="1y">1y</option>
+            </select>
+          </label>
+          <label className="toggle-row">
+            Remember chart resize
+            <input
+              type="checkbox"
+              checked={appearanceSettings.rememberChartResize}
+              onChange={(event) =>
+                setAppearanceSettings({
+                  ...appearanceSettings,
+                  rememberChartResize: event.target.checked
+                })
+              }
+            />
           </label>
         </div>
       </section>
@@ -1072,6 +2646,18 @@ function JobProgressPanel({ job, percent }: { job?: JobResponse; percent: number
   const complete = job?.status === 'complete';
   const failed = job?.status === 'failed';
   const stopped = job?.status === 'stopped' || progress?.rate_limited;
+  const [detailsExpanded, setDetailsExpanded] = useState(true);
+
+  useEffect(() => {
+    if (isJobActive(job)) {
+      setDetailsExpanded(true);
+      return;
+    }
+
+    if (job?.status === 'complete') {
+      setDetailsExpanded(false);
+    }
+  }, [job?.job_id, job?.status, job]);
 
   return (
     <section className="panel progress-panel" aria-labelledby="progress-title">
@@ -1080,7 +2666,16 @@ function JobProgressPanel({ job, percent }: { job?: JobResponse; percent: number
           <h2 id="progress-title">Job Progress</h2>
           <p>{job?.job_type ? job.job_type.replace('_', ' ') : 'No active job'}</p>
         </div>
-        <StatusPill status={job?.status ?? 'idle'} />
+        <div className="button-row inline-actions">
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => setDetailsExpanded((current) => !current)}
+          >
+            {detailsExpanded ? 'Hide Details' : 'Show Details'}
+          </button>
+          <StatusPill status={job?.status ?? 'idle'} />
+        </div>
       </div>
 
       <div className="progress-track" aria-label="Job progress">
@@ -1092,16 +2687,18 @@ function JobProgressPanel({ job, percent }: { job?: JobResponse; percent: number
         <span>{percent}%</span>
       </div>
 
-      <div className="detail-grid">
-        <Detail label="Checked" value={formatNumber(progress?.symbols_checked)} />
-        <Detail label="Total" value={formatNumber(progress?.symbols_total)} />
-        <Detail label="Kept" value={formatNumber(progress?.symbols_kept)} />
-        <Detail label="Skipped" value={formatNumber(progress?.symbols_skipped)} />
-        <Detail label="Provider Batches" value={formatNumber(progress?.provider_batches_attempted)} />
-        <Detail label="Provider Symbols" value={formatNumber(progress?.provider_symbols_attempted)} />
-        <Detail label="Elapsed" value={formatDuration(progress?.elapsed_seconds)} />
-        <Detail label="ETA" value={formatDuration(progress?.estimated_seconds_remaining)} />
-      </div>
+      {detailsExpanded && (
+        <div className="detail-grid">
+          <Detail label="Checked" value={formatNumber(progress?.symbols_checked)} />
+          <Detail label="Total" value={formatNumber(progress?.symbols_total)} />
+          <Detail label="Kept" value={formatNumber(progress?.symbols_kept)} />
+          <Detail label="Skipped" value={formatNumber(progress?.symbols_skipped)} />
+          <Detail label="Provider Batches" value={formatNumber(progress?.provider_batches_attempted)} />
+          <Detail label="Provider Symbols" value={formatNumber(progress?.provider_symbols_attempted)} />
+          <Detail label="Elapsed" value={formatDuration(progress?.elapsed_seconds)} />
+          <Detail label="ETA" value={formatDuration(progress?.estimated_seconds_remaining)} />
+        </div>
+      )}
 
       {complete && (
         <div className="alert alert-success">
@@ -1140,6 +2737,132 @@ function rowCountFromJob(job?: JobResponse): number | undefined {
   return typeof analyses === 'number' ? analyses : undefined;
 }
 
+type CandidateTradeEdits = {
+  entry: string;
+  stop: string;
+  target: string;
+  chartHeight: number;
+};
+
+type ScannerBacktestState = {
+  tickers: string[];
+  strategy?: string;
+  sourceLabel?: string;
+};
+
+type BacktestDisplayResult = {
+  statistics: Record<string, number>;
+  trades: Record<string, unknown>[];
+};
+
+type BacktestSubmittedRun = {
+  jobId: string;
+  resultKey: string;
+};
+
+type CandidateDetailState = {
+  ticker: string;
+};
+
+type PlannedTrade = {
+  id: string;
+  ticker: string;
+  strategy: string;
+  plannedAt: string;
+  entry: string;
+  stop: string;
+  target: string;
+  status: 'planned';
+};
+
+type RecommendationSettings = {
+  rewardRiskMultiple: number;
+  suggestedHoldDays: number;
+  stopMethod: string;
+  atrPeriod: number;
+  riskPerTradePercent: number;
+  defaultExportScope: string;
+  includeAdjustedChecklistValues: boolean;
+};
+
+type CacheSettings = {
+  historyPeriod: string;
+  staleAfterDays: number;
+  batchSize: number;
+  batchDelayMs: number;
+  stopOnRateLimit: boolean;
+};
+
+type MarketDataSettings = {
+  primaryProvider: string;
+  backupProvider: string;
+  requestMode: string;
+  maxProviderBatches: number;
+  testSymbol: string;
+};
+
+type AppearanceSettings = {
+  density: string;
+  tablePageSize: number;
+  defaultChartRange: string;
+  rememberChartResize: boolean;
+};
+
+const defaultRecommendationSettings: RecommendationSettings = {
+  rewardRiskMultiple: 2,
+  suggestedHoldDays: 5,
+  stopMethod: '2atr',
+  atrPeriod: 14,
+  riskPerTradePercent: 1,
+  defaultExportScope: 'filtered',
+  includeAdjustedChecklistValues: true
+};
+
+const defaultCacheSettings: CacheSettings = {
+  historyPeriod: '6mo',
+  staleAfterDays: 1,
+  batchSize: 50,
+  batchDelayMs: 500,
+  stopOnRateLimit: true
+};
+
+const defaultMarketDataSettings: MarketDataSettings = {
+  primaryProvider: 'yahoo',
+  backupProvider: 'alpha_vantage',
+  requestMode: 'cache-first',
+  maxProviderBatches: 10,
+  testSymbol: 'AAPL'
+};
+
+const defaultAppearanceSettings: AppearanceSettings = {
+  density: 'comfortable',
+  tablePageSize: 50,
+  defaultChartRange: '6mo',
+  rememberChartResize: true
+};
+
+function useLocalStorage<T>(key: string, initialValue: T) {
+  const [value, setValue] = useState<T>(() => {
+    const stored = window.localStorage.getItem(key);
+
+    if (!stored) {
+      return initialValue;
+    }
+
+    try {
+      return JSON.parse(stored) as T;
+    } catch {
+      return initialValue;
+    }
+  });
+
+  useEffect(() => {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  }, [key, value]);
+
+  return [value, setValue] as const;
+}
+
 function inputNumberOrNull(value: string): number | null {
   if (value.trim() === '') {
     return null;
@@ -1151,6 +2874,181 @@ function inputNumberOrNull(value: string): number | null {
 
 function emptyNumberToNull(value: number | null | undefined): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function formatPercent(value: unknown): string {
+  return typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(2)}%` : 'n/a';
+}
+
+function formatDateTime(value: string): string {
+  const timestamp = Date.parse(value);
+
+  if (!Number.isFinite(timestamp)) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short'
+  }).format(timestamp);
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatUnknown(value: unknown): string {
+  if (value === null || value === undefined) {
+    return 'n/a';
+  }
+
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value.toFixed(2).replace(/\.00$/, '') : 'n/a';
+  }
+
+  return String(value);
+}
+
+function parseDisplayNumber(value: string): number | null {
+  const parsed = Number(value.replace(/[$,%"]/g, '').replace(/,/g, '').trim());
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function plannedTradeFromCandidate(candidate: DisplayCandidate): PlannedTrade {
+  return {
+    id: candidate.ticker,
+    ticker: candidate.ticker,
+    strategy: candidate.strategy,
+    plannedAt: new Date().toISOString().slice(0, 10),
+    entry: candidate.entryArea,
+    stop: candidate.stop,
+    target: candidate.targetExit,
+    status: 'planned'
+  };
+}
+
+function readPlannedTradesFromStorage(): PlannedTrade[] {
+  const stored = window.localStorage.getItem('planned-trades');
+
+  if (!stored) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(stored);
+    return Array.isArray(parsed) ? (parsed as PlannedTrade[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseTickerList(value: string): string[] {
+  const seen = new Set<string>();
+  const tickers = [];
+
+  for (const item of value.split(/[\s,]+/)) {
+    const ticker = item.trim().toUpperCase();
+
+    if (!ticker || seen.has(ticker)) {
+      continue;
+    }
+
+    tickers.push(ticker);
+    seen.add(ticker);
+  }
+
+  return tickers;
+}
+
+function backtestResultKeyForRequest(request: BacktestRequest): string | null {
+  const target = backtestTargetKey(request);
+
+  if (!target) {
+    return null;
+  }
+
+  return [
+    target,
+    request.strategy,
+    request.history_period,
+    request.hold_days,
+    request.min_history_days,
+    request.allow_overlapping_trades ? 'overlap' : 'no-overlap',
+    request.entry_reset_policy
+  ].join('|');
+}
+
+function backtestTargetKey(request: BacktestRequest): string | null {
+  if (request.tickers?.length) {
+    return `tickers:${request.tickers.map((ticker) => ticker.toUpperCase()).join(',')}`;
+  }
+
+  if (request.ticker) {
+    return `ticker:${request.ticker.toUpperCase()}`;
+  }
+
+  if (request.universe) {
+    return `universe:${request.universe}`;
+  }
+
+  return null;
+}
+
+function isScannerBacktestState(value: unknown): value is ScannerBacktestState {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const candidate = value as Partial<ScannerBacktestState>;
+  return Array.isArray(candidate.tickers) && candidate.tickers.every((ticker) => typeof ticker === 'string');
+}
+
+function isCandidateDetailState(value: unknown): value is CandidateDetailState {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const candidate = value as Partial<CandidateDetailState>;
+  return typeof candidate.ticker === 'string' && candidate.ticker.trim() !== '';
+}
+
+function strategyKeyForCandidate(
+  candidate: DisplayCandidate,
+  strategies?: Array<{ key: string; display_name: string }>
+): string | undefined {
+  const candidateStrategy = candidate.strategy.toLowerCase();
+  return strategies?.find((strategy) =>
+    candidateStrategy.includes(strategy.display_name.toLowerCase())
+    || candidateStrategy.includes(strategy.key.toLowerCase())
+  )?.key;
+}
+
+function equityBarHeight(value: unknown, rows: Record<string, unknown>[]): number {
+  const equityValues = rows
+    .map((row) => (typeof row.Equity === 'number' ? row.Equity : Number(row.Equity)))
+    .filter((item) => Number.isFinite(item));
+  const numeric = typeof value === 'number' ? value : Number(value);
+
+  if (!Number.isFinite(numeric) || equityValues.length === 0) {
+    return 10;
+  }
+
+  const min = Math.min(...equityValues);
+  const max = Math.max(...equityValues);
+
+  if (max === min) {
+    return 55;
+  }
+
+  return 12 + ((numeric - min) / (max - min)) * 82;
 }
 
 function downloadCandidatesCsv(candidates: DisplayCandidate[]) {

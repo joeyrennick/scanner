@@ -93,6 +93,80 @@ class SQLiteScannerResultStore:
             rows=rows,
         )
 
+    def get_run(self, run_id: int) -> ScannerRun | None:
+        with self._connect() as connection:
+            run = connection.execute(
+                """
+                SELECT id, created_at, universe, market_data_provider, history_period,
+                       output_file, result_count
+                FROM scanner_runs
+                WHERE id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+
+            if run is None:
+                return None
+
+            rows = self._load_rows(connection, int(run[0]))
+
+        return ScannerRun(
+            id=int(run[0]),
+            created_at=str(run[1]),
+            universe=str(run[2]),
+            market_data_provider=str(run[3]),
+            history_period=str(run[4]),
+            output_file=str(run[5]),
+            result_count=int(run[6]),
+            rows=rows,
+        )
+
+    def update_trade_levels(
+        self,
+        *,
+        run_id: int,
+        ticker: str,
+        entry_area: float | None = None,
+        suggested_stop: float | None = None,
+        target_exit: float | None = None,
+        reset: bool = False,
+    ) -> dict[str, Any]:
+        run = self.get_run(run_id)
+
+        if run is None:
+            raise ValueError(f"Scanner run not found: {run_id}")
+
+        normalized_ticker = ticker.upper()
+        matching_row = next(
+            (
+                row
+                for row in run.rows
+                if _string_value(row.get("Ticker")).upper() == normalized_ticker
+            ),
+            None,
+        )
+
+        if matching_row is None:
+            raise ValueError(f"Ticker not found in scanner run: {normalized_ticker}")
+
+        updated = dict(matching_row)
+        _preserve_original_trade_levels(updated)
+
+        if reset:
+            _restore_original_trade_levels(updated)
+        else:
+            if entry_area is not None:
+                updated["Entry Area"] = round(float(entry_area), 2)
+            if suggested_stop is not None:
+                updated["Suggested Stop"] = round(float(suggested_stop), 2)
+            if target_exit is not None:
+                updated["Target/Exit"] = round(float(target_exit), 2)
+                updated["Suggested Exit"] = round(float(target_exit), 2)
+            updated["Trade Levels Edited"] = "YES"
+
+        self.update_rows_by_ticker(run_id=run_id, rows=[updated])
+        return updated
+
     def update_rows_by_ticker(
         self,
         *,
@@ -318,3 +392,34 @@ def _string_value(value: Any) -> str:
         return ""
 
     return str(value)
+
+
+def _preserve_original_trade_levels(row: dict[str, Any]) -> None:
+    if "Original Entry Area" not in row:
+        row["Original Entry Area"] = (
+            _float_value(row.get("Entry Area")) or _float_value(row.get("Price"))
+        )
+    if "Original Suggested Stop" not in row:
+        row["Original Suggested Stop"] = (
+            _float_value(row.get("Suggested Stop")) or _float_value(row.get("Stop 2ATR"))
+        )
+    if "Original Target/Exit" not in row:
+        row["Original Target/Exit"] = (
+            _float_value(row.get("Target/Exit")) or _float_value(row.get("Suggested Exit"))
+        )
+
+
+def _restore_original_trade_levels(row: dict[str, Any]) -> None:
+    original_entry = _float_value(row.get("Original Entry Area"))
+    original_stop = _float_value(row.get("Original Suggested Stop"))
+    original_target = _float_value(row.get("Original Target/Exit"))
+
+    if original_entry is not None:
+        row["Entry Area"] = round(original_entry, 2)
+    if original_stop is not None:
+        row["Suggested Stop"] = round(original_stop, 2)
+    if original_target is not None:
+        row["Target/Exit"] = round(original_target, 2)
+        row["Suggested Exit"] = round(original_target, 2)
+
+    row["Trade Levels Edited"] = "NO"

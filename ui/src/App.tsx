@@ -197,7 +197,7 @@ function DailyScannerPage() {
   const [selectedTickers, setSelectedTickers] = useState<Set<string>>(new Set());
   const [form, setForm] = useState<ScanRequest>({
     universe: 'all',
-    history_period: '6mo',
+    history_period: '1y',
     min_price: 20,
     max_price: 50,
     warm_market_data_cache: true,

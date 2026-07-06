@@ -3,6 +3,7 @@ import pandas as pd
 from scanner.config.settings import ScannerSettings
 from scanner.context import ScannerContext
 from scanner.data.cache import SQLiteMarketDataCache
+from scanner.data.scanner_results import SQLiteScannerResultStore
 from scanner.data.providers.cached import CachedMarketDataProvider
 from scanner.models.stock_analysis import StockAnalysis
 from scanner.models.strategy_result import StrategyResult
@@ -96,6 +97,7 @@ def test_scan_service_returns_structured_result_and_writes_watchlist(
             benchmark_ticker="SPY",
             max_workers=1,
             market_data_cache_enabled=False,
+            market_data_cache_path=str(tmp_path / "market_data.sqlite"),
         ),
         logger=logger,
         market_data_provider=FakeProvider(),
@@ -125,8 +127,12 @@ def test_scan_service_returns_structured_result_and_writes_watchlist(
     assert [candidate.ticker for candidate in result.trade_candidates] == ["AAPL"]
     assert result.skipped == []
     assert result.dataframe["Ticker"].tolist() == ["AAPL"]
+    assert result.scanner_run_id == 1
     assert output_file.exists()
     assert pd.read_csv(output_file)["Ticker"].tolist() == ["AAPL"]
+    latest_run = SQLiteScannerResultStore(tmp_path / "market_data.sqlite").latest_run()
+    assert latest_run is not None
+    assert latest_run.rows[0]["Ticker"] == "AAPL"
     assert "Loaded 2 tickers" in logger.infos
     assert "Trade candidates: 1" in logger.infos
 
@@ -149,6 +155,7 @@ def test_scan_service_stops_after_cache_warmup_rate_limit(
             benchmark_ticker="SPY",
             max_workers=1,
             market_data_cache_enabled=True,
+            market_data_cache_path=str(tmp_path / "market_data.sqlite"),
         ),
         logger=logger,
         market_data_provider=cached_provider,

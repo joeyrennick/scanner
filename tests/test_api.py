@@ -168,9 +168,18 @@ def test_scan_job_lifecycle(monkeypatch, tmp_path):
                 output_file=str(tmp_path / "watchlist.csv"),
                 elapsed_seconds=0.01,
                 cache_summary="cache ok",
+                scanner_run_id=1,
             )
 
     monkeypatch.setattr(api_app, "ScanService", FakeScanService)
+    monkeypatch.setattr(
+        api_app,
+        "settings",
+        replace(
+            api_app.settings,
+            market_data_cache_path=str(tmp_path / "market_data.sqlite"),
+        ),
+    )
 
     response = client.post(
         "/api/scans",
@@ -186,6 +195,7 @@ def test_scan_job_lifecycle(monkeypatch, tmp_path):
     assert payload["status"] == "complete"
     assert payload["progress"]["current_step"] == "Scan complete"
     assert payload["output_paths"]["watchlist_csv"] == str(tmp_path / "watchlist.csv")
+    assert payload["result"]["scanner_run_id"] == 1
     assert payload["result"]["rows"] == [{"Ticker": "AAPL", "Composite Score": 88}]
 
 
@@ -244,6 +254,7 @@ def test_backtest_job_lifecycle(monkeypatch):
 
 def test_latest_watchlist_endpoint(tmp_path, monkeypatch):
     from scanner.api import app as api_app
+    from scanner.data.scanner_results import SQLiteScannerResultStore
 
     output_file = tmp_path / "watchlist.csv"
     pd.DataFrame([{"Ticker": "AAPL", "Composite Score": 88}]).to_csv(
@@ -253,13 +264,55 @@ def test_latest_watchlist_endpoint(tmp_path, monkeypatch):
     monkeypatch.setattr(
         api_app,
         "settings",
-        replace(api_app.settings, output_file=str(output_file)),
+        replace(
+            api_app.settings,
+            output_file=str(output_file),
+            market_data_cache_path=str(tmp_path / "market_data.sqlite"),
+        ),
+    )
+    SQLiteScannerResultStore(tmp_path / "market_data.sqlite").save_scan_results(
+        pd.DataFrame([{"Ticker": "MSFT", "Composite Score": 92}]),
+        universe="sp500",
+        market_data_provider="yahoo",
+        history_period="6mo",
+        output_file=str(output_file),
     )
 
     response = client.get("/api/watchlist/latest")
 
     assert response.status_code == 200
-    assert response.json()["rows"] == [{"Ticker": "AAPL", "Composite Score": 88}]
+    payload = response.json()
+    assert payload["run_id"] == 1
+    assert payload["rows"] == [{"Ticker": "MSFT", "Composite Score": 92}]
+
+
+def test_latest_watchlist_endpoint_backfills_csv_into_sqlite(tmp_path, monkeypatch):
+    from scanner.api import app as api_app
+    from scanner.data.scanner_results import SQLiteScannerResultStore
+
+    output_file = tmp_path / "watchlist.csv"
+    db_path = tmp_path / "market_data.sqlite"
+    pd.DataFrame([{"Ticker": "AAPL", "Composite Score": 88}]).to_csv(
+        output_file,
+        index=False,
+    )
+    monkeypatch.setattr(
+        api_app,
+        "settings",
+        replace(
+            api_app.settings,
+            output_file=str(output_file),
+            market_data_cache_path=str(db_path),
+        ),
+    )
+
+    response = client.get("/api/watchlist/latest")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["run_id"] == 1
+    assert payload["rows"] == [{"Ticker": "AAPL", "Composite Score": 88}]
+    assert SQLiteScannerResultStore(db_path).latest_run().rows == payload["rows"]
 
 
 def test_latest_watchlist_endpoint_handles_empty_file(tmp_path, monkeypatch):
@@ -270,7 +323,11 @@ def test_latest_watchlist_endpoint_handles_empty_file(tmp_path, monkeypatch):
     monkeypatch.setattr(
         api_app,
         "settings",
-        replace(api_app.settings, output_file=str(output_file)),
+        replace(
+            api_app.settings,
+            output_file=str(output_file),
+            market_data_cache_path=str(tmp_path / "market_data.sqlite"),
+        ),
     )
 
     response = client.get("/api/watchlist/latest")
@@ -279,12 +336,34 @@ def test_latest_watchlist_endpoint_handles_empty_file(tmp_path, monkeypatch):
     assert response.json() == {
         "exists": True,
         "path": str(output_file),
+        "run_id": None,
+        "created_at": None,
         "rows": [],
     }
 
 
-def test_refresh_watchlist_prices_recalculates_trade_levels(monkeypatch):
+def test_refresh_watchlist_prices_recalculates_trade_levels(monkeypatch, tmp_path):
     from scanner.api import app as api_app
+    from scanner.data.scanner_results import SQLiteScannerResultStore
+
+    db_path = tmp_path / "market_data.sqlite"
+    store = SQLiteScannerResultStore(db_path)
+    run_id = store.save_scan_results(
+        pd.DataFrame(
+            [
+                {
+                    "Ticker": "AAPL",
+                    "Price": 200.0,
+                    "ATR14": 4.0,
+                    "Stop 2ATR": 192.0,
+                }
+            ]
+        ),
+        universe="sp500",
+        market_data_provider="yahoo",
+        history_period="6mo",
+        output_file="output/watchlist.csv",
+    )
 
     class FakeProvider:
         def download_price_data_batch(self, tickers, period="1y"):
@@ -306,10 +385,19 @@ def test_refresh_watchlist_prices_recalculates_trade_levels(monkeypatch):
         "create_market_data_provider",
         lambda name, cache_enabled: FakeProvider(),
     )
+    monkeypatch.setattr(
+        api_app,
+        "settings",
+        replace(
+            api_app.settings,
+            market_data_cache_path=str(db_path),
+        ),
+    )
 
     response = client.post(
         "/api/watchlist/refresh-prices",
         json={
+            "run_id": run_id,
             "rows": [
                 {
                     "Ticker": "AAPL",
@@ -347,9 +435,15 @@ def test_refresh_watchlist_prices_recalculates_trade_levels(monkeypatch):
         "Target/Exit": 228.5,
         "Suggested Exit": 228.5,
     }
+    assert (
+        SQLiteScannerResultStore(db_path)
+        .latest_run()
+        .rows[0]["5D Range"]
+        == 5
+    )
 
 
-def test_refresh_watchlist_prices_falls_back_to_cached_close(monkeypatch):
+def test_refresh_watchlist_prices_falls_back_to_cached_close(monkeypatch, tmp_path):
     from scanner.api import app as api_app
 
     class FakeProvider:
@@ -360,6 +454,14 @@ def test_refresh_watchlist_prices_falls_back_to_cached_close(monkeypatch):
         api_app,
         "create_market_data_provider",
         lambda name, cache_enabled: FakeProvider(),
+    )
+    monkeypatch.setattr(
+        api_app,
+        "settings",
+        replace(
+            api_app.settings,
+            market_data_cache_path=str(tmp_path / "market_data.sqlite"),
+        ),
     )
 
     response = client.post(

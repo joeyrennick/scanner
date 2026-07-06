@@ -31,6 +31,7 @@ from scanner.config.settings import settings
 from scanner.context import ScannerContext
 from scanner.data.cache import SQLiteMarketDataCache
 from scanner.data.market_data import create_market_data_provider
+from scanner.data.scanner_results import SQLiteScannerResultStore
 from scanner.services.cache_warmup import CacheWarmupConfig, CacheWarmupService
 from scanner.services.scan_service import ScanConfig, ScanService
 from scanner.strategies.strategy_registry import StrategyRegistry
@@ -99,12 +100,26 @@ def get_scan(job_id: str) -> dict[str, Any]:
 
 @app.get("/api/watchlist/latest")
 def get_latest_watchlist() -> dict[str, Any]:
+    store = _scanner_result_store()
+    latest_run = store.latest_run()
+
+    if latest_run is not None:
+        return {
+            "exists": True,
+            "path": latest_run.output_file,
+            "run_id": latest_run.id,
+            "created_at": latest_run.created_at,
+            "rows": latest_run.rows,
+        }
+
     path = Path(settings.output_file)
 
     if not path.exists():
         return {
             "exists": False,
             "path": str(path),
+            "run_id": None,
+            "created_at": None,
             "rows": [],
         }
 
@@ -113,9 +128,31 @@ def get_latest_watchlist() -> dict[str, Any]:
     except EmptyDataError:
         dataframe = pd.DataFrame()
 
+    if not dataframe.empty:
+        run_id = store.save_scan_results(
+            dataframe,
+            universe="csv_import",
+            market_data_provider=settings.market_data_provider,
+            history_period=settings.scan_history_period,
+            output_file=str(path),
+            settings_snapshot={"source": "watchlist_csv_backfill"},
+        )
+        imported_run = store.latest_run()
+
+        if imported_run is not None and imported_run.id == run_id:
+            return {
+                "exists": True,
+                "path": imported_run.output_file,
+                "run_id": imported_run.id,
+                "created_at": imported_run.created_at,
+                "rows": imported_run.rows,
+            }
+
     return {
         "exists": True,
         "path": str(path),
+        "run_id": None,
+        "created_at": None,
         "rows": _records_from_dataframe(dataframe),
     }
 
@@ -248,6 +285,17 @@ def _refresh_watchlist_prices(
             )
 
         refreshed_rows.append(updated)
+
+    run_id = request.run_id
+    if run_id is None:
+        latest_run = _scanner_result_store().latest_run()
+        run_id = latest_run.id if latest_run is not None else None
+
+    if run_id is not None:
+        _scanner_result_store().update_rows_by_ticker(
+            run_id=run_id,
+            rows=refreshed_rows,
+        )
 
     return {
         "rows": refreshed_rows,
@@ -428,6 +476,7 @@ def _run_scan(request: ScanRequest, progress) -> dict[str, Any]:
     cache_warmup_result = result.cache_warmup_result
     return _json_safe(
         {
+            "scanner_run_id": result.scanner_run_id,
             "tickers": result.tickers,
             "analyses": len(result.analyses),
             "candidates": len(result.trade_candidates),
@@ -539,6 +588,10 @@ def _records_from_dataframe(dataframe: pd.DataFrame) -> list[dict[str, Any]]:
 
     safe_dataframe = dataframe.astype(object).where(pd.notna(dataframe), None)
     return _json_safe(safe_dataframe.to_dict(orient="records"))
+
+
+def _scanner_result_store() -> SQLiteScannerResultStore:
+    return SQLiteScannerResultStore(settings.market_data_cache_path)
 
 
 def _json_safe(value: Any) -> Any:

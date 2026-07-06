@@ -462,7 +462,8 @@ input:disabled {
 }
 
 .table-wrap {
-  overflow-x: auto;
+  max-height: min(640px, 62vh);
+  overflow: auto;
   border: 1px solid #d9e0ea;
   border-radius: 8px;
 }
@@ -484,10 +485,39 @@ input:disabled {
 }
 
 .data-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   background: #f8fafc;
   color: #334155;
   font-size: 12px;
   font-weight: 760;
+}
+
+.sort-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 34px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 760;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sort-header.active {
+  color: #0a64d8;
+}
+
+.sort-indicator {
+  margin-left: auto;
+  color: #64748b;
+  font-size: 11px;
 }
 
 .data-table tbody tr:last-child td {

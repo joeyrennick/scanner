@@ -4,6 +4,7 @@ import {
   mergeWatchlistRows,
   rowMatchesDisplaySettings,
   rowMatchesStrategy,
+  sortCandidates,
   stopDistancePercent
 } from './watchlist';
 
@@ -109,5 +110,53 @@ describe('watchlist display helpers', () => {
         minFiveDayRange: 12
       })
     ).toBe(false);
+  });
+
+  it('sorts candidates by numeric and text columns', () => {
+    const candidates = [
+      {
+        id: 'MSFT',
+        ticker: 'MSFT',
+        strategy: 'Pullback',
+        score: '80',
+        currentPrice: '$400.00',
+        priceAsOf: '2026-07-02',
+        priceSource: 'Yahoo',
+        relativeStrength: '2.00%',
+        relativeVolume: '1.10',
+        atr: '$4.00',
+        fiveDayRange: '6',
+        entryArea: '$400.00',
+        stop: '$392.00',
+        targetExit: '$416.00',
+        holdTime: '5 trading days'
+      },
+      {
+        id: 'AAPL',
+        ticker: 'AAPL',
+        strategy: 'Breakout',
+        score: '120',
+        currentPrice: '$210.00',
+        priceAsOf: '2026-07-01',
+        priceSource: 'Yahoo',
+        relativeStrength: '5.00%',
+        relativeVolume: '1.50',
+        atr: '$3.00',
+        fiveDayRange: '12',
+        entryArea: '$210.00',
+        stop: '$204.00',
+        targetExit: '$222.00',
+        holdTime: '5 trading days'
+      }
+    ];
+
+    expect(sortCandidates(candidates, { key: 'score', direction: 'desc' }).map((row) => row.ticker)).toEqual([
+      'AAPL',
+      'MSFT'
+    ]);
+    expect(sortCandidates(candidates, { key: 'ticker', direction: 'asc' }).map((row) => row.ticker)).toEqual([
+      'AAPL',
+      'MSFT'
+    ]);
   });
 });

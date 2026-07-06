@@ -33,11 +33,16 @@ export function useStartScan() {
 }
 
 export function useRefreshWatchlistPrices() {
+  const queryClient = useQueryClient();
+
   return useMutation({
     mutationFn: (request: WatchlistPriceRefreshRequest) =>
       apiClient.request<WatchlistPriceRefreshResponse>('/api/watchlist/refresh-prices', {
         method: 'POST',
         body: JSON.stringify(request)
-      })
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.latestWatchlist });
+    }
   });
 }

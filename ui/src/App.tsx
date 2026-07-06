@@ -31,6 +31,9 @@ import {
   mergeWatchlistRows,
   rowMatchesDisplaySettings,
   rowMatchesStrategy,
+  sortCandidates,
+  type CandidateSort,
+  type CandidateSortKey,
   type DisplayCandidate
 } from './lib/watchlist';
 import { useScannerDisplaySettings } from './lib/scannerSettings';
@@ -201,6 +204,10 @@ function DailyScannerPage() {
   const activeJob = isJobActive(job);
   const [selectedStrategy, setSelectedStrategy] = useState('all');
   const [selectedTickers, setSelectedTickers] = useState<Set<string>>(new Set());
+  const [candidateSort, setCandidateSort] = useState<CandidateSort>({
+    key: 'score',
+    direction: 'desc'
+  });
   const [form, setForm] = useState<ScanRequest>({
     universe: 'all',
     history_period: '1y',
@@ -212,9 +219,26 @@ function DailyScannerPage() {
     cache_warmup_batch_delay_ms: 500
   });
   const [refreshedRows, setRefreshedRows] = useState<WatchlistRow[] | null>(null);
+  const currentJobRunId = scanRunIdFromJob(job);
+  const latestWatchlistRunId = latestWatchlist.data?.run_id ?? null;
 
-  const baseRows = useMemo(() => scanRowsFromJob(job) ?? latestWatchlist.data?.rows ?? [], [
+  const baseRows = useMemo(() => {
+    const jobRows = scanRowsFromJob(job);
+    const latestRows = latestWatchlist.data?.rows;
+
+    if (
+      currentJobRunId !== null &&
+      latestWatchlistRunId === currentJobRunId &&
+      latestRows
+    ) {
+      return latestRows;
+    }
+
+    return jobRows ?? latestRows ?? [];
+  }, [
+    currentJobRunId,
     job,
+    latestWatchlistRunId,
     latestWatchlist.data?.rows
   ]);
   const rawRows = refreshedRows ?? baseRows;
@@ -234,16 +258,21 @@ function DailyScannerPage() {
       ),
     [cacheOverview.data?.latest_bar_date, filteredRows]
   );
-  const selectedCandidates = candidates.filter((candidate) => selectedTickers.has(candidate.id));
+  const sortedCandidates = useMemo(
+    () => sortCandidates(candidates, candidateSort),
+    [candidateSort, candidates]
+  );
+  const selectedCandidates = sortedCandidates.filter((candidate) => selectedTickers.has(candidate.id));
   const selectedCount = selectedCandidates.length;
-  const exportScope = selectedCount > 0 ? `${selectedCount} selected` : `${candidates.length} filtered`;
+  const exportScope = selectedCount > 0 ? `${selectedCount} selected` : `${sortedCandidates.length} filtered`;
   const percent = progressPercent(job?.progress);
   const activeStrategies = strategies.data?.filter((strategy) => strategy.category === 'entry') ?? [];
   const anyCachedPrice = candidates.some((candidate) => candidate.priceSource === 'Cached Close');
+  const currentRunId = currentJobRunId ?? latestWatchlistRunId;
 
   useEffect(() => {
     setRefreshedRows(null);
-  }, [job?.job_id, latestWatchlist.data?.path]);
+  }, [job?.job_id, latestWatchlist.data?.run_id]);
 
   useEffect(() => {
     const jobRows = scanRowsFromJob(job);
@@ -280,6 +309,7 @@ function DailyScannerPage() {
 
     const response = await refreshPrices.mutateAsync({
       rows: rowsToRefresh,
+      run_id: currentRunId,
       market_data_provider: form.market_data_provider ?? 'yahoo',
       period: '5d',
       reward_risk_multiple: 2,
@@ -305,10 +335,10 @@ function DailyScannerPage() {
 
   function toggleAllCandidates() {
     setSelectedTickers((current) => {
-      const visibleIds = new Set(candidates.map((candidate) => candidate.id));
-      const visibleSelectedCount = candidates.filter((candidate) => current.has(candidate.id)).length;
+      const visibleIds = new Set(sortedCandidates.map((candidate) => candidate.id));
+      const visibleSelectedCount = sortedCandidates.filter((candidate) => current.has(candidate.id)).length;
 
-      if (visibleSelectedCount === candidates.length) {
+      if (visibleSelectedCount === sortedCandidates.length) {
         const next = new Set(current);
         visibleIds.forEach((id) => next.delete(id));
         return next;
@@ -319,8 +349,15 @@ function DailyScannerPage() {
   }
 
   function exportCsv() {
-    const rowsToExport = selectedCandidates.length > 0 ? selectedCandidates : candidates;
+    const rowsToExport = selectedCandidates.length > 0 ? selectedCandidates : sortedCandidates;
     downloadCandidatesCsv(rowsToExport);
+  }
+
+  function changeSort(key: CandidateSortKey) {
+    setCandidateSort((current) => ({
+      key,
+      direction: current.key === key && current.direction === 'asc' ? 'desc' : 'asc'
+    }));
   }
 
   return (
@@ -546,7 +583,7 @@ function DailyScannerPage() {
             <h2 id="scanner-results-title">Scanner Results</h2>
             <p>
               {latestWatchlist.data?.exists
-                ? `${candidates.length} displayed candidates from ${latestWatchlist.data.path}`
+                ? `${sortedCandidates.length} displayed candidates from ${latestWatchlist.data.path}`
                 : 'No watchlist has been generated yet'}
             </p>
           </div>
@@ -554,7 +591,7 @@ function DailyScannerPage() {
             <button
               className="secondary-button"
               onClick={() => void refreshVisiblePrices()}
-              disabled={candidates.length === 0 || refreshPrices.isPending}
+              disabled={sortedCandidates.length === 0 || refreshPrices.isPending}
             >
               {refreshPrices.isPending ? (
                 <LoaderCircle className="spin" size={18} />
@@ -566,17 +603,17 @@ function DailyScannerPage() {
             <button
               className="secondary-button"
               onClick={exportCsv}
-              disabled={candidates.length === 0}
+              disabled={sortedCandidates.length === 0}
               title={`Export ${exportScope} candidates`}
             >
               <Download size={18} />
               Export CSV
             </button>
-            <button className="secondary-button" disabled={candidates.length === 0}>
+            <button className="secondary-button" disabled={sortedCandidates.length === 0}>
               <BarChart3 size={18} />
               {selectedCount > 0 ? 'Backtest Selected' : 'Backtest Filtered'}
             </button>
-            <button className="secondary-button" disabled={candidates.length === 0}>
+            <button className="secondary-button" disabled={sortedCandidates.length === 0}>
               <FileText size={18} />
               Generate Daily Report
             </button>
@@ -605,15 +642,16 @@ function DailyScannerPage() {
                 <th>
                   <input
                     type="checkbox"
-                    checked={candidates.length > 0 && selectedCount === candidates.length}
+                    checked={sortedCandidates.length > 0 && selectedCount === sortedCandidates.length}
                     onChange={toggleAllCandidates}
                     aria-label="Select all scanner candidates"
                   />
                 </th>
-                <th>Ticker</th>
-                <th>Strategy</th>
-                <th>Score</th>
-                <th>
+                <SortableHeader label="Ticker" sortKey="ticker" sort={candidateSort} onSort={changeSort} />
+                <SortableHeader label="Strategy" sortKey="strategy" sort={candidateSort} onSort={changeSort} />
+                <SortableHeader label="Score" sortKey="score" sort={candidateSort} onSort={changeSort} />
+                <SortableHeader
+                  label={
                   <span className="th-with-info">
                     Current Price
                     <Info
@@ -621,22 +659,25 @@ function DailyScannerPage() {
                       aria-label="Current Price comes from Yahoo/latest provider data and may be delayed or stale. Confirm the live price in your trading platform, such as TradingView or thinkorswim, before placing a trade."
                     />
                   </span>
-                </th>
-                <th>Price As Of</th>
-                <th>Source</th>
-                <th>RS</th>
-                <th>RVOL</th>
-                <th>ATR</th>
-                <th>5D Range</th>
-                <th>Entry</th>
-                <th>Stop</th>
-                <th>Target/Exit</th>
-                <th>Hold</th>
+                  }
+                  sortKey="currentPrice"
+                  sort={candidateSort}
+                  onSort={changeSort}
+                />
+                <SortableHeader label="Price As Of" sortKey="priceAsOf" sort={candidateSort} onSort={changeSort} />
+                <SortableHeader label="Source" sortKey="priceSource" sort={candidateSort} onSort={changeSort} />
+                <SortableHeader label="RS" sortKey="relativeStrength" sort={candidateSort} onSort={changeSort} />
+                <SortableHeader label="RVOL" sortKey="relativeVolume" sort={candidateSort} onSort={changeSort} />
+                <SortableHeader label="ATR" sortKey="atr" sort={candidateSort} onSort={changeSort} />
+                <SortableHeader label="5D Range" sortKey="fiveDayRange" sort={candidateSort} onSort={changeSort} />
+                <SortableHeader label="Entry" sortKey="entryArea" sort={candidateSort} onSort={changeSort} />
+                <SortableHeader label="Stop" sortKey="stop" sort={candidateSort} onSort={changeSort} />
+                <SortableHeader label="Target/Exit" sortKey="targetExit" sort={candidateSort} onSort={changeSort} />
                 <th>Action</th>
               </tr>
             </thead>
             <tbody>
-              {candidates.map((candidate) => (
+              {sortedCandidates.map((candidate) => (
                 <tr key={candidate.id}>
                   <td>
                     <input
@@ -669,7 +710,6 @@ function DailyScannerPage() {
                   <td>{candidate.entryArea}</td>
                   <td>{candidate.stop}</td>
                   <td>{candidate.targetExit}</td>
-                  <td>{candidate.holdTime}</td>
                   <td>
                     <div className="row-actions">
                       <button className="link-button">Open</button>
@@ -678,9 +718,9 @@ function DailyScannerPage() {
                   </td>
                 </tr>
               ))}
-              {candidates.length === 0 && (
+              {sortedCandidates.length === 0 && (
                 <tr>
-                  <td colSpan={16} className="empty-cell">
+                  <td colSpan={15} className="empty-cell">
                     {activeJob ? 'Scan is running.' : 'No candidates match the current filter.'}
                   </td>
                 </tr>
@@ -855,6 +895,36 @@ function CacheWarmupPage() {
         <JobProgressPanel job={job} percent={percent} />
       </div>
     </div>
+  );
+}
+
+function SortableHeader({
+  label,
+  sortKey,
+  sort,
+  onSort
+}: {
+  label: ReactNode;
+  sortKey: CandidateSortKey;
+  sort: CandidateSort;
+  onSort: (key: CandidateSortKey) => void;
+}) {
+  const active = sort.key === sortKey;
+
+  return (
+    <th>
+      <button
+        className={active ? 'sort-header active' : 'sort-header'}
+        type="button"
+        onClick={() => onSort(sortKey)}
+        aria-label={`Sort by ${String(sortKey)}${
+          active ? `, currently ${sort.direction}` : ''
+        }`}
+      >
+        <span>{label}</span>
+        <span className="sort-indicator">{active ? (sort.direction === 'asc' ? '^' : 'v') : '-'}</span>
+      </button>
+    </th>
   );
 }
 
@@ -1060,6 +1130,11 @@ function scanRowsFromJob(job?: JobResponse): WatchlistRow[] | null {
   return Array.isArray(rows) ? (rows as WatchlistRow[]) : null;
 }
 
+function scanRunIdFromJob(job?: JobResponse): number | null {
+  const runId = job?.result?.scanner_run_id;
+  return typeof runId === 'number' ? runId : null;
+}
+
 function rowCountFromJob(job?: JobResponse): number | undefined {
   const analyses = job?.result?.analyses;
   return typeof analyses === 'number' ? analyses : undefined;
@@ -1091,8 +1166,7 @@ function downloadCandidatesCsv(candidates: DisplayCandidate[]) {
     'ATR',
     'Entry Area',
     'Stop',
-    'Target Exit',
-    'Hold Time'
+    'Target Exit'
   ];
   const rows = candidates.map((candidate) => [
     candidate.ticker,
@@ -1106,8 +1180,7 @@ function downloadCandidatesCsv(candidates: DisplayCandidate[]) {
     candidate.atr,
     candidate.entryArea,
     candidate.stop,
-    candidate.targetExit,
-    candidate.holdTime
+    candidate.targetExit
   ]);
   const csv = [header, ...rows].map((row) => row.map(csvCell).join(',')).join('\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });

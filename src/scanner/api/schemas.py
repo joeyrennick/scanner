@@ -38,6 +38,7 @@ class ScanRequest(BaseModel):
 
 class WatchlistPriceRefreshRequest(BaseModel):
     rows: list[dict[str, Any]]
+    run_id: int | None = None
     market_data_provider: str = settings.market_data_provider
     period: str = "5d"
     reward_risk_multiple: float = 2.0

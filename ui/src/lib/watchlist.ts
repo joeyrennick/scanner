@@ -19,6 +19,13 @@ export type DisplayCandidate = {
   holdTime: string;
 };
 
+export type CandidateSortKey = keyof Omit<DisplayCandidate, 'id'>;
+export type CandidateSortDirection = 'asc' | 'desc';
+export type CandidateSort = {
+  key: CandidateSortKey;
+  direction: CandidateSortDirection;
+};
+
 export function candidateFromWatchlistRow(
   row: WatchlistRow,
   index: number,
@@ -47,6 +54,41 @@ export function candidateFromWatchlistRow(
     holdTime:
       stringValue(row['Hold Time']) || stringValue(row['Suggested Hold Time']) || '5 trading days'
   };
+}
+
+export function sortCandidates(
+  candidates: DisplayCandidate[],
+  sort: CandidateSort
+): DisplayCandidate[] {
+  const direction = sort.direction === 'asc' ? 1 : -1;
+
+  return [...candidates].sort((left, right) => {
+    const leftValue = sortableValue(left[sort.key]);
+    const rightValue = sortableValue(right[sort.key]);
+
+    if (leftValue === undefined && rightValue === undefined) {
+      return left.ticker.localeCompare(right.ticker);
+    }
+
+    if (leftValue === undefined) {
+      return 1;
+    }
+
+    if (rightValue === undefined) {
+      return -1;
+    }
+
+    if (typeof leftValue === 'number' && typeof rightValue === 'number') {
+      return (leftValue - rightValue) * direction || left.ticker.localeCompare(right.ticker);
+    }
+
+    return (
+      String(leftValue).localeCompare(String(rightValue), undefined, {
+        numeric: true,
+        sensitivity: 'base'
+      }) * direction || left.ticker.localeCompare(right.ticker)
+    );
+  });
 }
 
 export function rowMatchesDisplaySettings(
@@ -135,6 +177,26 @@ function formatPercentLike(value: unknown): string {
 function formatCell(value: unknown): string {
   const text = stringValue(value);
   return text || 'n/a';
+}
+
+function sortableValue(value: string): number | string | undefined {
+  if (!value || value === 'n/a') {
+    return undefined;
+  }
+
+  const numeric = numericValue(value);
+
+  if (numeric !== undefined) {
+    return numeric;
+  }
+
+  const timestamp = Date.parse(value);
+
+  if (Number.isFinite(timestamp)) {
+    return timestamp;
+  }
+
+  return value;
 }
 
 function numericValue(value: unknown): number | undefined {

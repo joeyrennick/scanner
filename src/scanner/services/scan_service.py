@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 import logging
 import time
@@ -11,6 +11,7 @@ import pandas as pd
 
 from scanner.config.settings import settings
 from scanner.context import ScannerContext
+from scanner.data.scanner_results import SQLiteScannerResultStore
 from scanner.models.stock_analysis import StockAnalysis
 from scanner.services.cache_warmup import (
     CacheWarmupConfig,
@@ -64,6 +65,7 @@ class ScanResult:
     price_filter_result: PriceFilterResult | None = None
     cache_warmup_result: CacheWarmupResult | None = None
     cache_summary: str | None = None
+    scanner_run_id: int | None = None
 
 
 class ScanService:
@@ -281,6 +283,7 @@ class ScanService:
             self.logger.info("No trade candidates found.")
 
         self._write_watchlist(dataframe, config.output_file)
+        scanner_run_id = self._save_scanner_results(dataframe, config)
         self._progress(
             current_step="Writing watchlist",
             symbols_total=len(tickers),
@@ -332,6 +335,7 @@ class ScanService:
             price_filter_result=price_filter_result,
             cache_warmup_result=cache_warmup_result,
             cache_summary=cache_summary,
+            scanner_run_id=scanner_run_id,
         )
 
     def _analyze_one(
@@ -372,6 +376,22 @@ class ScanService:
         output_path = Path(output_file)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         dataframe.to_csv(output_path, index=False)
+
+    def _save_scanner_results(
+        self,
+        dataframe: pd.DataFrame,
+        config: ScanConfig,
+    ) -> int:
+        return SQLiteScannerResultStore(
+            self.context.settings.market_data_cache_path
+        ).save_scan_results(
+            dataframe,
+            universe=config.universe,
+            market_data_provider=config.market_data_provider,
+            history_period=config.history_period,
+            output_file=config.output_file,
+            settings_snapshot=asdict(config),
+        )
 
     def _progress(self, **changes) -> None:
         if self.progress_callback is not None:

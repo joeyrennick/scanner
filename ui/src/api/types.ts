@@ -69,11 +69,14 @@ export type WatchlistRow = Record<string, string | number | boolean | null>;
 export interface WatchlistResponse {
   exists: boolean;
   path: string;
+  run_id?: number | null;
+  created_at?: string | null;
   rows: WatchlistRow[];
 }
 
 export interface WatchlistPriceRefreshRequest {
   rows: WatchlistRow[];
+  run_id?: number | null;
   market_data_provider?: string;
   period?: string;
   reward_risk_multiple?: number;

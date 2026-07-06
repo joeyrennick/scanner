@@ -72,6 +72,20 @@ export interface WatchlistResponse {
   rows: WatchlistRow[];
 }
 
+export interface WatchlistPriceRefreshRequest {
+  rows: WatchlistRow[];
+  market_data_provider?: string;
+  period?: string;
+  reward_risk_multiple?: number;
+  suggested_hold_days?: number;
+}
+
+export interface WatchlistPriceRefreshResponse {
+  rows: WatchlistRow[];
+  refreshed_count: number;
+  fallback_count: number;
+}
+
 export interface StrategyMetadata {
   key: string;
   display_name: string;

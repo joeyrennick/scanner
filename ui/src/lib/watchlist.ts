@@ -25,6 +25,7 @@ export function candidateFromWatchlistRow(
   const ticker = stringValue(row.Ticker) || `ROW-${index + 1}`;
   const price = numericValue(row['Current Price']) ?? numericValue(row.Price);
   const stop = numericValue(row['Suggested Stop']) ?? numericValue(row['Stop 2ATR']);
+  const target = numericValue(row['Target/Exit']) ?? numericValue(row['Suggested Exit']);
 
   return {
     id: ticker,
@@ -37,11 +38,26 @@ export function candidateFromWatchlistRow(
     relativeStrength: formatPercentLike(row['Relative Strength']),
     relativeVolume: formatNumber(row['Relative Volume']),
     atr: formatCurrency(numericValue(row.ATR14)),
-    entryArea: formatCurrency(price),
+    entryArea: formatCurrency(numericValue(row['Entry Area']) ?? price),
     stop: formatCurrency(stop),
-    targetExit: formatCurrency(targetFromPriceAndStop(price, stop)),
-    holdTime: stringValue(row['Hold Time']) || '5 trading days'
+    targetExit: formatCurrency(target ?? targetFromPriceAndStop(price, stop)),
+    holdTime:
+      stringValue(row['Hold Time']) || stringValue(row['Suggested Hold Time']) || '5 trading days'
   };
+}
+
+export function mergeWatchlistRows(
+  rows: WatchlistRow[],
+  refreshedRows: WatchlistRow[]
+): WatchlistRow[] {
+  const refreshedByTicker = new Map(
+    refreshedRows.map((row) => [stringValue(row.Ticker).toUpperCase(), row])
+  );
+
+  return rows.map((row) => {
+    const refreshed = refreshedByTicker.get(stringValue(row.Ticker).toUpperCase());
+    return refreshed ? { ...row, ...refreshed } : row;
+  });
 }
 
 export function rowMatchesStrategy(row: WatchlistRow, strategy: string): boolean {

@@ -10,6 +10,7 @@ from typing import Any, Literal, get_args, get_origin
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 import pandas as pd
+from pandas.errors import EmptyDataError
 
 from scanner.api.jobs import jobs
 from scanner.api.schemas import (
@@ -21,12 +22,15 @@ from scanner.api.schemas import (
     ScanRequest,
     StrategyField,
     StrategyMetadata,
+    WatchlistPriceRefreshRequest,
+    WatchlistPriceRefreshResponse,
 )
 from scanner.backtesting.backtest_config import BacktestConfig
 from scanner.backtesting.backtest_service import BacktestService
 from scanner.config.settings import settings
 from scanner.context import ScannerContext
 from scanner.data.cache import SQLiteMarketDataCache
+from scanner.data.market_data import create_market_data_provider
 from scanner.services.cache_warmup import CacheWarmupConfig, CacheWarmupService
 from scanner.services.scan_service import ScanConfig, ScanService
 from scanner.strategies.strategy_registry import StrategyRegistry
@@ -104,12 +108,26 @@ def get_latest_watchlist() -> dict[str, Any]:
             "rows": [],
         }
 
-    dataframe = pd.read_csv(path)
+    try:
+        dataframe = pd.read_csv(path)
+    except EmptyDataError:
+        dataframe = pd.DataFrame()
+
     return {
         "exists": True,
         "path": str(path),
         "rows": _records_from_dataframe(dataframe),
     }
+
+
+@app.post(
+    "/api/watchlist/refresh-prices",
+    response_model=WatchlistPriceRefreshResponse,
+)
+def refresh_watchlist_prices(
+    request: WatchlistPriceRefreshRequest,
+) -> dict[str, Any]:
+    return _json_safe(_refresh_watchlist_prices(request))
 
 
 @app.post("/api/backtests", response_model=JobResponse)
@@ -176,6 +194,135 @@ def download_report(report_id: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="Report not found")
 
     return FileResponse(path, filename=path.name)
+
+
+def _refresh_watchlist_prices(
+    request: WatchlistPriceRefreshRequest,
+) -> dict[str, Any]:
+    tickers = [_string_value(row.get("Ticker")).upper() for row in request.rows]
+    tickers = [ticker for ticker in tickers if ticker]
+    provider = create_market_data_provider(
+        name=request.market_data_provider,
+        cache_enabled=False,
+    )
+    histories = provider.download_price_data_batch(
+        tickers=sorted(set(tickers)),
+        period=request.period,
+    )
+    refreshed_rows = []
+    refreshed_count = 0
+    fallback_count = 0
+
+    for row in request.rows:
+        updated = dict(row)
+        ticker = _string_value(updated.get("Ticker")).upper()
+        latest = _latest_price_from_history(histories.get(ticker, pd.DataFrame()))
+
+        if latest is None:
+            fallback_count += 1
+            price = _float_value(updated.get("Current Price")) or _float_value(
+                updated.get("Price")
+            )
+            price_as_of = _string_value(updated.get("Price As Of")) or "Cached"
+            price_source = "Cached Close"
+        else:
+            refreshed_count += 1
+            price, price_as_of = latest
+            price_source = _provider_display_name(request.market_data_provider)
+
+        if price is None:
+            updated["Price Source"] = "Unavailable"
+        else:
+            _apply_refreshed_trade_levels(
+                updated,
+                price=price,
+                price_as_of=price_as_of,
+                price_source=price_source,
+                reward_risk_multiple=request.reward_risk_multiple,
+                suggested_hold_days=request.suggested_hold_days,
+            )
+
+        refreshed_rows.append(updated)
+
+    return {
+        "rows": refreshed_rows,
+        "refreshed_count": refreshed_count,
+        "fallback_count": fallback_count,
+    }
+
+
+def _latest_price_from_history(history: pd.DataFrame) -> tuple[float, str] | None:
+    if history.empty or "Close" not in history.columns:
+        return None
+
+    close = history["Close"].dropna()
+
+    if close.empty:
+        return None
+
+    latest_timestamp = close.index[-1]
+    latest_price = close.iloc[-1].item()
+
+    return float(latest_price), str(latest_timestamp.date())
+
+
+def _apply_refreshed_trade_levels(
+    row: dict[str, Any],
+    price: float,
+    price_as_of: str,
+    price_source: str,
+    reward_risk_multiple: float,
+    suggested_hold_days: int,
+) -> None:
+    atr = _float_value(row.get("ATR14"))
+    stop = price - (2 * atr) if atr is not None else None
+
+    row["Price"] = round(price, 2)
+    row["Current Price"] = round(price, 2)
+    row["Price As Of"] = price_as_of
+    row["Price Source"] = price_source
+    row["Entry Area"] = round(price, 2)
+    row["Suggested Hold Time"] = f"{suggested_hold_days} trading days"
+
+    if stop is None:
+        return
+
+    risk_per_share = price - stop
+    target = price + (risk_per_share * reward_risk_multiple)
+    row["Stop 2ATR"] = round(stop, 2)
+    row["Suggested Stop"] = round(stop, 2)
+    row["Risk / Share"] = round(risk_per_share, 2)
+    row["Target/Exit"] = round(target, 2)
+    row["Suggested Exit"] = round(target, 2)
+
+
+def _float_value(value: Any) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value) if math.isfinite(value) else None
+
+    if not isinstance(value, str):
+        return None
+
+    try:
+        parsed = float(value.replace("$", "").replace(",", "").replace("%", ""))
+    except ValueError:
+        return None
+
+    return parsed if math.isfinite(parsed) else None
+
+
+def _string_value(value: Any) -> str:
+    if value is None:
+        return ""
+
+    return str(value)
+
+
+def _provider_display_name(provider: str) -> str:
+    if provider.lower() == "yahoo":
+        return "Yahoo"
+
+    return provider.replace("_", " ").title()
 
 
 def _run_cache_warmup(request: CacheWarmupRequest, progress) -> dict[str, Any]:

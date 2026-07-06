@@ -36,6 +36,20 @@ class ScanRequest(BaseModel):
     )
 
 
+class WatchlistPriceRefreshRequest(BaseModel):
+    rows: list[dict[str, Any]]
+    market_data_provider: str = settings.market_data_provider
+    period: str = "5d"
+    reward_risk_multiple: float = 2.0
+    suggested_hold_days: int = 5
+
+
+class WatchlistPriceRefreshResponse(BaseModel):
+    rows: list[dict[str, Any]]
+    refreshed_count: int
+    fallback_count: int
+
+
 class BacktestRequest(BaseModel):
     ticker: str | None = None
     universe: str | None = None

@@ -262,6 +262,117 @@ def test_latest_watchlist_endpoint(tmp_path, monkeypatch):
     assert response.json()["rows"] == [{"Ticker": "AAPL", "Composite Score": 88}]
 
 
+def test_latest_watchlist_endpoint_handles_empty_file(tmp_path, monkeypatch):
+    from scanner.api import app as api_app
+
+    output_file = tmp_path / "watchlist.csv"
+    output_file.write_text("")
+    monkeypatch.setattr(
+        api_app,
+        "settings",
+        replace(api_app.settings, output_file=str(output_file)),
+    )
+
+    response = client.get("/api/watchlist/latest")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "exists": True,
+        "path": str(output_file),
+        "rows": [],
+    }
+
+
+def test_refresh_watchlist_prices_recalculates_trade_levels(monkeypatch):
+    from scanner.api import app as api_app
+
+    class FakeProvider:
+        def download_price_data_batch(self, tickers, period="1y"):
+            assert tickers == ["AAPL"]
+            assert period == "5d"
+            return {
+                "AAPL": pd.DataFrame(
+                    {"Close": [210.0, 212.5]},
+                    index=pd.to_datetime(["2026-07-01", "2026-07-02"]),
+                )
+            }
+
+    monkeypatch.setattr(
+        api_app,
+        "create_market_data_provider",
+        lambda name, cache_enabled: FakeProvider(),
+    )
+
+    response = client.post(
+        "/api/watchlist/refresh-prices",
+        json={
+            "rows": [
+                {
+                    "Ticker": "AAPL",
+                    "Price": 200.0,
+                    "ATR14": 4.0,
+                    "Stop 2ATR": 192.0,
+                }
+            ],
+            "market_data_provider": "yahoo",
+            "period": "5d",
+            "reward_risk_multiple": 2.0,
+            "suggested_hold_days": 5,
+        },
+    )
+
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["refreshed_count"] == 1
+    assert payload["fallback_count"] == 0
+    assert payload["rows"][0] == {
+        "Ticker": "AAPL",
+        "Price": 212.5,
+        "ATR14": 4.0,
+        "Stop 2ATR": 204.5,
+        "Current Price": 212.5,
+        "Price As Of": "2026-07-02",
+        "Price Source": "Yahoo",
+        "Entry Area": 212.5,
+        "Suggested Hold Time": "5 trading days",
+        "Suggested Stop": 204.5,
+        "Risk / Share": 8.0,
+        "Target/Exit": 228.5,
+        "Suggested Exit": 228.5,
+    }
+
+
+def test_refresh_watchlist_prices_falls_back_to_cached_close(monkeypatch):
+    from scanner.api import app as api_app
+
+    class FakeProvider:
+        def download_price_data_batch(self, tickers, period="1y"):
+            return {"AAPL": pd.DataFrame()}
+
+    monkeypatch.setattr(
+        api_app,
+        "create_market_data_provider",
+        lambda name, cache_enabled: FakeProvider(),
+    )
+
+    response = client.post(
+        "/api/watchlist/refresh-prices",
+        json={
+            "rows": [{"Ticker": "AAPL", "Price": 200.0, "ATR14": 4.0}],
+            "market_data_provider": "yahoo",
+        },
+    )
+
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["refreshed_count"] == 0
+    assert payload["fallback_count"] == 1
+    assert payload["rows"][0]["Current Price"] == 200.0
+    assert payload["rows"][0]["Price Source"] == "Cached Close"
+
+
 def test_reports_endpoint_lists_output_files(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     output_dir = Path("output")

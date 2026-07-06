@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   Activity,
@@ -22,12 +22,13 @@ import {
 import { Link, Navigate, NavLink, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 import { useCacheOverview, useStartCacheWarmup } from './api/cache';
 import { useJob } from './api/jobs';
-import { useLatestWatchlist, useStartScan } from './api/scans';
+import { useLatestWatchlist, useRefreshWatchlistPrices, useStartScan } from './api/scans';
 import { useStrategies } from './api/strategies';
 import type { CacheWarmupRequest, JobResponse, ScanRequest, WatchlistRow } from './api/types';
 import { formatDuration, formatNumber, isJobActive, progressPercent } from './lib/progress';
 import {
   candidateFromWatchlistRow,
+  mergeWatchlistRows,
   rowMatchesStrategy,
   type DisplayCandidate
 } from './lib/watchlist';
@@ -189,7 +190,9 @@ function DailyScannerPage() {
   const strategies = useStrategies();
   const latestWatchlist = useLatestWatchlist();
   const startScan = useStartScan();
+  const refreshPrices = useRefreshWatchlistPrices();
   const [jobId, setJobId] = useState<string | null>(null);
+  const autoRefreshedJobId = useRef<string | null>(null);
   const jobQuery = useJob(jobId);
   const job = jobQuery.data;
   const activeJob = isJobActive(job);
@@ -205,11 +208,13 @@ function DailyScannerPage() {
     cache_warmup_max_provider_batches: 10,
     cache_warmup_batch_delay_ms: 500
   });
+  const [refreshedRows, setRefreshedRows] = useState<WatchlistRow[] | null>(null);
 
-  const rawRows = useMemo(() => scanRowsFromJob(job) ?? latestWatchlist.data?.rows ?? [], [
+  const baseRows = useMemo(() => scanRowsFromJob(job) ?? latestWatchlist.data?.rows ?? [], [
     job,
     latestWatchlist.data?.rows
   ]);
+  const rawRows = refreshedRows ?? baseRows;
   const filteredRows = useMemo(
     () => rawRows.filter((row) => rowMatchesStrategy(row, selectedStrategy)),
     [rawRows, selectedStrategy]
@@ -228,14 +233,54 @@ function DailyScannerPage() {
   const activeStrategies = strategies.data?.filter((strategy) => strategy.category === 'entry') ?? [];
   const anyCachedPrice = candidates.some((candidate) => candidate.priceSource === 'Cached Close');
 
+  useEffect(() => {
+    setRefreshedRows(null);
+  }, [job?.job_id, latestWatchlist.data?.path]);
+
+  useEffect(() => {
+    const jobRows = scanRowsFromJob(job);
+
+    if (
+      !job?.job_id ||
+      job.status !== 'complete' ||
+      !jobRows ||
+      jobRows.length === 0 ||
+      autoRefreshedJobId.current === job.job_id
+    ) {
+      return;
+    }
+
+    autoRefreshedJobId.current = job.job_id;
+    void refreshVisiblePrices(jobRows.filter((row) => rowMatchesStrategy(row, selectedStrategy)));
+  }, [job, selectedStrategy]);
+
   async function submitScan() {
     setSelectedTickers(new Set());
+    setRefreshedRows(null);
     const response = await startScan.mutateAsync({
       ...form,
       min_price: emptyNumberToNull(form.min_price),
       max_price: emptyNumberToNull(form.max_price)
     });
     setJobId(response.job_id);
+  }
+
+  async function refreshVisiblePrices(rowsToRefresh = filteredRows) {
+    if (rowsToRefresh.length === 0) {
+      return;
+    }
+
+    const response = await refreshPrices.mutateAsync({
+      rows: rowsToRefresh,
+      market_data_provider: form.market_data_provider ?? 'yahoo',
+      period: '5d',
+      reward_risk_multiple: 2,
+      suggested_hold_days: 5
+    });
+    setRefreshedRows((current) => {
+      const rows = current ?? baseRows;
+      return mergeWatchlistRows(rows, response.rows);
+    });
   }
 
   function toggleTicker(ticker: string) {
@@ -500,6 +545,18 @@ function DailyScannerPage() {
           <div className="button-row inline-actions">
             <button
               className="secondary-button"
+              onClick={() => void refreshVisiblePrices()}
+              disabled={candidates.length === 0 || refreshPrices.isPending}
+            >
+              {refreshPrices.isPending ? (
+                <LoaderCircle className="spin" size={18} />
+              ) : (
+                <RefreshCw size={18} />
+              )}
+              Refresh Prices
+            </button>
+            <button
+              className="secondary-button"
               onClick={exportCsv}
               disabled={candidates.length === 0}
               title={`Export ${exportScope} candidates`}
@@ -517,6 +574,13 @@ function DailyScannerPage() {
             </button>
           </div>
         </div>
+
+        {refreshPrices.isError && (
+          <div className="alert alert-danger">
+            <AlertTriangle size={18} />
+            <span>{refreshPrices.error.message}</span>
+          </div>
+        )}
 
         <div className="selection-strip">
           <span>{selectedCount > 0 ? `${selectedCount} selected` : 'No rows selected'}</span>

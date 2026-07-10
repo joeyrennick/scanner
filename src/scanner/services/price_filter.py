@@ -5,6 +5,7 @@ from datetime import date
 import logging
 import math
 import time
+from typing import Callable
 
 import pandas as pd
 
@@ -40,6 +41,7 @@ class PriceFilterResult:
     provider_batches_allowed: int | None = None
     provider_batches_attempted: int = 0
     stopped_for_rate_limit: bool = False
+    cancelled: bool = False
 
     @property
     def checked_count(self) -> int:
@@ -68,6 +70,7 @@ def filter_tickers_by_price(
     batch_delay_seconds: float | None = None,
     max_provider_batches: int | None = None,
     logger: logging.Logger | None = None,
+    cancel_checker: Callable[[], bool] | None = None,
 ) -> PriceFilterResult:
     if min_price is None and max_price is None:
         return PriceFilterResult(
@@ -160,7 +163,9 @@ def filter_tickers_by_price(
     provider_calls_attempted = 0
     provider_batches_attempted = 0
     stopped_for_rate_limit = False
+    cancelled = False
     started_at = time.perf_counter()
+    should_cancel = cancel_checker or (lambda: False)
 
     if logger and provider_batches:
         estimated_seconds = _format_seconds(
@@ -174,6 +179,10 @@ def filter_tickers_by_price(
         )
 
     for batch_number, batch in enumerate(provider_batches, start=1):
+        if should_cancel():
+            cancelled = True
+            break
+
         provider_calls_attempted += len(batch)
         provider_batches_attempted += 1
 
@@ -234,6 +243,19 @@ def filter_tickers_by_price(
         if batch_number < len(provider_batches) and resolved_delay_seconds > 0:
             time.sleep(resolved_delay_seconds)
 
+    if cancelled:
+        for ticker in provider_tickers_to_fetch:
+            if ticker in decisions_by_ticker:
+                continue
+
+            decisions_by_ticker[ticker] = _not_checked(
+                ticker,
+                "Cancelled",
+            )
+
+        if logger:
+            logger.info("Price filter cancelled before completing provider fetches.")
+
     if stopped_for_rate_limit:
         for ticker in provider_tickers_to_fetch:
             if ticker in decisions_by_ticker:
@@ -265,6 +287,7 @@ def filter_tickers_by_price(
         provider_batches_allowed=batch_limit,
         provider_batches_attempted=provider_batches_attempted,
         stopped_for_rate_limit=stopped_for_rate_limit,
+        cancelled=cancelled,
     )
 
 

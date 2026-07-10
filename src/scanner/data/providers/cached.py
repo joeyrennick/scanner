@@ -68,11 +68,10 @@ class CachedMarketDataProvider(MarketDataProvider):
             end_date=None,
             auto_adjust=True,
         )
-        cached_history = self.cache.load_history(
-            provider=self.name,
+        cached_history = self._load_cached_history(
             ticker=ticker,
             interval=interval,
-            start_date=start_date,
+            request=request,
         )
 
         if not self.force_refresh and self._can_use_cache(cached_history, request):
@@ -120,6 +119,15 @@ class CachedMarketDataProvider(MarketDataProvider):
             interval=interval,
             start_date=start_date,
         )
+
+        if refreshed_history.empty and rows_stored > 0:
+            refreshed_history = self.cache.load_history(
+                provider=self.name,
+                ticker=ticker,
+                interval=interval,
+                start_date=None,
+            )
+
         return refreshed_history if not refreshed_history.empty else fetched_history
 
     def download_price_data_batch(
@@ -146,11 +154,10 @@ class CachedMarketDataProvider(MarketDataProvider):
                 end_date=None,
                 auto_adjust=True,
             )
-            cached_history = self.cache.load_history(
-                provider=self.name,
+            cached_history = self._load_cached_history(
                 ticker=ticker,
                 interval=interval,
-                start_date=start_date,
+                request=request,
             )
 
             if not self.force_refresh and self._can_use_cache(cached_history, request):
@@ -205,6 +212,15 @@ class CachedMarketDataProvider(MarketDataProvider):
                     interval=interval,
                     start_date=start_date,
                 )
+
+                if refreshed_history.empty and rows_stored > 0:
+                    refreshed_history = self.cache.load_history(
+                        provider=self.name,
+                        ticker=ticker,
+                        interval=interval,
+                        start_date=None,
+                    )
+
                 results[ticker] = (
                     refreshed_history
                     if not refreshed_history.empty
@@ -226,11 +242,10 @@ class CachedMarketDataProvider(MarketDataProvider):
             end_date=None,
             auto_adjust=True,
         )
-        cached_history = self.cache.load_history(
-            provider=self.name,
+        cached_history = self._load_cached_history(
             ticker=ticker,
             interval=interval,
-            start_date=start_date,
+            request=request,
         )
 
         fetch_period = self._refresh_period(
@@ -295,6 +310,37 @@ class CachedMarketDataProvider(MarketDataProvider):
         self.stats.rows_fetched_from_provider += len(history)
         return history
 
+    def _load_cached_history(
+        self,
+        ticker: str,
+        interval: str,
+        request: CacheFetchRequest,
+    ) -> pd.DataFrame:
+        cached_history = self.cache.load_history(
+            provider=self.name,
+            ticker=ticker,
+            interval=interval,
+            start_date=request.start_date,
+        )
+
+        if not cached_history.empty or request.start_date is None:
+            return cached_history
+
+        rows_returned = self.cache.successful_fetch_rows_today(
+            request=request,
+            today=self.now().date(),
+        )
+
+        if rows_returned is None or rows_returned <= 0:
+            return cached_history
+
+        return self.cache.load_history(
+            provider=self.name,
+            ticker=ticker,
+            interval=interval,
+            start_date=None,
+        )
+
     def _fetch_batch_from_provider(
         self,
         tickers: list[str],
@@ -303,7 +349,12 @@ class CachedMarketDataProvider(MarketDataProvider):
         if not tickers:
             return {}
 
-        self.stats.provider_calls += 1
+        provider_call_count_for_batch = getattr(
+            self.provider,
+            "provider_call_count_for_batch",
+            lambda batch_tickers: 1 if batch_tickers else 0,
+        )
+        self.stats.provider_calls += provider_call_count_for_batch(tickers)
         histories = self.provider.download_price_data_batch(
             tickers=tickers,
             period=period,

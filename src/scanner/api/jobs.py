@@ -10,6 +10,11 @@ from uuid import uuid4
 
 JobStatus = str
 ProgressUpdater = Callable[..., None]
+CancelChecker = Callable[[], bool]
+
+
+class JobCancelled(Exception):
+    pass
 
 
 @dataclass
@@ -65,6 +70,7 @@ class JobRecord:
     result: dict[str, Any] | None = None
     error: str | None = None
     progress: JobProgress = field(default_factory=JobProgress)
+    cancel_requested: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         progress = self.progress.to_dict()
@@ -81,6 +87,7 @@ class JobRecord:
             "message": self.message,
             "result": self.result,
             "error": self.error,
+            "cancel_requested": self.cancel_requested,
             "progress": progress,
             **progress,
         }
@@ -95,7 +102,7 @@ class JobRegistry:
     def start(
         self,
         job_type: str,
-        work: Callable[[ProgressUpdater], dict[str, Any]],
+        work: Callable[[ProgressUpdater, CancelChecker], dict[str, Any]],
     ) -> JobRecord:
         job = JobRecord(job_id=str(uuid4()), job_type=job_type)
 
@@ -109,10 +116,23 @@ class JobRegistry:
         with self._lock:
             return self._jobs.get(job_id)
 
+    def cancel(self, job_id: str) -> JobRecord | None:
+        with self._lock:
+            job = self._jobs.get(job_id)
+
+            if job is None:
+                return None
+
+            if job.status in {"queued", "running"}:
+                job.cancel_requested = True
+                job.message = "Cancellation requested"
+
+            return job
+
     def _run(
         self,
         job_id: str,
-        work: Callable[[ProgressUpdater], dict[str, Any]],
+        work: Callable[[ProgressUpdater, CancelChecker], dict[str, Any]],
     ) -> None:
         self._update(
             job_id,
@@ -122,7 +142,19 @@ class JobRegistry:
         )
 
         try:
-            result = work(lambda **changes: self.update_progress(job_id, **changes))
+            result = work(
+                lambda **changes: self.update_progress(job_id, **changes),
+                lambda: self.is_cancel_requested(job_id),
+            )
+        except JobCancelled:
+            self._update(
+                job_id,
+                status="stopped",
+                finished_at=datetime.now(UTC),
+                message="Cancelled",
+                result={"cancelled": True},
+            )
+            return
         except Exception as error:
             self._update(
                 job_id,
@@ -133,7 +165,8 @@ class JobRegistry:
             )
             return
 
-        status = "stopped" if result.get("stopped_for_rate_limit") else "complete"
+        cancelled = result.get("cancelled") or self.is_cancel_requested(job_id)
+        status = "stopped" if result.get("stopped_for_rate_limit") or cancelled else "complete"
         output_paths = result.get("output_paths")
         if isinstance(output_paths, dict):
             self.update_progress(job_id, output_paths=output_paths)
@@ -141,9 +174,14 @@ class JobRegistry:
             job_id,
             status=status,
             finished_at=datetime.now(UTC),
-            message="Stopped" if status == "stopped" else "Complete",
+            message="Cancelled" if cancelled else ("Stopped" if status == "stopped" else "Complete"),
             result=result,
         )
+
+    def is_cancel_requested(self, job_id: str) -> bool:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            return bool(job and job.cancel_requested)
 
     def update_progress(self, job_id: str, **changes: Any) -> None:
         message = changes.pop("message", None)

@@ -12,6 +12,7 @@ from scanner.data.cache import CacheOverview, SQLiteMarketDataCache
 from scanner.data.providers import (
     AlphaVantageMarketDataProvider,
     CachedMarketDataProvider,
+    MassiveMarketDataProvider,
     MarketDataProvider,
     YahooMarketDataProvider,
 )
@@ -45,6 +46,8 @@ _CACHE_REFRESH_OVERLAP_DAYS = settings.market_data_refresh_overlap_days
 _PROVIDER_FACTORIES: dict[str, Callable[[], MarketDataProvider]] = {
     "yahoo": YahooMarketDataProvider,
     "alpha_vantage": AlphaVantageMarketDataProvider,
+    "massive": MassiveMarketDataProvider,
+    "polygon": lambda: MassiveMarketDataProvider(provider_name="polygon"),
 }
 
 
@@ -67,6 +70,10 @@ def configure_market_data_provider(name: str) -> None:
 
     global _ACTIVE_PROVIDER_NAME
     _ACTIVE_PROVIDER_NAME = normalized
+    _get_market_data_provider.cache_clear()
+
+
+def clear_market_data_provider_cache() -> None:
     _get_market_data_provider.cache_clear()
 
 

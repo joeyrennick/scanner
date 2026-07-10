@@ -19,3 +19,6 @@ class MarketDataProvider(ABC):
             ticker: self.download_price_data(ticker=ticker, period=period)
             for ticker in tickers
         }
+
+    def provider_call_count_for_batch(self, tickers: list[str]) -> int:
+        return len(tickers)

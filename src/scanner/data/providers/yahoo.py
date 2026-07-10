@@ -50,6 +50,9 @@ class YahooMarketDataProvider(MarketDataProvider):
 
         return _split_batch_history(history, normalized_tickers)
 
+    def provider_call_count_for_batch(self, tickers: list[str]) -> int:
+        return 1 if tickers else 0
+
 
 def _split_batch_history(
     history: pd.DataFrame,

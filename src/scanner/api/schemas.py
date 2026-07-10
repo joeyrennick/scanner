@@ -51,6 +51,33 @@ class WatchlistPriceRefreshResponse(BaseModel):
     fallback_count: int
 
 
+class MarketDataCredentialRequest(BaseModel):
+    api_key: str = Field(min_length=1)
+
+
+class MarketDataCredentialStatus(BaseModel):
+    provider: str
+    configured: bool
+    source: str | None = None
+    updated_at: str | None = None
+
+
+class MarketDataHistoryPoint(BaseModel):
+    date: str
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
+    close: float
+    volume: float | None = None
+
+
+class MarketDataHistoryResponse(BaseModel):
+    ticker: str
+    provider: str
+    period: str
+    rows: list[MarketDataHistoryPoint]
+
+
 class CandidateTradeLevelsRequest(BaseModel):
     run_id: int | None = None
     entry_area: float | None = None
@@ -115,6 +142,7 @@ class JobResponse(BaseModel):
     message: str = ""
     result: dict[str, Any] | None = None
     error: str | None = None
+    cancel_requested: bool = False
     progress: dict[str, Any]
     current_step: str | None = None
     total_steps: int | None = None

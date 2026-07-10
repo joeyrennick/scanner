@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -19,6 +19,7 @@ import {
   Save,
   Settings,
   ShieldCheck,
+  Square,
   Trash2
 } from 'lucide-react';
 import {
@@ -33,20 +34,27 @@ import {
 } from 'react-router-dom';
 import { useCacheOverview, useStartCacheWarmup } from './api/cache';
 import { useStartBacktest } from './api/backtests';
-import { useJob } from './api/jobs';
+import { useCancelJob, useJob } from './api/jobs';
 import { useStartPortfolioSimulation } from './api/portfolio';
 import { useGenerateDailyScannerReport, useReports } from './api/reports';
 import {
   useLatestWatchlist,
+  useMarketDataHistory,
   useRefreshWatchlistPrices,
   useStartScan,
   useUpdateCandidateTradeLevels
 } from './api/scans';
+import {
+  useDeleteMassiveCredential,
+  useMassiveCredentialStatus,
+  useSaveMassiveCredential
+} from './api/settings';
 import { useStrategies } from './api/strategies';
 import type {
   BacktestRequest,
   CacheWarmupRequest,
   JobResponse,
+  MarketDataHistoryPoint,
   PortfolioSimulationRequest,
   ReportMetadata,
   ScanRequest,
@@ -223,9 +231,14 @@ function DailyScannerPage() {
   const strategies = useStrategies();
   const latestWatchlist = useLatestWatchlist();
   const startScan = useStartScan();
+  const cancelJob = useCancelJob();
   const refreshPrices = useRefreshWatchlistPrices();
   const generateDailyReport = useGenerateDailyScannerReport();
   const [displaySettings] = useScannerDisplaySettings();
+  const [marketDataSettings] = useLocalStorage<MarketDataSettings>(
+    'swing-scanner.market-data-settings',
+    defaultMarketDataSettings
+  );
   const [jobId, setJobId] = useState<string | null>(null);
   const autoRefreshedJobId = useRef<string | null>(null);
   const jobQuery = useJob(jobId);
@@ -329,10 +342,19 @@ function DailyScannerPage() {
     setRefreshedRows(null);
     const response = await startScan.mutateAsync({
       ...form,
+      market_data_provider: marketDataSettings.primaryProvider,
       min_price: emptyNumberToNull(form.min_price),
       max_price: emptyNumberToNull(form.max_price)
     });
     setJobId(response.job_id);
+  }
+
+  async function cancelScan() {
+    if (!jobId) {
+      return;
+    }
+
+    await cancelJob.mutateAsync(jobId);
   }
 
   async function refreshVisiblePrices(rowsToRefresh = filteredRows) {
@@ -343,7 +365,7 @@ function DailyScannerPage() {
     const response = await refreshPrices.mutateAsync({
       rows: rowsToRefresh,
       run_id: currentRunId,
-      market_data_provider: form.market_data_provider ?? 'yahoo',
+      market_data_provider: marketDataSettings.primaryProvider,
       period: '5d',
       reward_risk_multiple: 2,
       suggested_hold_days: 5
@@ -598,12 +620,28 @@ function DailyScannerPage() {
             {activeJob ? <LoaderCircle className="spin" size={18} /> : <Play size={18} />}
             Run Scan
           </button>
+          {activeJob && (
+            <button
+              className="secondary-button danger-button"
+              onClick={() => void cancelScan()}
+              disabled={cancelJob.isPending || job?.cancel_requested}
+            >
+              <Square size={18} />
+              {job?.cancel_requested ? 'Stopping...' : 'Stop Scan'}
+            </button>
+          )}
         </div>
 
         {startScan.isError && (
           <div className="alert alert-danger">
             <AlertTriangle size={18} />
             <span>{startScan.error.message}</span>
+          </div>
+        )}
+        {cancelJob.isError && (
+          <div className="alert alert-danger">
+            <AlertTriangle size={18} />
+            <span>{cancelJob.error.message}</span>
           </div>
         )}
       </section>
@@ -863,6 +901,10 @@ function CandidatesPage() {
   const latestWatchlist = useLatestWatchlist();
   const cacheOverview = useCacheOverview();
   const [displaySettings] = useScannerDisplaySettings();
+  const [marketDataSettings] = useLocalStorage<MarketDataSettings>(
+    'swing-scanner.market-data-settings',
+    defaultMarketDataSettings
+  );
   const updateTradeLevels = useUpdateCandidateTradeLevels();
   const rows = latestWatchlist.data?.rows ?? [];
   const filteredRows = useMemo(
@@ -876,33 +918,126 @@ function CandidatesPage() {
       ),
     [cacheOverview.data?.latest_bar_date, filteredRows]
   );
-  const [selectedTicker, setSelectedTicker] = useState<string | null>(
+  const [selectedTicker, setSelectedTicker] = useLocalStorage<string | null>(
+    'swing-scanner.candidates.selected-ticker',
     candidateState?.ticker ?? null
   );
+  useEffect(() => {
+    if (candidateState?.ticker) {
+      setSelectedTicker(candidateState.ticker);
+    }
+  }, [candidateState?.ticker, setSelectedTicker]);
   const selected = candidates.find((candidate) => candidate.ticker === selectedTicker) ?? candidates[0];
-  const [edits, setEdits] = useState<Record<string, CandidateTradeEdits>>({});
+  const historyQuery = useMarketDataHistory(
+    selected?.ticker ?? null,
+    marketDataSettings.primaryProvider,
+    '1y'
+  );
+  const [edits, setEdits] = useLocalStorage<Record<string, CandidateTradeEdits>>(
+    'swing-scanner.candidates.chart-state',
+    {}
+  );
   const selectedEdits = selected ? edits[selected.ticker] : undefined;
   const entry = selectedEdits?.entry ?? selected?.entryArea ?? 'n/a';
   const stop = selectedEdits?.stop ?? selected?.stop ?? 'n/a';
   const target = selectedEdits?.target ?? selected?.targetExit ?? 'n/a';
   const chartHeight = selectedEdits?.chartHeight ?? 300;
+  const chartZoom = selectedEdits?.chartZoom ?? 1;
+  const chartPanBars = selectedEdits?.chartPanBars ?? 0;
+  const chartPricePan = selectedEdits?.chartPricePan ?? 0;
+  const maximizedChartHeight = selectedEdits?.maximizedChartHeight;
+  const maximizedChartWidth = selectedEdits?.maximizedChartWidth;
+  const [detailPanelWidth, setDetailPanelWidth] = useLocalStorage<number>(
+    'swing-scanner.candidates.detail-panel-width',
+    520
+  );
+  const previousChartHeight = selectedEdits?.previousChartHeight;
+  const chartMaximized = Boolean(previousChartHeight);
 
   function updateSelected(changes: Partial<CandidateTradeEdits>) {
     if (!selected) {
       return;
     }
 
+    const defaults: CandidateTradeEdits = {
+      entry: selected.entryArea,
+      stop: selected.stop,
+      target: selected.targetExit,
+      chartHeight,
+      chartPanBars,
+      chartPricePan,
+      maximizedChartHeight,
+      maximizedChartWidth
+    };
+
     setEdits((current) => ({
       ...current,
       [selected.ticker]: {
+        ...defaults,
         ...current[selected.ticker],
-        entry: selected.entryArea,
-        stop: selected.stop,
-        target: selected.targetExit,
-        chartHeight,
         ...changes
       }
     }));
+  }
+
+  function updateChartLevel(level: ChartLevelKey, value: number) {
+    const roundedValue = value.toFixed(2);
+
+    if (level === 'entry') {
+      const currentEntry = parseDisplayNumber(entry);
+      const currentStop = parseDisplayNumber(stop);
+      const currentTarget = parseDisplayNumber(target);
+      const delta = currentEntry === null ? 0 : value - currentEntry;
+
+      updateSelected({
+        entry: roundedValue,
+        stop: currentStop === null ? stop : (currentStop + delta).toFixed(2),
+        target: currentTarget === null ? target : (currentTarget + delta).toFixed(2)
+      });
+      return;
+    }
+
+    if (level === 'stop') {
+      updateSelected({ stop: roundedValue });
+      return;
+    }
+
+    updateSelected({ target: roundedValue });
+  }
+
+  function startDetailResize(event: ReactPointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = detailPanelWidth;
+
+    function handleMove(moveEvent: PointerEvent) {
+      const nextWidth = Math.min(Math.max(startWidth - (moveEvent.clientX - startX), 420), 900);
+      setDetailPanelWidth(nextWidth);
+    }
+
+    function handleUp() {
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+    }
+
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+  }
+
+  function toggleChartMaximize() {
+    if (chartMaximized) {
+      updateSelected({
+        chartHeight: previousChartHeight ?? chartHeight,
+        previousChartHeight: undefined
+      });
+      return;
+    }
+
+    updateSelected({
+      previousChartHeight: chartHeight,
+      maximizedChartHeight: maximizedChartHeight ?? viewportChartHeight(),
+      maximizedChartWidth: maximizedChartWidth ?? viewportChartWidth()
+    });
   }
 
   function resetSelected() {
@@ -936,7 +1071,6 @@ function CandidatesPage() {
         reset: false
       }
     });
-    resetSelected();
   }
 
   async function resetPersistedSelected() {
@@ -954,86 +1088,107 @@ function CandidatesPage() {
     resetSelected();
   }
 
+  const layoutStyle = {
+    '--candidate-detail-width': `${detailPanelWidth}px`
+  } as CSSProperties;
+  const selectedChart = selected ? (
+    <CandidateDailyBarChart
+      height={chartHeight}
+      zoom={chartZoom}
+      history={historyQuery.data?.rows ?? []}
+      loading={historyQuery.isLoading || historyQuery.isFetching}
+      error={historyQuery.error?.message}
+      entry={entry}
+      stop={stop}
+      target={target}
+      onLevelChange={updateChartLevel}
+      onZoomChange={(zoom) => updateSelected({ chartZoom: zoom })}
+      panBars={chartPanBars}
+      pricePan={chartPricePan}
+      onPanChange={(pan) => updateSelected(pan)}
+      maximized={chartMaximized}
+      onToggleMaximize={toggleChartMaximize}
+      onHeightChange={(height) => updateSelected({ chartHeight: height })}
+      width={detailPanelWidth}
+      onWidthChange={setDetailPanelWidth}
+      maximizedHeight={maximizedChartHeight}
+      maximizedWidth={maximizedChartWidth}
+      onMaximizedSizeChange={(changes) => updateSelected(changes)}
+    />
+  ) : null;
+
   return (
-    <div className="content-grid candidate-layout">
-      <section className="panel" aria-labelledby="candidate-list-title">
-        <div className="panel-header">
-          <div>
-            <h2 id="candidate-list-title">Candidates</h2>
-            <p>
-              {candidates.length} scanner-filtered candidates from {rows.length} saved rows
-            </p>
-          </div>
-        </div>
-
-        <div className="table-wrap compact-table">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Ticker</th>
-                <th>Strategy</th>
-                <th>Score</th>
-                <th>Price</th>
-                <th>Entry</th>
-                <th>Stop</th>
-              </tr>
-            </thead>
-            <tbody>
-              {candidates.map((candidate) => (
-                <tr
-                  key={candidate.ticker}
-                  className={candidate.ticker === selected?.ticker ? 'selected-row' : ''}
-                  onClick={() => setSelectedTicker(candidate.ticker)}
-                >
-                  <td className="ticker-cell">{candidate.ticker}</td>
-                  <td>{candidate.strategy}</td>
-                  <td>{candidate.score}</td>
-                  <td>{candidate.currentPrice}</td>
-                  <td>{candidate.entryArea}</td>
-                  <td>{candidate.stop}</td>
-                </tr>
-              ))}
-              {candidates.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="empty-cell">
-                    No scanner candidates available.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section className="panel" aria-labelledby="candidate-detail-title">
-        <div className="panel-header">
-          <div>
-            <h2 id="candidate-detail-title">{selected?.ticker ?? 'Candidate Detail'}</h2>
-            <p>{selected?.strategy ?? 'Select a candidate'}</p>
-          </div>
-        </div>
-
-        {selected ? (
-          <div className="detail-stack">
-            <div className="candidate-chart" style={{ minHeight: chartHeight }}>
-              <div className="chart-gridline top" />
-              <div className="chart-gridline middle" />
-              <div className="chart-gridline bottom" />
-              <TradeLevel label="Target" value={target} top="22%" />
-              <TradeLevel label="Entry" value={entry} top="48%" />
-              <TradeLevel label="Stop" value={stop} top="70%" danger />
+    <>
+      <div className="content-grid candidate-layout" style={layoutStyle}>
+        <section className="panel" aria-labelledby="candidate-list-title">
+          <div className="panel-header">
+            <div>
+              <h2 id="candidate-list-title">Candidates</h2>
+              <p>
+                {candidates.length} scanner-filtered candidates from {rows.length} saved rows
+              </p>
             </div>
-            <label>
-              Chart Height
-              <input
-                type="range"
-                min="240"
-                max="520"
-                value={chartHeight}
-                onChange={(event) => updateSelected({ chartHeight: Number(event.target.value) })}
-              />
-            </label>
+          </div>
 
+          <div className="table-wrap compact-table">
+            <table className="data-table candidate-table">
+              <thead>
+                <tr>
+                  <th>Ticker</th>
+                  <th>Strategy</th>
+                  <th>Score</th>
+                  <th>Price</th>
+                  <th>Entry</th>
+                  <th>Stop</th>
+                  <th>Target</th>
+                </tr>
+              </thead>
+              <tbody>
+                {candidates.map((candidate) => (
+                  <tr
+                    key={candidate.ticker}
+                    className={candidate.ticker === selected?.ticker ? 'selected-row' : ''}
+                    onClick={() => setSelectedTicker(candidate.ticker)}
+                  >
+                    <td className="ticker-cell">{candidate.ticker}</td>
+                    <td>{candidate.strategy}</td>
+                    <td>{candidate.score}</td>
+                    <td>{candidate.currentPrice}</td>
+                    <td>{candidate.entryArea}</td>
+                    <td>{candidate.stop}</td>
+                    <td>{candidate.targetExit}</td>
+                  </tr>
+                ))}
+                {candidates.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="empty-cell">
+                      No scanner candidates available.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <div
+          className="candidate-panel-resizer"
+          role="separator"
+          aria-label="Resize candidate detail panel"
+          onPointerDown={startDetailResize}
+        />
+
+        <section className="panel" aria-labelledby="candidate-detail-title">
+          <div className="panel-header">
+            <div>
+              <h2 id="candidate-detail-title">{selected?.ticker ?? 'Candidate Detail'}</h2>
+              <p>{selected?.strategy ?? 'Select a candidate'}</p>
+            </div>
+          </div>
+
+          {selected ? (
+            <div className="detail-stack">
+              {!chartMaximized && selectedChart}
             <div className="checklist-panel">
               <div className="panel-header compact-header">
                 <div>
@@ -1098,8 +1253,14 @@ function CandidatesPage() {
         ) : (
           <p className="muted-text">Run the daily scanner to create candidates.</p>
         )}
-      </section>
-    </div>
+        </section>
+      </div>
+      {selected && chartMaximized && (
+        <div className="chart-maximized-shell" role="dialog" aria-label={`${selected.ticker} maximized chart`}>
+          {selectedChart}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1724,6 +1885,10 @@ function ReportsPage() {
 function CacheWarmupPage() {
   const cacheOverview = useCacheOverview();
   const startWarmup = useStartCacheWarmup();
+  const [marketDataSettings] = useLocalStorage<MarketDataSettings>(
+    'swing-scanner.market-data-settings',
+    defaultMarketDataSettings
+  );
   const [jobId, setJobId] = useState<string | null>(null);
   const jobQuery = useJob(jobId);
   const job = jobQuery.data;
@@ -1743,6 +1908,7 @@ function CacheWarmupPage() {
   async function submitWarmup(cacheOnlyPreview: boolean) {
     const response = await startWarmup.mutateAsync({
       ...form,
+      market_data_provider: marketDataSettings.primaryProvider,
       cache_only_preview: cacheOnlyPreview
     });
     setJobId(response.job_id);
@@ -1916,19 +2082,534 @@ function SortableHeader({
   );
 }
 
+function viewportChartHeight() {
+  if (typeof window === 'undefined') {
+    return 640;
+  }
+
+  return Math.max(360, window.innerHeight - 48);
+}
+
+function viewportChartWidth() {
+  if (typeof window === 'undefined') {
+    return 900;
+  }
+
+  const sidebarWidth = window.matchMedia('(max-width: 900px)').matches ? 0 : 232;
+  return Math.max(420, window.innerWidth - sidebarWidth - 48);
+}
+
+function formatChartDay(value: string) {
+  const date = new Date(`${value}T00:00:00`);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric'
+  }).format(date);
+}
+
+function CandidateDailyBarChart({
+  history,
+  height,
+  zoom,
+  loading,
+  error,
+  entry,
+  stop,
+  target,
+  onLevelChange,
+  onZoomChange,
+  panBars,
+  pricePan,
+  onPanChange,
+  maximized,
+  onToggleMaximize,
+  onHeightChange,
+  width,
+  onWidthChange,
+  maximizedHeight,
+  maximizedWidth,
+  onMaximizedSizeChange
+}: {
+  history: MarketDataHistoryPoint[];
+  height: number;
+  zoom: number;
+  loading: boolean;
+  error?: string;
+  entry: string;
+  stop: string;
+  target: string;
+  onLevelChange: (level: ChartLevelKey, value: number) => void;
+  onZoomChange: (zoom: number) => void;
+  panBars: number;
+  pricePan: number;
+  onPanChange: (pan: Partial<Pick<CandidateTradeEdits, 'chartPanBars' | 'chartPricePan'>>) => void;
+  maximized: boolean;
+  onToggleMaximize: () => void;
+  onHeightChange?: (height: number) => void;
+  width?: number;
+  onWidthChange?: (width: number) => void;
+  maximizedHeight?: number;
+  maximizedWidth?: number;
+  onMaximizedSizeChange?: (changes: Partial<Pick<CandidateTradeEdits, 'maximizedChartHeight' | 'maximizedChartWidth'>>) => void;
+}) {
+  const chartRef = useRef<HTMLDivElement | null>(null);
+  const priceScaleWidth = 76;
+  const timeAxisHeight = 34;
+  const [chartContainerWidth, setChartContainerWidth] = useState(1000);
+  const resolvedMaximizedHeight = maximizedHeight ?? viewportChartHeight();
+  const resolvedMaximizedWidth = maximizedWidth ?? viewportChartWidth();
+  const chartHeight = maximized ? resolvedMaximizedHeight : Math.max(240, height);
+  const chartWidth = Math.max(320, chartContainerWidth - priceScaleWidth);
+  const plotSvgHeight = Math.max(180, chartHeight - timeAxisHeight);
+  const chartZoom = Math.min(Math.max(zoom, 1), 8);
+  const padding = { top: 22, right: 18, bottom: 28, left: 28 };
+  const bars = history
+    .map((row) => ({
+      ...row,
+      open: row.open ?? row.close,
+      high: row.high ?? row.close,
+      low: row.low ?? row.close
+    }))
+    .filter((row) => Number.isFinite(row.close));
+  const levelValues = [
+    { key: 'target' as const, label: 'Target', value: parseDisplayNumber(target), danger: false },
+    { key: 'entry' as const, label: 'Entry', value: parseDisplayNumber(entry), danger: false },
+    { key: 'stop' as const, label: 'Stop', value: parseDisplayNumber(stop), danger: true }
+  ].filter((level): level is { key: ChartLevelKey; label: string; value: number; danger: boolean } =>
+    typeof level.value === 'number'
+  );
+  const priceValues = [
+    ...bars.flatMap((bar) => [bar.high, bar.low, bar.open, bar.close]),
+    ...levelValues.map((level) => level.value)
+  ].filter((value) => Number.isFinite(value));
+  const fallbackPrice = levelValues[0]?.value ?? 1;
+  const minPrice = priceValues.length > 0 ? Math.min(...priceValues) : fallbackPrice;
+  const maxPrice = priceValues.length > 0 ? Math.max(...priceValues) : fallbackPrice;
+  const pricePadding = Math.max((maxPrice - minPrice) * 0.06, maxPrice * 0.01, 1);
+  const baseDomainMin = minPrice - pricePadding;
+  const baseDomainMax = maxPrice + pricePadding;
+  const domainMin = baseDomainMin + pricePan;
+  const domainMax = baseDomainMax + pricePan;
+  const plotWidth = chartWidth - padding.left - padding.right;
+  const plotHeight = plotSvgHeight - padding.top - padding.bottom;
+  const visibleCount = bars.length > 0
+    ? Math.min(bars.length, Math.max(20, Math.ceil(bars.length / chartZoom)))
+    : 0;
+  const overscrollBars = visibleCount > 0 ? Math.min(Math.max(4, Math.ceil(visibleCount * 0.2)), visibleCount) : 0;
+  const minPanBars = -overscrollBars;
+  const maxPanBars = Math.max(0, bars.length - visibleCount) + overscrollBars;
+  const clampedPanBars = Math.min(Math.max(panBars, minPanBars), maxPanBars);
+  const visibleStartFloat = visibleCount > 0 ? bars.length - visibleCount - clampedPanBars : 0;
+  const visibleSliceStart = Math.max(0, Math.floor(visibleStartFloat) - 1);
+  const visibleSliceEnd = visibleCount > 0
+    ? Math.min(bars.length, Math.ceil(visibleStartFloat + visibleCount) + 1)
+    : 0;
+  const visibleBars = visibleCount > 0
+    ? bars.slice(visibleSliceStart, visibleSliceEnd).map((bar, index) => ({
+        bar,
+        sourceIndex: visibleSliceStart + index
+      }))
+    : [];
+  const latestVisibleIndex = Math.min(
+    bars.length - 1,
+    Math.max(0, Math.round(visibleStartFloat + visibleCount - 1))
+  );
+  const latestVisiblePrice = bars[latestVisibleIndex]?.close;
+  const xStep = visibleCount > 1 ? plotWidth / (visibleCount - 1) : plotWidth;
+  const candleBodyWidth = Math.max(3, Math.min(12, xStep * 0.62));
+
+  useEffect(() => {
+    const chartElement = chartRef.current;
+
+    if (!chartElement || typeof ResizeObserver === 'undefined') {
+      return;
+    }
+
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry) {
+        return;
+      }
+
+      setChartContainerWidth(entry.contentRect.width);
+    });
+
+    observer.observe(chartElement);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!maximized) {
+      return;
+    }
+
+    function handleResize() {
+      const nextHeight = Math.min(Math.max(resolvedMaximizedHeight, 360), viewportChartHeight());
+      const nextWidth = Math.min(Math.max(resolvedMaximizedWidth, 420), viewportChartWidth());
+
+      if (nextHeight !== resolvedMaximizedHeight || nextWidth !== resolvedMaximizedWidth) {
+        onMaximizedSizeChange?.({
+          maximizedChartHeight: nextHeight,
+          maximizedChartWidth: nextWidth
+        });
+      }
+    }
+
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [maximized, resolvedMaximizedHeight, resolvedMaximizedWidth]);
+
+  function xForSourceIndex(sourceIndex: number) {
+    if (visibleCount <= 1) {
+      return padding.left + plotWidth / 2;
+    }
+
+    return padding.left + (sourceIndex - visibleStartFloat) * xStep;
+  }
+
+  function yFor(price: number) {
+    if (domainMax === domainMin) {
+      return padding.top + plotHeight / 2;
+    }
+
+    return padding.top + ((domainMax - price) / (domainMax - domainMin)) * plotHeight;
+  }
+
+  function priceForClientY(clientY: number, rect: DOMRect) {
+    const relativeY = Math.min(Math.max(clientY - rect.top, padding.top), padding.top + plotHeight);
+    const ratio = (relativeY - padding.top) / plotHeight;
+    return domainMax - ratio * (domainMax - domainMin);
+  }
+
+  function startLevelDrag(level: ChartLevelKey, event: ReactPointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const chart = event.currentTarget.closest<HTMLElement>('.candidate-chart');
+
+    if (!chart) {
+      return;
+    }
+
+    const rect = chart.getBoundingClientRect();
+
+    function handleMove(moveEvent: PointerEvent) {
+      onLevelChange(level, priceForClientY(moveEvent.clientY, rect));
+    }
+
+    function handleUp() {
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+    }
+
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+  }
+
+  function startChartPan(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) {
+      return;
+    }
+
+    const targetElement = event.target as HTMLElement;
+
+    if (targetElement.closest('button, .trade-level, .chart-price-scale, .chart-price-labels, .chart-time-axis')) {
+      return;
+    }
+
+    event.preventDefault();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startPanBars = clampedPanBars;
+    const startPricePan = pricePan;
+    const domainRange = domainMax - domainMin;
+
+    function handleMove(moveEvent: PointerEvent) {
+      const deltaX = moveEvent.clientX - startX;
+      const deltaY = moveEvent.clientY - startY;
+      const barsMoved = xStep > 0 ? deltaX / xStep : 0;
+      const priceDelta = plotHeight > 0 ? (deltaY / plotHeight) * domainRange : 0;
+      onPanChange({
+        chartPanBars: Math.min(Math.max(startPanBars + barsMoved, minPanBars), maxPanBars),
+        chartPricePan: startPricePan + priceDelta
+      });
+    }
+
+    function handleUp() {
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+    }
+
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+  }
+
+  function startPriceScaleResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const changeHeight: ((height: number) => void) | undefined = maximized
+      ? (nextHeight) => onMaximizedSizeChange?.({ maximizedChartHeight: nextHeight })
+      : onHeightChange;
+
+    if (!changeHeight || event.button !== 0) {
+      return;
+    }
+
+    const applyHeight: (height: number) => void = changeHeight;
+
+    event.preventDefault();
+    event.stopPropagation();
+    const scaleElement = event.currentTarget;
+    scaleElement.setPointerCapture(event.pointerId);
+    const startY = event.clientY;
+    const startHeight = chartHeight;
+    const previousCursor = document.body.style.cursor;
+    document.body.style.cursor = 'ns-resize';
+
+    function handleMove(moveEvent: PointerEvent) {
+      const maxHeight = maximized ? Math.max(900, viewportChartHeight()) : 900;
+      const nextHeight = Math.min(Math.max(startHeight + moveEvent.clientY - startY, 240), maxHeight);
+      applyHeight(nextHeight);
+    }
+
+    function handleUp() {
+      if (scaleElement.hasPointerCapture(event.pointerId)) {
+        scaleElement.releasePointerCapture(event.pointerId);
+      }
+      document.body.style.cursor = previousCursor;
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+      window.removeEventListener('pointercancel', handleUp);
+    }
+
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+    window.addEventListener('pointercancel', handleUp);
+  }
+
+  function startTimeAxisResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const changeWidth: ((nextWidth: number) => void) | undefined = maximized
+      ? (nextWidth) => onMaximizedSizeChange?.({ maximizedChartWidth: nextWidth })
+      : onWidthChange;
+
+    if (!changeWidth || event.button !== 0) {
+      return;
+    }
+
+    const applyWidth: (nextWidth: number) => void = changeWidth;
+
+    event.preventDefault();
+    event.stopPropagation();
+    const axisElement = event.currentTarget;
+    axisElement.setPointerCapture(event.pointerId);
+    const startX = event.clientX;
+    const startWidth = maximized ? resolvedMaximizedWidth : width ?? chartContainerWidth;
+    const previousCursor = document.body.style.cursor;
+    document.body.style.cursor = 'ew-resize';
+
+    function handleMove(moveEvent: PointerEvent) {
+      const maxWidth = maximized ? viewportChartWidth() : 900;
+      const nextWidth = Math.min(Math.max(startWidth - (moveEvent.clientX - startX), 420), maxWidth);
+      applyWidth(nextWidth);
+    }
+
+    function handleUp() {
+      if (axisElement.hasPointerCapture(event.pointerId)) {
+        axisElement.releasePointerCapture(event.pointerId);
+      }
+      document.body.style.cursor = previousCursor;
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+      window.removeEventListener('pointercancel', handleUp);
+    }
+
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+    window.addEventListener('pointercancel', handleUp);
+  }
+
+  const timeTickCount = Math.min(5, visibleBars.length);
+  const timeAxisTicks = timeTickCount > 0
+    ? Array.from({ length: timeTickCount }, (_value, tickIndex) => {
+        const relativeIndex = timeTickCount === 1
+          ? 0
+          : Math.round((tickIndex / (timeTickCount - 1)) * (visibleBars.length - 1));
+        const sourceIndex = Math.min(
+          bars.length - 1,
+          Math.max(0, Math.round(visibleStartFloat + relativeIndex))
+        );
+        return { bar: bars[sourceIndex], sourceIndex };
+      })
+    : [];
+
+  const gridPrices = [
+    domainMax,
+    (domainMax * 2 + domainMin) / 3,
+    (domainMax + domainMin) / 2,
+    (domainMax + domainMin * 2) / 3,
+    domainMin
+  ];
+
+  return (
+    <div
+      ref={chartRef}
+      className={maximized ? 'candidate-chart zoomable maximized' : 'candidate-chart zoomable'}
+      style={{ height: chartHeight, width: maximized ? resolvedMaximizedWidth : undefined }}
+      onPointerDown={startChartPan}
+    >
+      <button
+        type="button"
+        className="chart-maximize-button"
+        onClick={onToggleMaximize}
+      >
+        {maximized ? 'Restore' : 'Maximize'}
+      </button>
+      {loading && <div className="chart-state">Loading 1Y daily bars...</div>}
+      {error && <div className="chart-state danger">Unable to load chart data</div>}
+      {!loading && !error && bars.length === 0 && (
+        <div className="chart-state">No daily history available for this candidate.</div>
+      )}
+      {visibleBars.length > 0 && (
+        <>
+          <svg
+            className="candidate-chart-svg"
+            viewBox={`0 0 ${chartWidth} ${plotSvgHeight}`}
+            role="img"
+            aria-label="One year daily candlestick chart"
+            preserveAspectRatio="none"
+          >
+            {gridPrices.map((price) => {
+              const y = yFor(price);
+              return (
+                <g key={price}>
+                  <line className="chart-grid-svg" x1={padding.left} x2={chartWidth - padding.right} y1={y} y2={y} />
+                </g>
+              );
+            })}
+            {visibleBars.map(({ bar, sourceIndex }) => {
+              const x = xForSourceIndex(sourceIndex);
+              const rising = bar.close >= bar.open;
+              const openY = yFor(bar.open);
+              const closeY = yFor(bar.close);
+              const bodyTop = Math.min(openY, closeY);
+              const bodyHeight = Math.max(Math.abs(closeY - openY), 2);
+              return (
+                <g key={`${bar.date}-${sourceIndex}`} className={rising ? 'candlestick up' : 'candlestick down'}>
+                  <line className="candlestick-wick" x1={x} x2={x} y1={yFor(bar.high)} y2={yFor(bar.low)} />
+                  <rect
+                    className="candlestick-body"
+                    x={x - candleBodyWidth / 2}
+                    y={bodyTop}
+                    width={candleBodyWidth}
+                    height={bodyHeight}
+                    rx={1}
+                  />
+                </g>
+              );
+            })}
+            {levelValues.map((level) => {
+              const y = yFor(level.value);
+              return (
+                <line
+                  key={level.label}
+                  className={level.danger ? 'chart-level-line danger' : 'chart-level-line'}
+                  x1={padding.left}
+                  x2={chartWidth - padding.right}
+                  y1={y}
+                  y2={y}
+                />
+              );
+            })}
+          </svg>
+          {levelValues.map((level) => (
+            <TradeLevel
+              key={level.key}
+              label={level.label}
+              value={level.value.toFixed(2)}
+              top={`${yFor(level.value)}px`}
+              danger={level.danger}
+              onPointerDown={(event) => startLevelDrag(level.key, event)}
+            />
+          ))}
+          <div
+            className={maximized || onHeightChange ? 'chart-price-scale resizable' : 'chart-price-scale'}
+            style={{
+              width: priceScaleWidth
+            }}
+          />
+          <div
+            className={maximized || onHeightChange ? 'chart-price-labels resizable' : 'chart-price-labels'}
+            role="separator"
+            aria-label="Resize stock chart vertically"
+            aria-orientation="horizontal"
+            style={{ width: priceScaleWidth }}
+            onPointerDownCapture={startPriceScaleResize}
+          >
+            {gridPrices.map((price) => (
+              <span
+                key={price}
+                className="chart-price-label"
+                style={{ top: yFor(price) }}
+              >
+                {price.toFixed(2)}
+              </span>
+            ))}
+            {typeof latestVisiblePrice === 'number' && Number.isFinite(latestVisiblePrice) && (
+              <strong
+                className="chart-current-price"
+                style={{ top: yFor(latestVisiblePrice) }}
+              >
+                {latestVisiblePrice.toFixed(2)}
+              </strong>
+            )}
+          </div>
+          <div
+            className={maximized || onWidthChange ? 'chart-time-axis resizable' : 'chart-time-axis'}
+            role="separator"
+            aria-label="Resize stock chart horizontally"
+            aria-orientation="vertical"
+            style={{
+              height: timeAxisHeight,
+              right: priceScaleWidth
+            }}
+            onPointerDownCapture={startTimeAxisResize}
+          >
+            {timeAxisTicks.map(({ bar, sourceIndex }) => (
+              <span
+                key={`${bar.date}-${sourceIndex}`}
+                className="chart-time-label"
+                style={{ left: xForSourceIndex(sourceIndex) }}
+              >
+                {formatChartDay(bar.date)}
+              </span>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function TradeLevel({
   label,
   value,
   top,
-  danger = false
+  danger = false,
+  onPointerDown
 }: {
   label: string;
   value: string;
   top: string;
   danger?: boolean;
+  onPointerDown?: (event: ReactPointerEvent<HTMLDivElement>) => void;
 }) {
   return (
-    <div className={danger ? 'trade-level danger' : 'trade-level'} style={{ top }}>
+    <div
+      className={danger ? 'trade-level danger draggable' : 'trade-level draggable'}
+      style={{ top }}
+      onPointerDown={onPointerDown}
+    >
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
@@ -2066,6 +2747,9 @@ function ReportsTable({ reports }: { reports: ReportMetadata[] }) {
 
 function SettingsPage() {
   const cacheOverview = useCacheOverview();
+  const massiveCredential = useMassiveCredentialStatus();
+  const saveMassiveCredential = useSaveMassiveCredential();
+  const deleteMassiveCredential = useDeleteMassiveCredential();
   const strategies = useStrategies();
   const [displaySettings, setDisplaySettings] = useScannerDisplaySettings();
   const [recommendationSettings, setRecommendationSettings] = useLocalStorage<RecommendationSettings>(
@@ -2084,7 +2768,30 @@ function SettingsPage() {
     'swing-scanner.appearance-settings',
     defaultAppearanceSettings
   );
+  const [massiveApiKey, setMassiveApiKey] = useState('');
   const cache = cacheOverview.data;
+  const credential = massiveCredential.data;
+
+  async function saveMassiveApiKey() {
+    const apiKey = massiveApiKey.trim();
+
+    if (!apiKey) {
+      return;
+    }
+
+    await saveMassiveCredential.mutateAsync({ api_key: apiKey });
+    setMarketDataSettings({
+      ...marketDataSettings,
+      primaryProvider: 'massive',
+      backupProvider: marketDataSettings.backupProvider === 'massive' ? 'yahoo' : marketDataSettings.backupProvider
+    });
+    setMassiveApiKey('');
+  }
+
+  async function removeMassiveApiKey() {
+    await deleteMassiveCredential.mutateAsync();
+    setMassiveApiKey('');
+  }
 
   return (
     <div className="settings-grid">
@@ -2394,6 +3101,7 @@ function SettingsPage() {
               }
             >
               <option value="yahoo">Yahoo</option>
+              <option value="massive">Massive/Polygon</option>
               <option value="alpha_vantage">Alpha Vantage</option>
             </select>
           </label>
@@ -2409,6 +3117,7 @@ function SettingsPage() {
               }
             >
               <option value="none">None</option>
+              <option value="massive">Massive/Polygon</option>
               <option value="alpha_vantage">Alpha Vantage</option>
               <option value="yahoo">Yahoo</option>
             </select>
@@ -2429,6 +3138,49 @@ function SettingsPage() {
               <option value="cache-only">Cache only</option>
             </select>
           </label>
+          <label>
+            Massive/Polygon API Key
+            <input
+              type="password"
+              value={massiveApiKey}
+              placeholder={credential?.configured ? 'Stored locally' : 'Paste API key'}
+              onChange={(event) => setMassiveApiKey(event.target.value)}
+            />
+          </label>
+          <div className="settings-actions">
+            <button
+              type="button"
+              className="primary-button"
+              disabled={!massiveApiKey.trim() || saveMassiveCredential.isPending}
+              onClick={() => void saveMassiveApiKey()}
+            >
+              <Save size={16} />
+              Save Key
+            </button>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={!credential?.configured || deleteMassiveCredential.isPending}
+              onClick={() => void removeMassiveApiKey()}
+            >
+              <Trash2 size={16} />
+              Remove
+            </button>
+          </div>
+          <div className="settings-status">
+            <span>
+              {credential?.configured
+                ? `Massive key configured (${credential.source?.replaceAll('_', ' ') ?? 'stored'})`
+                : 'Massive key not configured'}
+            </span>
+            {credential?.updated_at && <span>Updated {formatDateTime(credential.updated_at)}</span>}
+          </div>
+          {saveMassiveCredential.isError && (
+            <AlertMessage tone="danger" message={saveMassiveCredential.error.message} />
+          )}
+          {deleteMassiveCredential.isError && (
+            <AlertMessage tone="danger" message={deleteMassiveCredential.error.message} />
+          )}
           <label>
             Max Provider Batches
             <input
@@ -2754,7 +3506,15 @@ type CandidateTradeEdits = {
   stop: string;
   target: string;
   chartHeight: number;
+  chartZoom?: number;
+  chartPanBars?: number;
+  chartPricePan?: number;
+  maximizedChartHeight?: number;
+  maximizedChartWidth?: number;
+  previousChartHeight?: number;
 };
+
+type ChartLevelKey = 'entry' | 'stop' | 'target';
 
 type ScannerBacktestState = {
   tickers: string[];
@@ -2840,7 +3600,7 @@ const defaultCacheSettings: CacheSettings = {
 
 const defaultMarketDataSettings: MarketDataSettings = {
   primaryProvider: 'yahoo',
-  backupProvider: 'alpha_vantage',
+  backupProvider: 'massive',
   requestMode: 'cache-first',
   maxProviderBatches: 10,
   testSymbol: 'AAPL'

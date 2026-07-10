@@ -25,6 +25,10 @@ from scanner.universe.universe_provider import UniverseProvider
 from scanner.utils.cache_summary import format_cache_summary
 
 
+class ScanCancelled(Exception):
+    pass
+
+
 @dataclass(frozen=True)
 class ScanConfig:
     universe: str = "all"
@@ -75,15 +79,18 @@ class ScanService:
         logger: logging.Logger | None = None,
         universe_provider: UniverseProvider | None = None,
         progress_callback: Callable[..., None] | None = None,
+        cancel_checker: Callable[[], bool] | None = None,
     ):
         self.context = context or ScannerContext()
         self.logger = logger or self.context.logger
         self.universe_provider = universe_provider or UniverseProvider()
         self.progress_callback = progress_callback
+        self.cancel_checker = cancel_checker or (lambda: False)
 
     def run(self, config: ScanConfig) -> ScanResult:
         start = time.perf_counter()
         tickers = self.universe_provider.get_universe_tickers(config.universe)
+        self._raise_if_cancelled()
         self._progress(
             current_step="Loaded universe",
             symbols_total=len(tickers),
@@ -105,6 +112,7 @@ class ScanService:
                 f"min={config.min_price if config.min_price is not None else 'none'}, "
                 f"max={config.max_price if config.max_price is not None else 'none'}"
             )
+            self._raise_if_cancelled()
             price_filter_result = filter_tickers_by_price(
                 tickers=tickers,
                 min_price=config.min_price,
@@ -120,7 +128,11 @@ class ScanService:
                 batch_delay_seconds=config.price_filter_batch_delay_seconds,
                 max_provider_batches=config.price_filter_max_provider_batches,
                 logger=self.logger,
+                cancel_checker=self.cancel_checker,
             )
+            self._raise_if_cancelled()
+            if price_filter_result.cancelled:
+                raise ScanCancelled("Scan cancelled")
             tickers = price_filter_result.tickers
             self._progress(
                 current_step="Price filter complete",
@@ -161,10 +173,12 @@ class ScanService:
             and cache_enabled
         ):
             warmup_tickers = [self.context.settings.benchmark_ticker] + tickers
+            self._raise_if_cancelled()
             cache_warmup_result = CacheWarmupService(
                 context=self.context,
                 logger=self.logger,
                 progress_callback=self._prefixed_cache_progress,
+                cancel_checker=self.cancel_checker,
             ).run(
                 CacheWarmupConfig(
                     tickers=warmup_tickers,
@@ -175,6 +189,9 @@ class ScanService:
                     stop_on_rate_limit=config.cache_warmup_stop_on_rate_limit,
                 )
             )
+            self._raise_if_cancelled()
+            if cache_warmup_result.cancelled:
+                raise ScanCancelled("Scan cancelled")
             self.logger.info(cache_warmup_result.summary())
             self._progress(
                 current_step="Cache warmup complete",
@@ -220,10 +237,12 @@ class ScanService:
             tickers = []
             benchmark_data = pd.DataFrame()
         else:
+            self._raise_if_cancelled()
             benchmark_data = self.context.download_price_data(
                 self.context.settings.benchmark_ticker,
                 period=config.history_period,
             )
+            self._raise_if_cancelled()
 
         analyses: list[StockAnalysis] = []
         skipped: list[tuple[str, str]] = []
@@ -255,6 +274,11 @@ class ScanService:
             completed = 0
 
             for future in as_completed(futures):
+                if self.cancel_checker():
+                    for pending_future in futures:
+                        pending_future.cancel()
+                    raise ScanCancelled("Scan cancelled")
+
                 completed += 1
                 ticker = futures[future]
 
@@ -276,6 +300,7 @@ class ScanService:
                     message=f"Analyzed {completed}/{len(tickers)} symbols",
                 )
 
+        self._raise_if_cancelled()
         trade_candidates = self._trade_candidates(analyses)
         dataframe = self._dataframe_for_candidates(trade_candidates)
 
@@ -396,6 +421,15 @@ class ScanService:
     def _progress(self, **changes) -> None:
         if self.progress_callback is not None:
             self.progress_callback(**changes)
+
+    def _raise_if_cancelled(self) -> None:
+        if self.cancel_checker():
+            self.logger.info("Scan cancellation requested")
+            self._progress(
+                current_step="Cancelling scan",
+                message="Cancelling scan",
+            )
+            raise ScanCancelled("Scan cancelled")
 
     def _prefixed_cache_progress(self, **changes) -> None:
         current_step = changes.get("current_step")

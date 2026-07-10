@@ -5,6 +5,7 @@ from datetime import date, datetime
 from pathlib import Path
 import base64
 import math
+import os
 from uuid import uuid4
 from typing import Any, Literal, get_args, get_origin
 
@@ -23,6 +24,9 @@ from scanner.api.schemas import (
     DailyScannerReportResponse,
     HealthResponse,
     JobResponse,
+    MarketDataCredentialRequest,
+    MarketDataCredentialStatus,
+    MarketDataHistoryResponse,
     PortfolioSimulationRequest,
     ScanRequest,
     StrategyField,
@@ -35,14 +39,16 @@ from scanner.backtesting.backtest_service import BacktestService
 from scanner.config.settings import settings
 from scanner.context import ScannerContext
 from scanner.data.cache import SQLiteMarketDataCache
-from scanner.data.market_data import create_market_data_provider
+from scanner.data.market_data import clear_market_data_provider_cache, create_market_data_provider
+from scanner.data.providers.massive import MASSIVE_API_KEY_SECRET
 from scanner.data.scanner_results import SQLiteScannerResultStore
 from scanner.portfolio.execution_model import ExecutionModel
 from scanner.portfolio.portfolio_simulator import PortfolioSimulator
 from scanner.portfolio.trade_csv_loader import load_trades_from_csv
 from scanner.reports.daily_scanner_report import DailyScannerReport
 from scanner.services.cache_warmup import CacheWarmupConfig, CacheWarmupService
-from scanner.services.scan_service import ScanConfig, ScanService
+from scanner.security.secret_store import SQLiteSecretStore
+from scanner.services.scan_service import ScanCancelled, ScanConfig, ScanService
 from scanner.strategies.strategy_registry import StrategyRegistry
 from scanner.universe.universe_provider import UniverseProvider
 from scanner.utils.cache_summary import format_cache_summary
@@ -62,6 +68,90 @@ def get_settings() -> dict[str, Any]:
     return _json_safe(asdict(settings))
 
 
+@app.get(
+    "/api/market-data/massive/credential",
+    response_model=MarketDataCredentialStatus,
+)
+def get_massive_credential_status() -> MarketDataCredentialStatus:
+    return _massive_credential_status()
+
+
+@app.put(
+    "/api/market-data/massive/credential",
+    response_model=MarketDataCredentialStatus,
+)
+def save_massive_credential(
+    request: MarketDataCredentialRequest,
+) -> MarketDataCredentialStatus:
+    api_key = request.api_key.strip()
+
+    if not api_key:
+        raise HTTPException(status_code=400, detail="API key is required")
+
+    _secret_store().set_secret(MASSIVE_API_KEY_SECRET, api_key)
+    clear_market_data_provider_cache()
+    return _massive_credential_status()
+
+
+@app.delete(
+    "/api/market-data/massive/credential",
+    response_model=MarketDataCredentialStatus,
+)
+def delete_massive_credential() -> MarketDataCredentialStatus:
+    _secret_store().delete_secret(MASSIVE_API_KEY_SECRET)
+    clear_market_data_provider_cache()
+    return _massive_credential_status()
+
+
+@app.get(
+    "/api/market-data/history/{ticker}",
+    response_model=MarketDataHistoryResponse,
+)
+def get_market_data_history(
+    ticker: str,
+    provider: str = settings.market_data_provider,
+    period: str = settings.scan_history_period,
+) -> dict[str, Any]:
+    normalized_ticker = ticker.strip().upper()
+
+    if not normalized_ticker:
+        raise HTTPException(status_code=422, detail="Ticker is required")
+
+    try:
+        market_data_provider = create_market_data_provider(
+            name=provider,
+            cache_enabled=True,
+            cache_path=settings.market_data_cache_path,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    try:
+        history = market_data_provider.download_price_data(
+            ticker=normalized_ticker,
+            period=period,
+        )
+    except Exception as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+    if history.empty or "Close" not in history.columns:
+        return {
+            "ticker": normalized_ticker,
+            "provider": provider,
+            "period": period,
+            "rows": [],
+        }
+
+    return _json_safe(
+        {
+            "ticker": normalized_ticker,
+            "provider": provider,
+            "period": period,
+            "rows": _history_points_from_dataframe(history),
+        }
+    )
+
+
 @app.get("/api/cache/overview")
 def get_cache_overview() -> dict[str, Any]:
     cache = SQLiteMarketDataCache(settings.market_data_cache_path)
@@ -73,7 +163,7 @@ def get_cache_overview() -> dict[str, Any]:
 def start_cache_warmup(request: CacheWarmupRequest) -> dict[str, Any]:
     job = jobs.start(
         "cache_warmup",
-        lambda progress: _run_cache_warmup(request, progress),
+        lambda progress, _cancel: _run_cache_warmup(request, progress),
     )
     return job.to_dict()
 
@@ -81,6 +171,16 @@ def start_cache_warmup(request: CacheWarmupRequest) -> dict[str, Any]:
 @app.get("/api/jobs/{job_id}", response_model=JobResponse)
 def get_job(job_id: str) -> dict[str, Any]:
     job = jobs.get(job_id)
+
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return job.to_dict()
+
+
+@app.post("/api/jobs/{job_id}/cancel", response_model=JobResponse)
+def cancel_job(job_id: str) -> dict[str, Any]:
+    job = jobs.cancel(job_id)
 
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -97,7 +197,7 @@ def get_strategies() -> list[StrategyMetadata]:
 def start_scan(request: ScanRequest) -> dict[str, Any]:
     job = jobs.start(
         "scan",
-        lambda progress: _run_scan(request, progress),
+        lambda progress, cancel: _run_scan(request, progress, cancel),
     )
     return job.to_dict()
 
@@ -224,7 +324,7 @@ def start_backtest(request: BacktestRequest) -> dict[str, Any]:
 
     job = jobs.start(
         "backtest",
-        lambda progress: _run_backtest(request, progress),
+        lambda progress, _cancel: _run_backtest(request, progress),
     )
     return job.to_dict()
 
@@ -238,7 +338,7 @@ def get_backtest(job_id: str) -> dict[str, Any]:
 def start_portfolio_simulation(request: PortfolioSimulationRequest) -> dict[str, Any]:
     job = jobs.start(
         "portfolio_simulation",
-        lambda progress: _run_portfolio_simulation(request, progress),
+        lambda progress, _cancel: _run_portfolio_simulation(request, progress),
     )
     return job.to_dict()
 
@@ -480,8 +580,14 @@ def _string_value(value: Any) -> str:
 
 
 def _provider_display_name(provider: str) -> str:
-    if provider.lower() == "yahoo":
+    normalized = provider.lower()
+
+    if normalized == "yahoo":
         return "Yahoo"
+    if normalized in {"massive", "polygon"}:
+        return "Massive/Polygon"
+    if normalized == "alpha_vantage":
+        return "Alpha Vantage"
 
     return provider.replace("_", " ").title()
 
@@ -529,7 +635,7 @@ def _run_cache_warmup(request: CacheWarmupRequest, progress) -> dict[str, Any]:
     )
 
 
-def _run_scan(request: ScanRequest, progress) -> dict[str, Any]:
+def _run_scan(request: ScanRequest, progress, cancel_checker) -> dict[str, Any]:
     logger = setup_logging()
     log_path = _scan_log_path()
     file_handler = add_file_handler(logger, log_path)
@@ -566,6 +672,7 @@ def _run_scan(request: ScanRequest, progress) -> dict[str, Any]:
             context=context,
             logger=logger,
             progress_callback=scan_progress,
+            cancel_checker=cancel_checker,
         ).run(
             ScanConfig(
                 universe=request.universe,
@@ -604,6 +711,15 @@ def _run_scan(request: ScanRequest, progress) -> dict[str, Any]:
                     "watchlist_csv": result.output_file,
                     "scan_log": str(log_path),
                 },
+            }
+        )
+    except ScanCancelled:
+        logger.info("UI scanner run cancelled")
+        return _json_safe(
+            {
+                "cancelled": True,
+                "log_path": str(log_path),
+                "output_paths": scan_log_output,
             }
         )
     except Exception:
@@ -847,6 +963,31 @@ def _daily_report_watchlist_path(
     return path
 
 
+def _history_points_from_dataframe(dataframe: pd.DataFrame) -> list[dict[str, Any]]:
+    rows = []
+    history = dataframe.sort_index()
+
+    for index, row in history.iterrows():
+        close = _float_value(row.get("Close"))
+
+        if close is None:
+            continue
+
+        timestamp = pd.Timestamp(index)
+        rows.append(
+            {
+                "date": timestamp.date().isoformat(),
+                "open": _float_value(row.get("Open")),
+                "high": _float_value(row.get("High")),
+                "low": _float_value(row.get("Low")),
+                "close": close,
+                "volume": _float_value(row.get("Volume")),
+            }
+        )
+
+    return rows
+
+
 def _json_safe(value: Any) -> Any:
     if isinstance(value, dict):
         return {key: _json_safe(item) for key, item in value.items()}
@@ -867,6 +1008,28 @@ def _json_safe(value: Any) -> Any:
         return _json_safe(value.item())
 
     return value
+
+
+def _secret_store() -> SQLiteSecretStore:
+    return SQLiteSecretStore(settings.market_data_cache_path)
+
+
+def _massive_credential_status() -> MarketDataCredentialStatus:
+    if os.environ.get("MASSIVE_API_KEY") or os.environ.get("POLYGON_API_KEY"):
+        return MarketDataCredentialStatus(
+            provider="massive",
+            configured=True,
+            source="environment",
+            updated_at=None,
+        )
+
+    metadata = _secret_store().metadata(MASSIVE_API_KEY_SECRET)
+    return MarketDataCredentialStatus(
+        provider="massive",
+        configured=metadata.configured,
+        source="encrypted_sqlite" if metadata.configured else None,
+        updated_at=metadata.updated_at.isoformat() if metadata.updated_at else None,
+    )
 
 
 def _report_metadata(path: Path) -> dict[str, Any]:

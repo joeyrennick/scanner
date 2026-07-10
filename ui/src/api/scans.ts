@@ -5,6 +5,7 @@ import type {
   CandidateTradeLevelsRequest,
   CandidateTradeLevelsResponse,
   JobResponse,
+  MarketDataHistoryResponse,
   ScanRequest,
   WatchlistPriceRefreshRequest,
   WatchlistPriceRefreshResponse,
@@ -15,6 +16,21 @@ export function useLatestWatchlist() {
   return useQuery({
     queryKey: queryKeys.latestWatchlist,
     queryFn: () => apiClient.request<WatchlistResponse>('/api/watchlist/latest')
+  });
+}
+
+export function useMarketDataHistory(
+  ticker: string | null,
+  provider = 'yahoo',
+  period = '1y'
+) {
+  return useQuery({
+    queryKey: queryKeys.marketDataHistory(ticker, provider, period),
+    enabled: Boolean(ticker),
+    queryFn: () =>
+      apiClient.request<MarketDataHistoryResponse>(
+        `/api/market-data/history/${encodeURIComponent(ticker ?? '')}?provider=${encodeURIComponent(provider)}&period=${encodeURIComponent(period)}`
+      )
   });
 }
 

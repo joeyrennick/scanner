@@ -255,10 +255,17 @@ class SQLiteMarketDataCache:
         request: CacheFetchRequest,
         today: date,
     ) -> bool:
+        return self.successful_fetch_rows_today(request=request, today=today) is not None
+
+    def successful_fetch_rows_today(
+        self,
+        request: CacheFetchRequest,
+        today: date,
+    ) -> int | None:
         with self._connect() as connection:
             row = connection.execute(
                 """
-                SELECT last_success_at
+                SELECT last_success_at, rows_returned
                 FROM cache_fetches
                 WHERE provider = ?
                   AND ticker = ?
@@ -281,9 +288,12 @@ class SQLiteMarketDataCache:
             ).fetchone()
 
         if row is None or row[0] is None:
-            return False
+            return None
 
-        return datetime.fromisoformat(row[0]).date() == today
+        if datetime.fromisoformat(row[0]).date() != today:
+            return None
+
+        return int(row[1] or 0)
 
     def overview(
         self,

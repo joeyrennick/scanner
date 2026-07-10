@@ -56,6 +56,7 @@ class CacheWarmupResult:
     stopped_for_rate_limit: bool
     cache_only_preview: bool
     elapsed_seconds: float
+    cancelled: bool = False
 
     @property
     def cached_count(self) -> int:
@@ -104,6 +105,7 @@ class CacheWarmupResult:
             f"{self.provider_batches_planned}, "
             f"provider_calls={self.provider_calls_attempted}, "
             f"rate_limit_stopped={self.stopped_for_rate_limit}, "
+            f"cancelled={self.cancelled}, "
             f"elapsed={self.elapsed_seconds:.2f}s"
         )
 
@@ -114,10 +116,12 @@ class CacheWarmupService:
         context: ScannerContext | None = None,
         logger: logging.Logger | None = None,
         progress_callback: Callable[..., None] | None = None,
+        cancel_checker: Callable[[], bool] | None = None,
     ):
         self.context = context or ScannerContext()
         self.logger = logger or self.context.logger
         self.progress_callback = progress_callback
+        self.cancel_checker = cancel_checker or (lambda: False)
 
     def run(self, config: CacheWarmupConfig) -> CacheWarmupResult:
         if config.batch_size <= 0:
@@ -241,6 +245,7 @@ class CacheWarmupService:
         provider_batches_attempted = 0
         provider_symbols_attempted = 0
         stopped_for_rate_limit = False
+        cancelled = False
 
         if allowed_batches:
             self.logger.info(
@@ -252,6 +257,25 @@ class CacheWarmupService:
             )
 
         for batch_number, batch in enumerate(allowed_batches, start=1):
+            if self.cancel_checker():
+                cancelled = True
+                self._mark_remaining_cancelled(
+                    statuses_by_ticker=statuses_by_ticker,
+                    provider_batches=allowed_batches[batch_number - 1 :],
+                )
+                self.logger.info("Cache warmup cancelled before completing provider fetches.")
+                self._progress(
+                    current_step="Cache warmup cancelled",
+                    symbols_checked=len(statuses_by_ticker),
+                    symbols_skipped=sum(
+                        1
+                        for status in statuses_by_ticker.values()
+                        if status.status.startswith("skipped")
+                    ),
+                    message="Cache warmup cancelled",
+                )
+                break
+
             provider_batches_attempted += 1
             provider_symbols_attempted += len(batch)
             self._progress(
@@ -383,6 +407,7 @@ class CacheWarmupService:
             provider_calls_before=provider_calls_before,
             stopped_for_rate_limit=stopped_for_rate_limit,
             started_at=started_at,
+            cancelled=cancelled,
         )
         self._progress(
             current_step="Cache warmup complete",
@@ -408,6 +433,7 @@ class CacheWarmupService:
         provider_calls_before: int,
         stopped_for_rate_limit: bool,
         started_at: float,
+        cancelled: bool = False,
     ) -> CacheWarmupResult:
         stats = self.context.get_market_data_cache_stats()
         provider_calls_after = stats.provider_calls if stats is not None else 0
@@ -436,6 +462,7 @@ class CacheWarmupService:
             stopped_for_rate_limit=stopped_for_rate_limit,
             cache_only_preview=config.cache_only_preview,
             elapsed_seconds=time.perf_counter() - started_at,
+            cancelled=cancelled,
         )
 
     def _mark_remaining_rate_limited(
@@ -449,6 +476,19 @@ class CacheWarmupService:
                     ticker=ticker,
                     status="skipped_rate_limit",
                     reason="Stopped after provider rate limit",
+                )
+
+    def _mark_remaining_cancelled(
+        self,
+        statuses_by_ticker: dict[str, CacheWarmupTickerStatus],
+        provider_batches: list[list[str]],
+    ) -> None:
+        for batch in provider_batches:
+            for ticker in batch:
+                statuses_by_ticker[ticker] = CacheWarmupTickerStatus(
+                    ticker=ticker,
+                    status="skipped_cancelled",
+                    reason="Cancelled",
                 )
 
     def _progress(self, **changes) -> None:

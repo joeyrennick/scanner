@@ -10,6 +10,33 @@ export interface CacheOverview {
   days_since_refresh: number | null;
 }
 
+export interface MarketDataCredentialStatus {
+  provider: string;
+  configured: boolean;
+  source: string | null;
+  updated_at: string | null;
+}
+
+export interface MarketDataCredentialRequest {
+  api_key: string;
+}
+
+export interface MarketDataHistoryPoint {
+  date: string;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number;
+  volume: number | null;
+}
+
+export interface MarketDataHistoryResponse {
+  ticker: string;
+  provider: string;
+  period: string;
+  rows: MarketDataHistoryPoint[];
+}
+
 export interface JobProgress {
   current_step: string | null;
   total_steps: number | null;
@@ -37,6 +64,7 @@ export interface JobResponse extends JobProgress {
   message: string;
   result: Record<string, unknown> | null;
   error: string | null;
+  cancel_requested: boolean;
   progress: JobProgress;
 }
 

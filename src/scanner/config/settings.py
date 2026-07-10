@@ -1,11 +1,12 @@
 from dataclasses import dataclass
+import os
 
 
 @dataclass(frozen=True)
 class ScannerSettings:
     benchmark_ticker: str = "SPY"
     output_file: str = "output/watchlist.csv"
-    market_data_provider: str = "yahoo"
+    market_data_provider: str = os.environ.get("MARKET_DATA_PROVIDER", "yahoo")
     market_data_cache_enabled: bool = True
     market_data_cache_path: str = "output/market_data_cache.sqlite"
     market_data_cache_retention_years: int = 5
@@ -24,6 +25,7 @@ class ScannerSettings:
     cache_warmup_batch_delay_seconds: float = 0.5
     cache_warmup_max_provider_batches: int | None = None
     cache_warmup_stop_on_rate_limit: bool = True
+    massive_batch_workers: int = int(os.environ.get("MASSIVE_BATCH_WORKERS", "10"))
     max_workers: int = 40
     backtest_max_workers: int = 80
     relative_strength_lookback_days: int = 63

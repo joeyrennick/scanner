@@ -1,6 +1,7 @@
 from datetime import date
 from dataclasses import replace
 from pathlib import Path
+import sqlite3
 import time
 
 import pandas as pd
@@ -42,6 +43,89 @@ def test_settings_endpoint_includes_cache_retention():
 
     assert response.status_code == 200
     assert response.json()["market_data_cache_retention_years"] == 5
+
+
+def test_massive_credential_endpoints_store_encrypted_secret(tmp_path, monkeypatch):
+    from scanner.api import app as api_app
+
+    db_path = tmp_path / "market_data.sqlite"
+    monkeypatch.delenv("MASSIVE_API_KEY", raising=False)
+    monkeypatch.delenv("POLYGON_API_KEY", raising=False)
+    monkeypatch.setattr(
+        api_app,
+        "settings",
+        replace(api_app.settings, market_data_cache_path=str(db_path)),
+    )
+
+    initial = client.get("/api/market-data/massive/credential")
+    assert initial.status_code == 200
+    assert initial.json()["configured"] is False
+
+    saved = client.put(
+        "/api/market-data/massive/credential",
+        json={"api_key": "secret-value"},
+    )
+    assert saved.status_code == 200
+    assert saved.json()["configured"] is True
+    assert saved.json()["source"] == "encrypted_sqlite"
+
+    with sqlite3.connect(db_path) as connection:
+        encrypted_value = connection.execute(
+            "SELECT encrypted_value FROM secrets WHERE name = ?",
+            ("massive_api_key",),
+        ).fetchone()[0]
+
+    assert "secret-value" not in encrypted_value
+
+    deleted = client.delete("/api/market-data/massive/credential")
+    assert deleted.status_code == 200
+    assert deleted.json()["configured"] is False
+
+
+def test_market_data_history_endpoint_returns_daily_bars(monkeypatch):
+    from scanner.api import app as api_app
+
+    class FakeProvider:
+        def download_price_data(self, ticker, period="1y"):
+            assert ticker == "AAPL"
+            assert period == "1y"
+            return pd.DataFrame(
+                [
+                    {
+                        "Open": 100.0,
+                        "High": 102.0,
+                        "Low": 99.0,
+                        "Close": 101.0,
+                        "Volume": 123456,
+                    }
+                ],
+                index=pd.to_datetime(["2026-01-02"]),
+            )
+
+    monkeypatch.setattr(
+        api_app,
+        "create_market_data_provider",
+        lambda **_kwargs: FakeProvider(),
+    )
+
+    response = client.get("/api/market-data/history/AAPL?provider=massive&period=1y")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ticker": "AAPL",
+        "provider": "massive",
+        "period": "1y",
+        "rows": [
+            {
+                "date": "2026-01-02",
+                "open": 100.0,
+                "high": 102.0,
+                "low": 99.0,
+                "close": 101.0,
+                "volume": 123456.0,
+            }
+        ],
+    }
 
 
 def test_strategies_endpoint_returns_metadata():
@@ -148,7 +232,13 @@ def test_scan_job_lifecycle(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
 
     class FakeScanService:
-        def __init__(self, context=None, logger=None, progress_callback=None):
+        def __init__(
+            self,
+            context=None,
+            logger=None,
+            progress_callback=None,
+            cancel_checker=None,
+        ):
             self.progress_callback = progress_callback
 
         def run(self, config):

@@ -13,6 +13,8 @@ describe('watchlist display helpers', () => {
     const candidate = candidateFromWatchlistRow(
       {
         Ticker: 'AAPL',
+        'Company Name': 'Apple Inc.',
+        Sector: 'Information Technology',
         'Triggered Strategies': 'Pullback',
         'Composite Score': 82,
         Price: 211.43,
@@ -28,6 +30,8 @@ describe('watchlist display helpers', () => {
 
     expect(candidate).toMatchObject({
       ticker: 'AAPL',
+      companyName: 'Apple Inc.',
+      sector: 'Information Technology',
       currentPrice: '$211.43',
       priceSource: 'Cached Close',
       targetExit: '$227.43',
@@ -117,6 +121,8 @@ describe('watchlist display helpers', () => {
       {
         id: 'MSFT',
         ticker: 'MSFT',
+        companyName: 'Microsoft Corporation',
+        sector: 'Information Technology',
         strategy: 'Pullback',
         score: '80',
         currentPrice: '$400.00',
@@ -134,6 +140,8 @@ describe('watchlist display helpers', () => {
       {
         id: 'AAPL',
         ticker: 'AAPL',
+        companyName: 'Apple Inc.',
+        sector: 'Information Technology',
         strategy: 'Breakout',
         score: '120',
         currentPrice: '$210.00',

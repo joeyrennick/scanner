@@ -33,6 +33,8 @@ PYTHONPATH=src venv/bin/uvicorn scanner.api.app:app --reload
 ```
 
 The app also accepts `POLYGON_API_KEY` as an alias for `MASSIVE_API_KEY`.
+Massive is the default market-data provider. Set `MARKET_DATA_PROVIDER=yahoo`
+to use Yahoo Finance instead.
 
 Then open:
 

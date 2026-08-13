@@ -6,6 +6,9 @@ from io import StringIO
 class UniverseProvider:
     SUPPORTED_UNIVERSES = ["sp500", "djia", "nasdaq", "nyse", "all"]
 
+    def __init__(self):
+        self._company_names: dict[str, str] = {}
+
     def get_sp500_tickers(self) -> list[str]:
         url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 
@@ -19,6 +22,7 @@ class UniverseProvider:
         tables = pd.read_html(StringIO(response.text))
 
         sp500 = tables[0]
+        self._remember_company_names(sp500, "Symbol", "Security")
         tickers = sp500["Symbol"].tolist()
 
         return [ticker.replace(".", "-") for ticker in tickers]
@@ -37,6 +41,12 @@ class UniverseProvider:
 
         for table in tables:
             if "Symbol" in table.columns:
+                name_column = next(
+                    (column for column in ("Company", "Company name") if column in table.columns),
+                    None,
+                )
+                if name_column:
+                    self._remember_company_names(table, "Symbol", name_column)
                 tickers = table["Symbol"].tolist()
                 return self._normalize_tickers(tickers)
 
@@ -52,6 +62,7 @@ class UniverseProvider:
             & (listed["Financial Status"] == "N")
         ]
         listed = self._filter_tradeable_common_symbols(listed, "Symbol")
+        self._remember_company_names(listed, "Symbol", "Security Name")
         return self._normalize_tickers(listed["Symbol"].tolist())
 
     def get_nyse_tickers(self) -> list[str]:
@@ -64,7 +75,11 @@ class UniverseProvider:
             & (listed["ETF"] == "N")
         ]
         listed = self._filter_tradeable_common_symbols(listed, "ACT Symbol")
+        self._remember_company_names(listed, "ACT Symbol", "Security Name")
         return self._normalize_tickers(listed["ACT Symbol"].tolist())
+
+    def get_company_name(self, ticker: str) -> str | None:
+        return self._company_names.get(self._normalize_ticker(ticker))
 
     def get_universe_tickers(self, universe: str) -> list[str]:
         universe = universe.lower()
@@ -99,11 +114,29 @@ class UniverseProvider:
 
     def _normalize_tickers(self, tickers: list[str]) -> list[str]:
         normalized = [
-            str(ticker).strip().upper().replace(".", "-")
+            self._normalize_ticker(ticker)
             for ticker in tickers
             if str(ticker).strip()
         ]
         return self._dedupe_tickers(normalized)
+
+    def _normalize_ticker(self, ticker: object) -> str:
+        return str(ticker).strip().upper().replace(".", "-")
+
+    def _remember_company_names(
+        self,
+        listed: pd.DataFrame,
+        symbol_column: str,
+        name_column: str,
+    ) -> None:
+        if symbol_column not in listed.columns or name_column not in listed.columns:
+            return
+
+        for symbol, name in zip(listed[symbol_column], listed[name_column]):
+            normalized_symbol = self._normalize_ticker(symbol)
+            normalized_name = str(name).strip()
+            if normalized_symbol and normalized_name and normalized_name.lower() != "nan":
+                self._company_names[normalized_symbol] = normalized_name
 
     def _dedupe_tickers(self, tickers: list[str]) -> list[str]:
         deduped = []

@@ -236,7 +236,7 @@ function DailyScannerPage() {
   const generateDailyReport = useGenerateDailyScannerReport();
   const [displaySettings] = useScannerDisplaySettings();
   const [marketDataSettings] = useLocalStorage<MarketDataSettings>(
-    'swing-scanner.market-data-settings',
+    'swing-scanner.market-data-settings.v2',
     defaultMarketDataSettings
   );
   const [jobId, setJobId] = useState<string | null>(null);
@@ -254,8 +254,8 @@ function DailyScannerPage() {
   const [form, setForm] = useState<ScanRequest>({
     universe: 'all',
     history_period: '1y',
-    min_price: 20,
-    max_price: 50,
+    min_price: 10,
+    max_price: 200,
     warm_market_data_cache: true,
     cache_warmup_batch_size: 50,
     cache_warmup_max_provider_batches: 10,
@@ -314,6 +314,8 @@ function DailyScannerPage() {
   const percent = progressPercent(job?.progress);
   const activeStrategies = strategies.data?.filter((strategy) => strategy.category === 'entry') ?? [];
   const anyCachedPrice = candidates.some((candidate) => candidate.priceSource === 'Cached Close');
+  const resultsPriceAsOf = sharedCandidateValue(candidates.map((candidate) => candidate.priceAsOf));
+  const resultsPriceSource = sharedCandidateValue(candidates.map((candidate) => candidate.priceSource));
   const currentRunId = currentJobRunId ?? latestWatchlistRunId;
 
   useEffect(() => {
@@ -703,6 +705,10 @@ function DailyScannerPage() {
                 ? `${sortedCandidates.length} displayed candidates from ${latestWatchlist.data.path}`
                 : 'No watchlist has been generated yet'}
             </p>
+            <div className="results-metadata">
+              <span><strong>Price as of:</strong> {resultsPriceAsOf}</span>
+              <span><strong>Source:</strong> {resultsPriceSource}</span>
+            </div>
           </div>
           <div className="button-row inline-actions">
             <button
@@ -803,6 +809,7 @@ function DailyScannerPage() {
                   />
                 </th>
                 <SortableHeader label="Ticker" sortKey="ticker" sort={candidateSort} onSort={changeSort} />
+                <SortableHeader label="Sector" sortKey="sector" sort={candidateSort} onSort={changeSort} />
                 <SortableHeader label="Strategy" sortKey="strategy" sort={candidateSort} onSort={changeSort} />
                 <SortableHeader label="Score" sortKey="score" sort={candidateSort} onSort={changeSort} />
                 <SortableHeader
@@ -819,8 +826,6 @@ function DailyScannerPage() {
                   sort={candidateSort}
                   onSort={changeSort}
                 />
-                <SortableHeader label="Price As Of" sortKey="priceAsOf" sort={candidateSort} onSort={changeSort} />
-                <SortableHeader label="Source" sortKey="priceSource" sort={candidateSort} onSort={changeSort} />
                 <SortableHeader label="RS" sortKey="relativeStrength" sort={candidateSort} onSort={changeSort} />
                 <SortableHeader label="RVOL" sortKey="relativeVolume" sort={candidateSort} onSort={changeSort} />
                 <SortableHeader label="ATR" sortKey="atr" sort={candidateSort} onSort={changeSort} />
@@ -842,22 +847,14 @@ function DailyScannerPage() {
                       aria-label={`Select ${candidate.ticker}`}
                     />
                   </td>
-                  <td className="ticker-cell">{candidate.ticker}</td>
+                  <td className="ticker-cell">
+                    <span>{candidate.ticker}</span>
+                    {candidate.companyName && <span className="company-name">{candidate.companyName}</span>}
+                  </td>
+                  <td>{candidate.sector}</td>
                   <td>{candidate.strategy}</td>
                   <td>{candidate.score}</td>
                   <td>{candidate.currentPrice}</td>
-                  <td>{candidate.priceAsOf}</td>
-                  <td>
-                    <span
-                      className={
-                        candidate.priceSource === 'Cached Close'
-                          ? 'source-pill cached'
-                          : 'source-pill'
-                      }
-                    >
-                      {candidate.priceSource}
-                    </span>
-                  </td>
                   <td>{candidate.relativeStrength}</td>
                   <td>{candidate.relativeVolume}</td>
                   <td>{candidate.atr}</td>
@@ -882,7 +879,7 @@ function DailyScannerPage() {
               ))}
               {sortedCandidates.length === 0 && (
                 <tr>
-                  <td colSpan={15} className="empty-cell">
+                  <td colSpan={14} className="empty-cell">
                     {activeJob ? 'Scan is running.' : 'No candidates match the current filter.'}
                   </td>
                 </tr>
@@ -902,7 +899,7 @@ function CandidatesPage() {
   const cacheOverview = useCacheOverview();
   const [displaySettings] = useScannerDisplaySettings();
   const [marketDataSettings] = useLocalStorage<MarketDataSettings>(
-    'swing-scanner.market-data-settings',
+    'swing-scanner.market-data-settings.v2',
     defaultMarketDataSettings
   );
   const updateTradeLevels = useUpdateCandidateTradeLevels();
@@ -1886,7 +1883,7 @@ function CacheWarmupPage() {
   const cacheOverview = useCacheOverview();
   const startWarmup = useStartCacheWarmup();
   const [marketDataSettings] = useLocalStorage<MarketDataSettings>(
-    'swing-scanner.market-data-settings',
+    'swing-scanner.market-data-settings.v2',
     defaultMarketDataSettings
   );
   const [jobId, setJobId] = useState<string | null>(null);
@@ -2761,7 +2758,7 @@ function SettingsPage() {
     defaultCacheSettings
   );
   const [marketDataSettings, setMarketDataSettings] = useLocalStorage<MarketDataSettings>(
-    'swing-scanner.market-data-settings',
+    'swing-scanner.market-data-settings.v2',
     defaultMarketDataSettings
   );
   const [appearanceSettings, setAppearanceSettings] = useLocalStorage<AppearanceSettings>(
@@ -3599,8 +3596,8 @@ const defaultCacheSettings: CacheSettings = {
 };
 
 const defaultMarketDataSettings: MarketDataSettings = {
-  primaryProvider: 'yahoo',
-  backupProvider: 'massive',
+  primaryProvider: 'massive',
+  backupProvider: 'yahoo',
   requestMode: 'cache-first',
   maxProviderBatches: 10,
   testSymbol: 'AAPL'
@@ -3751,6 +3748,22 @@ function parseTickerList(value: string): string[] {
   }
 
   return tickers;
+}
+
+function sharedCandidateValue(values: string[]): string {
+  const meaningfulValues = new Set(
+    values.map((value) => value.trim()).filter((value) => value && value !== 'n/a')
+  );
+
+  if (meaningfulValues.size === 0) {
+    return 'n/a';
+  }
+
+  if (meaningfulValues.size > 1) {
+    return 'Mixed';
+  }
+
+  return meaningfulValues.values().next().value ?? 'n/a';
 }
 
 function backtestResultKeyForRequest(request: BacktestRequest): string | null {

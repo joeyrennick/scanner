@@ -4,6 +4,8 @@ import type { ScannerDisplaySettings } from './scannerSettings';
 export type DisplayCandidate = {
   id: string;
   ticker: string;
+  companyName: string;
+  sector: string;
   strategy: string;
   score: string;
   currentPrice: string;
@@ -39,6 +41,8 @@ export function candidateFromWatchlistRow(
   return {
     id: ticker,
     ticker,
+    companyName: stringValue(row['Company Name']),
+    sector: stringValue(row.Sector) || 'n/a',
     strategy: stringValue(row['Triggered Strategies']) || 'n/a',
     score: formatCell(row['Composite Score']),
     currentPrice: formatCurrency(price),

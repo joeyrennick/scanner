@@ -6,7 +6,7 @@ import os
 class ScannerSettings:
     benchmark_ticker: str = "SPY"
     output_file: str = "output/watchlist.csv"
-    market_data_provider: str = os.environ.get("MARKET_DATA_PROVIDER", "yahoo")
+    market_data_provider: str = os.environ.get("MARKET_DATA_PROVIDER", "massive")
     market_data_cache_enabled: bool = True
     market_data_cache_path: str = "output/market_data_cache.sqlite"
     market_data_cache_retention_years: int = 5

@@ -12,6 +12,7 @@ import pandas as pd
 from scanner.config.settings import settings
 from scanner.context import ScannerContext
 from scanner.data.scanner_results import SQLiteScannerResultStore
+from scanner.data.providers.cached import CachedMarketDataProvider
 from scanner.models.stock_analysis import StockAnalysis
 from scanner.services.cache_warmup import (
     CacheWarmupConfig,
@@ -303,6 +304,8 @@ class ScanService:
         self._raise_if_cancelled()
         trade_candidates = self._trade_candidates(analyses)
         dataframe = self._dataframe_for_candidates(trade_candidates)
+        dataframe = self._add_company_names(dataframe)
+        dataframe = self._add_company_profiles(dataframe)
 
         if dataframe.empty:
             self.logger.info("No trade candidates found.")
@@ -401,6 +404,51 @@ class ScanService:
         output_path = Path(output_file)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         dataframe.to_csv(output_path, index=False)
+
+    def _add_company_names(self, dataframe: pd.DataFrame) -> pd.DataFrame:
+        get_company_name = getattr(self.universe_provider, "get_company_name", None)
+        if dataframe.empty or not callable(get_company_name):
+            return dataframe
+
+        enriched = dataframe.copy()
+        enriched.insert(
+            1,
+            "Company Name",
+            [get_company_name(ticker) or "" for ticker in enriched["Ticker"]],
+        )
+        return enriched
+
+    def _add_company_profiles(self, dataframe: pd.DataFrame) -> pd.DataFrame:
+        if dataframe.empty:
+            return dataframe
+
+        provider = self.context.get_market_data_provider()
+        if isinstance(provider, CachedMarketDataProvider):
+            provider = provider.provider
+        download_profiles = getattr(provider, "download_company_profiles_batch", None)
+        if not callable(download_profiles):
+            enriched = dataframe.copy()
+            enriched.insert(2, "Sector", "")
+            return enriched
+
+        try:
+            profiles = download_profiles(dataframe["Ticker"].tolist())
+        except Exception as error:
+            self.logger.warning(f"Could not load company sectors: {error}")
+            profiles = {}
+
+        enriched = dataframe.copy()
+        if "Company Name" in enriched.columns:
+            enriched["Company Name"] = [
+                name or profiles.get(ticker, {}).get("name", "")
+                for ticker, name in zip(enriched["Ticker"], enriched["Company Name"])
+            ]
+        enriched.insert(
+            2,
+            "Sector",
+            [profiles.get(ticker, {}).get("sector", "") for ticker in enriched["Ticker"]],
+        )
+        return enriched
 
     def _save_scanner_results(
         self,

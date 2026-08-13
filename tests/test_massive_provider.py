@@ -6,7 +6,7 @@ import pytest
 
 from scanner.data.market_data import create_market_data_provider
 from scanner.data.providers.cached import CachedMarketDataProvider
-from scanner.data.providers.massive import MassiveMarketDataProvider
+from scanner.data.providers.massive import MassiveMarketDataProvider, _sector_from_sic
 from scanner.security.secret_store import SQLiteSecretStore
 
 
@@ -156,3 +156,20 @@ def test_massive_batch_downloads_concurrently(monkeypatch):
 
     assert set(results) == {"AAPL", "MSFT", "NVDA"}
     assert max_active >= 2
+
+
+def test_massive_company_profiles_supply_name_and_sector(monkeypatch):
+    def fake_get(url, headers, timeout):
+        assert "/v3/reference/tickers/AAPL" in url
+        return FakeResponse(
+            {"results": {"name": "Apple Inc.", "sic_code": "3571"}}
+        )
+
+    monkeypatch.setattr("scanner.data.providers.massive.requests.get", fake_get)
+    provider = MassiveMarketDataProvider(api_key="test-key")
+
+    assert provider.download_company_profiles_batch(["AAPL"]) == {
+        "AAPL": {"name": "Apple Inc.", "sector": "Information Technology"}
+    }
+    assert _sector_from_sic("6021") == "Financials"
+    assert _sector_from_sic("6531") == "Real Estate"

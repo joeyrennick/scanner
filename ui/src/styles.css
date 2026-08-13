@@ -632,6 +632,23 @@ input:disabled {
   color: #0f172a;
 }
 
+.ticker-cell .company-name {
+  margin-left: 8px;
+  color: #64748b;
+  font-size: 0.82rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.results-metadata {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin-top: 6px;
+  color: #475569;
+  font-size: 0.86rem;
+}
+
 .th-with-info {
   display: inline-flex;
   align-items: center;

@@ -40,6 +40,24 @@ def test_normalize_tickers_dedupes_and_converts_dot_symbols():
     ]
 
 
+def test_remembers_company_names_by_normalized_ticker():
+    provider = UniverseProvider()
+    provider._remember_company_names(
+        pd.DataFrame(
+            {
+                "Symbol": ["AAPL", "BRK.B"],
+                "Security": ["Apple Inc.", "Berkshire Hathaway Inc."],
+            }
+        ),
+        "Symbol",
+        "Security",
+    )
+
+    assert provider.get_company_name("aapl") == "Apple Inc."
+    assert provider.get_company_name("BRK-B") == "Berkshire Hathaway Inc."
+    assert provider.get_company_name("UNKNOWN") is None
+
+
 def test_filter_tradeable_common_symbols_removes_warrants_units_and_rights():
     provider = UniverseProvider()
     listed = pd.DataFrame(

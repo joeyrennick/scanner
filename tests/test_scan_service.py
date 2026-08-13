@@ -28,6 +28,9 @@ class FakeUniverseProvider:
     def get_universe_tickers(self, universe):
         return ["AAPL", "MSFT"]
 
+    def get_company_name(self, ticker):
+        return {"AAPL": "Apple Inc.", "MSFT": "Microsoft Corporation"}.get(ticker)
+
 
 class FakeProvider:
     name = "fake_scan"
@@ -37,6 +40,12 @@ class FakeProvider:
             {"Close": [100.0, 101.0]},
             index=pd.to_datetime(["2026-07-02", "2026-07-03"]),
         )
+
+    def download_company_profiles_batch(self, tickers):
+        return {
+            ticker: {"name": "Apple Inc." if ticker == "AAPL" else "", "sector": "Information Technology"}
+            for ticker in tickers
+        }
 
 
 class RateLimitedBatchProvider:
@@ -127,12 +136,15 @@ def test_scan_service_returns_structured_result_and_writes_watchlist(
     assert [candidate.ticker for candidate in result.trade_candidates] == ["AAPL"]
     assert result.skipped == []
     assert result.dataframe["Ticker"].tolist() == ["AAPL"]
+    assert result.dataframe["Company Name"].tolist() == ["Apple Inc."]
+    assert result.dataframe["Sector"].tolist() == ["Information Technology"]
     assert result.scanner_run_id == 1
     assert output_file.exists()
     assert pd.read_csv(output_file)["Ticker"].tolist() == ["AAPL"]
     latest_run = SQLiteScannerResultStore(tmp_path / "market_data.sqlite").latest_run()
     assert latest_run is not None
     assert latest_run.rows[0]["Ticker"] == "AAPL"
+    assert latest_run.rows[0]["Company Name"] == "Apple Inc."
     assert "Loaded 2 tickers" in logger.infos
     assert "Trade candidates: 1" in logger.infos
 

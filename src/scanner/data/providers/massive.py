@@ -92,6 +92,41 @@ class MassiveMarketDataProvider(MarketDataProvider):
 
         return {ticker: results.get(ticker, pd.DataFrame()) for ticker in tickers}
 
+    def download_company_profiles_batch(self, tickers: list[str]) -> dict[str, dict[str, str]]:
+        if not self.api_key:
+            raise RuntimeError(
+                "MASSIVE_API_KEY is required when market_data_provider=massive"
+            )
+
+        unique_tickers = list(dict.fromkeys(tickers))
+        max_workers = max(1, min(len(unique_tickers), int(settings.massive_batch_workers)))
+        profiles: dict[str, dict[str, str]] = {}
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(self._download_company_profile, ticker): ticker
+                for ticker in unique_tickers
+            }
+            for future in as_completed(futures):
+                ticker = futures[future]
+                profiles[ticker] = future.result()
+
+        return profiles
+
+    def _download_company_profile(self, ticker: str) -> dict[str, str]:
+        massive_ticker = _to_massive_ticker(ticker)
+        response = requests.get(
+            f"{self.base_url}/v3/reference/tickers/{quote(massive_ticker)}",
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            timeout=30,
+        )
+        response.raise_for_status()
+        result = response.json().get("results") or {}
+        return {
+            "name": str(result.get("name") or ""),
+            "sector": _sector_from_sic(result.get("sic_code")),
+        }
+
 
 def _date_range_for_period(period: str) -> tuple[date, date]:
     end_date = pd.Timestamp.today().date()
@@ -161,3 +196,36 @@ def _history_from_results(results: list[dict]) -> pd.DataFrame:
 
 def _to_massive_ticker(ticker: str) -> str:
     return ticker.strip().upper().replace("-", ".")
+
+
+def _sector_from_sic(value: object) -> str:
+    try:
+        sic = int(str(value))
+    except (TypeError, ValueError):
+        return ""
+
+    if 100 <= sic <= 999 or 2000 <= sic <= 2199:
+        return "Consumer Staples"
+    if 1000 <= sic <= 1299 or 1400 <= sic <= 1499 or 2400 <= sic <= 2699:
+        return "Materials"
+    if 1300 <= sic <= 1399 or 2900 <= sic <= 2999:
+        return "Energy"
+    if 2800 <= sic <= 2832:
+        return "Materials"
+    if 2833 <= sic <= 2836 or 3840 <= sic <= 3851 or 8000 <= sic <= 8099:
+        return "Health Care"
+    if 3570 <= sic <= 3579 or 3650 <= sic <= 3699 or 7370 <= sic <= 7379:
+        return "Information Technology"
+    if 4800 <= sic <= 4899:
+        return "Communication Services"
+    if 4900 <= sic <= 4999:
+        return "Utilities"
+    if 6500 <= sic <= 6599:
+        return "Real Estate"
+    if 6000 <= sic <= 6799:
+        return "Financials"
+    if 1500 <= sic <= 1799 or 3400 <= sic <= 3999 or 4500 <= sic <= 4799:
+        return "Industrials"
+    if 2200 <= sic <= 2399 or 2700 <= sic <= 2799 or 3100 <= sic <= 3299 or 5000 <= sic <= 5999 or 7000 <= sic <= 7999:
+        return "Consumer Discretionary"
+    return "Other"

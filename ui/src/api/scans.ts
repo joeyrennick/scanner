@@ -21,7 +21,7 @@ export function useLatestWatchlist() {
 
 export function useMarketDataHistory(
   ticker: string | null,
-  provider = 'yahoo',
+  provider = 'massive',
   period = '1y'
 ) {
   return useQuery({

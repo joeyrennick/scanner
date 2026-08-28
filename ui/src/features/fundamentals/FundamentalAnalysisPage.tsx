@@ -3,6 +3,8 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useAnalyzeFundamentals, useGenerateFundamentalReport } from '../../api/fundamentals';
 import { useLatestWatchlist, useWatchlistRun } from '../../api/scans';
 import type { AnalysisCheck, FundamentalAnalysis, WatchlistRow } from '../../api/types';
+import { useScannerDisplaySettings, type ScannerDisplaySettings } from '../../lib/scannerSettings';
+import { rowMatchesDisplaySettings, rowMatchesStrategy } from '../../lib/watchlist';
 
 type Tab = 'summary' | 'quality' | 'valuation' | 'risk' | 'financials';
 type SavedState = {
@@ -33,6 +35,7 @@ export function FundamentalAnalysisPage() {
   const [state, setStateBase] = useState<SavedState>(() => loadFundamentalState(searchParams));
   const analyze = useAnalyzeFundamentals();
   const report = useGenerateFundamentalReport();
+  const [displaySettings] = useScannerDisplaySettings();
   const watchlist = useLatestWatchlist();
   const selectedRun = useWatchlistRun(state.runId);
   const candidateSource = selectedRun.data ?? watchlist.data;
@@ -50,8 +53,8 @@ export function FundamentalAnalysisPage() {
   );
 
   const candidates = useMemo(
-    () => candidateRows(candidateSource?.rows ?? [], state.strategy),
-    [candidateSource?.rows, state.strategy]
+    () => candidateRows(candidateSource?.rows ?? [], state.strategy, displaySettings),
+    [candidateSource?.rows, displaySettings, state.strategy]
   );
   const candidateIndex = candidates.findIndex((row) => tickerForRow(row) === state.ticker);
   const assumptions = state.assumptionsByTicker[state.ticker] ?? {};
@@ -333,15 +336,23 @@ export function loadFundamentalState(params: URLSearchParams): SavedState {
     ...saved,
     ticker: (params.get('ticker') ?? saved.ticker).toUpperCase(),
     tickerDraft: (params.get('ticker') ?? saved.tickerDraft ?? saved.ticker).toUpperCase(),
-    runId: numberOrNull(params.get('run_id')) ?? saved.runId,
+    runId: params.has('run_id') ? numberOrNull(params.get('run_id')) : null,
     strategy: params.get('strategy') ?? saved.strategy,
     tab: isTab(tab) ? tab : saved.tab
   };
 }
 
-export function candidateRows(rows: WatchlistRow[], strategy: string) {
-  if (strategy === 'all') return rows.filter((row) => tickerForRow(row));
-  return rows.filter((row) => String(row['Triggered Strategies'] ?? '').toLowerCase().includes(strategy));
+export function candidateRows(
+  rows: WatchlistRow[],
+  strategy: string,
+  displaySettings: ScannerDisplaySettings
+) {
+  return rows.filter(
+    (row) =>
+      tickerForRow(row) &&
+      rowMatchesStrategy(row, strategy) &&
+      rowMatchesDisplaySettings(row, displaySettings)
+  );
 }
 function tickerForRow(row: WatchlistRow) { return String(row.Ticker ?? row.Symbol ?? '').toUpperCase(); }
 function isTab(value: string | null): value is Tab { return ['summary', 'quality', 'valuation', 'risk', 'financials'].includes(value ?? ''); }

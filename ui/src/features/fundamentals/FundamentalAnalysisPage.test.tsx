@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { candidateRows, loadFundamentalState } from './FundamentalAnalysisPage';
 
+const displaySettings = { minStopDistancePercent: 1, minFiveDayRange: 10 };
+
 describe('fundamental analysis state', () => {
   beforeEach(() => localStorage.clear());
 
@@ -23,7 +25,7 @@ describe('fundamental analysis state', () => {
 
     expect(state.ticker).toBe('AAPL');
     expect(state.tab).toBe('valuation');
-    expect(state.runId).toBe(8);
+    expect(state.runId).toBeNull();
     expect(state.scrollY).toBe(240);
     expect(state.assumptionsByTicker.MSFT.discount_rate).toBe(0.11);
   });
@@ -43,7 +45,23 @@ describe('fundamental analysis state', () => {
       { Ticker: 'MSFT', 'Triggered Strategies': 'Breakout Strategy' }
     ];
 
-    expect(candidateRows(rows, 'pullback').map((row) => row.Ticker)).toEqual(['AAPL']);
-    expect(candidateRows(rows, 'all')).toHaveLength(2);
+    expect(candidateRows(rows, 'pullback', displaySettings).map((row) => row.Ticker)).toEqual(['AAPL']);
+    expect(candidateRows(rows, 'all', displaySettings)).toHaveLength(2);
+  });
+
+  it('preserves an explicitly linked historical scanner run', () => {
+    const state = loadFundamentalState(new URLSearchParams('ticker=AAPL&run_id=6'));
+
+    expect(state.runId).toBe(6);
+  });
+
+  it('uses the same display thresholds as the Candidates page', () => {
+    const rows = [
+      { Ticker: 'AAPL', 'Triggered Strategies': 'Pullback', 'Current Price': 100, 'Suggested Stop': 98, '5D Range': 12 },
+      { Ticker: 'MSFT', 'Triggered Strategies': 'Pullback', 'Current Price': 100, 'Suggested Stop': 99.5, '5D Range': 12 },
+      { Ticker: 'NVDA', 'Triggered Strategies': 'Pullback', 'Current Price': 100, 'Suggested Stop': 98, '5D Range': 8 }
+    ];
+
+    expect(candidateRows(rows, 'all', displaySettings).map((row) => row.Ticker)).toEqual(['AAPL']);
   });
 });

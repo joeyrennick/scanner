@@ -73,6 +73,7 @@ import {
 } from './lib/watchlist';
 import { useScannerDisplaySettings } from './lib/scannerSettings';
 import { appRoutes, getRouteMeta } from './routes';
+import { FundamentalAnalysisPage } from './features/fundamentals/FundamentalAnalysisPage';
 
 const universes = ['all', 'sp500', 'djia', 'nasdaq', 'nyse'];
 const historyPeriods = ['6mo', '1y', '5y'];
@@ -81,6 +82,7 @@ const routeIcons: Record<string, ReactNode> = {
   '/': <LayoutDashboard />,
   '/daily-scanner': <Activity />,
   '/candidates': <ListChecks />,
+  '/fundamentals': <ShieldCheck />,
   '/backtest': <BarChart3 />,
   '/portfolio': <BriefcaseBusiness />,
   '/journal': <FileText />,
@@ -96,6 +98,7 @@ export function App() {
         <Route index element={<DashboardPage />} />
         <Route path="daily-scanner" element={<DailyScannerPage />} />
         <Route path="candidates" element={<CandidatesPage />} />
+        <Route path="fundamentals" element={<FundamentalAnalysisPage />} />
         <Route path="backtest" element={<BacktestPage />} />
         <Route path="portfolio" element={<PortfolioPage />} />
         <Route path="journal" element={<JournalPage />} />
@@ -1181,6 +1184,14 @@ function CandidatesPage() {
               <h2 id="candidate-detail-title">{selected?.ticker ?? 'Candidate Detail'}</h2>
               <p>{selected?.strategy ?? 'Select a candidate'}</p>
             </div>
+            {selected && (
+              <Link
+                className="link-button"
+                to={`/fundamentals?ticker=${encodeURIComponent(selected.ticker)}${latestWatchlist.data?.run_id ? `&run_id=${latestWatchlist.data.run_id}` : ''}`}
+              >
+                Fundamental Analysis
+              </Link>
+            )}
           </div>
 
           {selected ? (
@@ -2711,6 +2722,7 @@ function ReportsTable({ reports }: { reports: ReportMetadata[] }) {
             <th>Name</th>
             <th>Type</th>
             <th>Modified</th>
+            <th>Analysis summary</th>
             <th>Size</th>
             <th>Path</th>
             <th>Action</th>
@@ -2722,9 +2734,19 @@ function ReportsTable({ reports }: { reports: ReportMetadata[] }) {
               <td className="ticker-cell">{report.name}</td>
               <td>{report.type.replaceAll('_', ' ')}</td>
               <td>{formatDateTime(report.modified_at)}</td>
+              <td>
+                {report.ticker
+                  ? `${report.ticker} · ${report.quality_label ?? 'unknown'} quality · ${report.valuation_label ?? 'unknown'} · ${report.risk_label ?? 'unknown'} risk`
+                  : '—'}
+              </td>
               <td>{formatFileSize(report.size_bytes)}</td>
               <td>{report.path}</td>
               <td>
+                {report.type === 'fundamental_analysis' && (
+                  <a className="link-button" href={`/api/reports/${report.id}/view`} target="_blank" rel="noreferrer">
+                    View
+                  </a>
+                )}{' '}
                 <a className="link-button" href={`/api/reports/${report.id}/download`}>
                   Download
                 </a>
@@ -2733,7 +2755,7 @@ function ReportsTable({ reports }: { reports: ReportMetadata[] }) {
           ))}
           {reports.length === 0 && (
             <tr>
-              <td colSpan={6} className="empty-cell">No generated reports found.</td>
+              <td colSpan={7} className="empty-cell">No generated reports found.</td>
             </tr>
           )}
         </tbody>

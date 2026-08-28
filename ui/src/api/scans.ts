@@ -19,6 +19,14 @@ export function useLatestWatchlist() {
   });
 }
 
+export function useWatchlistRun(runId: number | null) {
+  return useQuery({
+    queryKey: queryKeys.watchlistRun(runId),
+    queryFn: () => apiClient.request<WatchlistResponse>(`/api/watchlist/runs/${runId}`),
+    enabled: runId !== null
+  });
+}
+
 export function useMarketDataHistory(
   ticker: string | null,
   provider = 'massive',

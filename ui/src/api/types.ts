@@ -163,6 +163,55 @@ export interface ReportMetadata {
   type: string;
   size_bytes: number;
   modified_at: string;
+  ticker?: string | null;
+  data_as_of?: string | null;
+  quality_label?: string | null;
+  valuation_label?: string | null;
+  risk_label?: string | null;
+}
+
+export type AnalysisCheck = {
+  name: string;
+  status: string;
+  value: number | string | null;
+  unit: string;
+};
+
+export interface FundamentalAnalysis {
+  schema_version: number;
+  ticker: string;
+  generated_at: string;
+  source: string;
+  company: {
+    name: string;
+    description: string;
+    market_cap: number | null;
+    sector: string;
+    homepage_url: string;
+    employees: number | null;
+  };
+  current_price: number | null;
+  data_as_of: string | null;
+  financial_history: Array<Record<string, string | number | null>>;
+  ratios: Record<string, number>;
+  quality: { score: number; label: string; checks: AnalysisCheck[]; metrics: Record<string, number | null> };
+  valuation: {
+    label: string;
+    confidence: string;
+    current_price: number | null;
+    margin_of_safety: number | null;
+    assumptions: Record<string, number>;
+    scenarios: Array<{ name: string; growth_rate: number; fair_value: number | null; upside: number | null }>;
+    multiples: Record<string, number>;
+  };
+  risk: { score: number; label: string; checks: AnalysisCheck[]; metrics: Record<string, number | null> };
+  warnings: string[];
+  confidence: string;
+}
+
+export interface FundamentalReportResponse {
+  report: ReportMetadata;
+  snapshot_path: string;
 }
 
 export interface DailyScannerReportRequest {

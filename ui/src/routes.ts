@@ -25,6 +25,12 @@ export const appRoutes: AppRoute[] = [
     description: 'Review scanner candidates and trade checklist values'
   },
   {
+    path: '/fundamentals',
+    title: 'Fundamental Analysis',
+    navLabel: 'Fundamentals',
+    description: 'Evaluate business quality, valuation, and long-term risk'
+  },
+  {
     path: '/backtest',
     title: 'Backtest',
     navLabel: 'Backtest',

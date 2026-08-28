@@ -107,6 +107,16 @@ class DailyScannerReportResponse(BaseModel):
     archived_watchlist: str | None = None
 
 
+class FundamentalAnalysisRequest(BaseModel):
+    assumptions: dict[str, Any] = Field(default_factory=dict)
+
+
+class FundamentalReportRequest(BaseModel):
+    ticker: str = Field(min_length=1)
+    analysis: dict[str, Any]
+    page_state: dict[str, Any] = Field(default_factory=dict)
+
+
 class BacktestRequest(BaseModel):
     ticker: str | None = None
     universe: str | None = None

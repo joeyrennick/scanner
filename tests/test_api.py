@@ -128,6 +128,66 @@ def test_market_data_history_endpoint_returns_daily_bars(monkeypatch):
     }
 
 
+def test_fundamental_analysis_endpoint_returns_service_result(tmp_path, monkeypatch):
+    from scanner.api import app as api_app
+
+    monkeypatch.setattr(
+        api_app,
+        "settings",
+        replace(api_app.settings, market_data_cache_path=str(tmp_path / "cache.sqlite")),
+    )
+
+    class FakeService:
+        def __init__(self, provider):
+            pass
+
+        def analyze(self, ticker, assumptions):
+            return {
+                "schema_version": 1,
+                "ticker": ticker,
+                "assumptions": assumptions,
+            }
+
+    monkeypatch.setattr(api_app, "FundamentalAnalysisService", FakeService)
+    monkeypatch.setattr(api_app, "MassiveMarketDataProvider", lambda: object())
+
+    response = client.post(
+        "/api/fundamentals/AAPL",
+        json={"assumptions": {"discount_rate": 0.11}},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ticker"] == "AAPL"
+    assert response.json()["assumptions"]["discount_rate"] == 0.11
+
+
+def test_fundamental_report_endpoint_creates_downloadable_pdf(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    analysis = {
+        "schema_version": 1,
+        "ticker": "AAPL",
+        "company": {"name": "Apple Inc."},
+        "quality": {"score": 80, "label": "strong", "checks": []},
+        "valuation": {"label": "fairly valued", "scenarios": []},
+        "risk": {"score": 25, "label": "low", "checks": []},
+        "financial_history": [],
+        "warnings": [],
+    }
+
+    created = client.post(
+        "/api/reports/fundamental-analysis",
+        json={"ticker": "AAPL", "analysis": analysis, "page_state": {"tab": "risk"}},
+    )
+
+    assert created.status_code == 200
+    report = created.json()["report"]
+    assert report["type"] == "fundamental_analysis"
+    downloaded = client.get(f"/api/reports/{report['id']}/download")
+    assert downloaded.status_code == 200
+    assert downloaded.headers["content-type"] == "application/pdf"
+    assert downloaded.content.startswith(b"%PDF")
+
+
 def test_strategies_endpoint_returns_metadata():
     response = client.get("/api/strategies")
 

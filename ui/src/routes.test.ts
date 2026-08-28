@@ -15,6 +15,13 @@ describe('app routes', () => {
     });
   });
 
+  it('includes fundamental analysis as a routeable screen', () => {
+    expect(getRouteMeta('/fundamentals')).toMatchObject({
+      title: 'Fundamental Analysis',
+      navLabel: 'Fundamentals'
+    });
+  });
+
   it('falls back to the dashboard metadata for unknown paths', () => {
     expect(getRouteMeta('/missing')).toMatchObject({ title: 'Dashboard' });
   });

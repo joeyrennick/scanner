@@ -173,3 +173,23 @@ def test_massive_company_profiles_supply_name_and_sector(monkeypatch):
     }
     assert _sector_from_sic("6021") == "Financials"
     assert _sector_from_sic("6531") == "Real Estate"
+
+
+def test_massive_provider_downloads_fundamental_datasets(monkeypatch):
+    calls = []
+
+    def fake_get(url, headers, timeout, params=None):
+        calls.append((url, params))
+        if "/v3/reference/tickers/" in url:
+            return FakeResponse({"results": {"ticker": "AAPL", "name": "Apple"}})
+        return FakeResponse({"status": "OK", "results": [{"ticker": "AAPL"}]})
+
+    monkeypatch.setattr("scanner.data.providers.massive.requests.get", fake_get)
+    result = MassiveMarketDataProvider(api_key="test-key").download_fundamental_data("AAPL")
+
+    assert result["profile"]["name"] == "Apple"
+    assert len(result["income_statements"]) == 1
+    assert len(result["balance_sheets"]) == 1
+    assert len(result["cash_flow_statements"]) == 1
+    assert len(result["ratios"]) == 1
+    assert any("/stocks/financials/v1/ratios" in url for url, _params in calls)

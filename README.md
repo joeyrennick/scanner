@@ -62,3 +62,17 @@ Initial API endpoints:
 - `GET /api/reports`
 - `GET /api/reports/{report_id}`
 - `GET /api/reports/{report_id}/download`
+- `POST /api/fundamentals/{ticker}`
+- `POST /api/reports/fundamental-analysis`
+
+## Fundamental Analysis
+
+Open `http://127.0.0.1:5173/fundamentals` to analyze a ticker or cycle through
+the candidates from a saved scanner run. The page restores the selected run,
+ticker, strategy filter, tab, scroll position, and per-ticker valuation
+assumptions after refresh or navigation.
+
+Fundamental statements and ratios use Massive's Financials & Ratios data. The
+configured Massive API key must include that entitlement. Generated PDF reports
+and their immutable JSON snapshots are written under
+`output/fundamental_reports` and appear on the Reports page.

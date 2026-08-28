@@ -114,6 +114,14 @@ class MassiveMarketDataProvider(MarketDataProvider):
         return profiles
 
     def _download_company_profile(self, ticker: str) -> dict[str, str]:
+        result = self.download_company_details(ticker)
+        return {
+            "name": str(result.get("name") or ""),
+            "sector": _sector_from_sic(result.get("sic_code")),
+        }
+
+    def download_company_details(self, ticker: str) -> dict:
+        self._require_api_key()
         massive_ticker = _to_massive_ticker(ticker)
         response = requests.get(
             f"{self.base_url}/v3/reference/tickers/{quote(massive_ticker)}",
@@ -121,11 +129,62 @@ class MassiveMarketDataProvider(MarketDataProvider):
             timeout=30,
         )
         response.raise_for_status()
-        result = response.json().get("results") or {}
-        return {
-            "name": str(result.get("name") or ""),
-            "sector": _sector_from_sic(result.get("sic_code")),
+        return response.json().get("results") or {}
+
+    def download_fundamental_data(self, ticker: str) -> dict[str, object]:
+        self._require_api_key()
+        massive_ticker = _to_massive_ticker(ticker)
+        statement_params = {
+            "ticker": massive_ticker,
+            "timeframe": "annual",
+            "order": "desc",
+            "sort": "period_end",
+            "limit": 10,
         }
+        endpoints = {
+            "income_statements": "/stocks/financials/v1/income-statements",
+            "balance_sheets": "/stocks/financials/v1/balance-sheets",
+            "cash_flow_statements": "/stocks/financials/v1/cash-flow-statements",
+            "ratios": "/stocks/financials/v1/ratios",
+        }
+        data: dict[str, object] = {
+            "profile": self.download_company_details(massive_ticker),
+        }
+
+        for name, endpoint in endpoints.items():
+            params = {"ticker": massive_ticker, "limit": 10}
+            if name != "ratios":
+                params = statement_params.copy()
+            data[name] = self._download_results(endpoint, params)
+
+        return data
+
+    def _download_results(self, endpoint: str, params: dict) -> list[dict]:
+        response = requests.get(
+            f"{self.base_url}{endpoint}",
+            params=params,
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            timeout=30,
+        )
+        if getattr(response, "status_code", None) == 403:
+            raise RuntimeError(
+                "Massive fundamentals are not enabled for this API key. "
+                "Add the Financials & Ratios entitlement or configure an eligible plan."
+            )
+        response.raise_for_status()
+        payload = response.json()
+
+        if payload.get("status") == "ERROR":
+            message = payload.get("error") or payload.get("message") or "Massive API error"
+            raise RuntimeError(message)
+
+        return payload.get("results") or []
+
+    def _require_api_key(self) -> None:
+        if not self.api_key:
+            raise RuntimeError(
+                "MASSIVE_API_KEY is required when market_data_provider=massive"
+            )
 
 
 def _date_range_for_period(period: str) -> tuple[date, date]:

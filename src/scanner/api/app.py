@@ -4,6 +4,7 @@ from dataclasses import asdict, fields, replace
 from datetime import date, datetime
 from pathlib import Path
 import base64
+import json
 import math
 import os
 from uuid import uuid4
@@ -22,6 +23,8 @@ from scanner.api.schemas import (
     CandidateTradeLevelsResponse,
     DailyScannerReportRequest,
     DailyScannerReportResponse,
+    FundamentalAnalysisRequest,
+    FundamentalReportRequest,
     HealthResponse,
     JobResponse,
     MarketDataCredentialRequest,
@@ -40,12 +43,15 @@ from scanner.config.settings import settings
 from scanner.context import ScannerContext
 from scanner.data.cache import SQLiteMarketDataCache
 from scanner.data.market_data import clear_market_data_provider_cache, create_market_data_provider
-from scanner.data.providers.massive import MASSIVE_API_KEY_SECRET
+from scanner.data.providers.massive import MASSIVE_API_KEY_SECRET, MassiveMarketDataProvider
 from scanner.data.scanner_results import SQLiteScannerResultStore
 from scanner.portfolio.execution_model import ExecutionModel
 from scanner.portfolio.portfolio_simulator import PortfolioSimulator
 from scanner.portfolio.trade_csv_loader import load_trades_from_csv
+from scanner.fundamentals import FundamentalAnalysisService
+from scanner.fundamentals.cache import FundamentalAnalysisCache
 from scanner.reports.daily_scanner_report import DailyScannerReport
+from scanner.reports.fundamental_analysis_report import FundamentalAnalysisReport
 from scanner.services.cache_warmup import CacheWarmupConfig, CacheWarmupService
 from scanner.security.secret_store import SQLiteSecretStore
 from scanner.services.scan_service import ScanCancelled, ScanConfig, ScanService
@@ -150,6 +156,36 @@ def get_market_data_history(
             "rows": _history_points_from_dataframe(history),
         }
     )
+
+
+@app.post("/api/fundamentals/{ticker}")
+def analyze_fundamentals(
+    ticker: str,
+    request: FundamentalAnalysisRequest,
+) -> dict[str, Any]:
+    normalized_ticker = ticker.strip().upper()
+    if not normalized_ticker:
+        raise HTTPException(status_code=422, detail="Ticker is required")
+
+    try:
+        cache = FundamentalAnalysisCache(settings.market_data_cache_path)
+        cached = cache.get(normalized_ticker, request.assumptions)
+        if cached is not None:
+            return _json_safe(cached)
+        analysis = FundamentalAnalysisService(MassiveMarketDataProvider()).analyze(
+                normalized_ticker,
+                assumptions=request.assumptions,
+            )
+        cache.set(normalized_ticker, request.assumptions, analysis)
+        return _json_safe(analysis)
+    except RuntimeError as error:
+        status = 400 if "API_KEY" in str(error) else 502
+        raise HTTPException(status_code=status, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Unable to load fundamentals for {normalized_ticker}: {error}",
+        ) from error
 
 
 @app.get("/api/cache/overview")
@@ -266,6 +302,20 @@ def get_latest_watchlist() -> dict[str, Any]:
     }
 
 
+@app.get("/api/watchlist/runs/{run_id}")
+def get_watchlist_run(run_id: int) -> dict[str, Any]:
+    run = _scanner_result_store().get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Scanner run not found")
+    return {
+        "exists": True,
+        "path": run.output_file,
+        "run_id": run.id,
+        "created_at": run.created_at,
+        "rows": run.rows,
+    }
+
+
 @app.post(
     "/api/watchlist/refresh-prices",
     response_model=WatchlistPriceRefreshResponse,
@@ -353,7 +403,7 @@ def list_reports() -> list[dict[str, Any]]:
     reports = []
 
     for path in sorted(output_dir.rglob("*")):
-        if not path.is_file() or path.suffix.lower() not in {".html", ".csv", ".log"}:
+        if not path.is_file() or path.suffix.lower() not in {".html", ".csv", ".log", ".pdf"}:
             continue
 
         reports.append(_report_metadata(path))
@@ -395,6 +445,32 @@ def generate_daily_scanner_report(
     )
 
 
+@app.post("/api/reports/fundamental-analysis")
+def generate_fundamental_analysis_report(
+    request: FundamentalReportRequest,
+) -> dict[str, Any]:
+    ticker = request.ticker.strip().upper()
+    analysis_ticker = str(request.analysis.get("ticker") or "").upper()
+    if not ticker or analysis_ticker != ticker:
+        raise HTTPException(status_code=422, detail="Report ticker does not match analysis")
+    if request.analysis.get("schema_version") != 1:
+        raise HTTPException(status_code=422, detail="Unsupported analysis schema version")
+
+    output_dir = Path("output/fundamental_reports")
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")
+    stem = f"{ticker}_fundamental_analysis_{timestamp}"
+    pdf_path = output_dir / f"{stem}.pdf"
+    snapshot_path = output_dir / f"{stem}.json"
+    FundamentalAnalysisReport(request.analysis, request.page_state).generate(
+        pdf_path,
+        snapshot_path,
+    )
+    return {
+        "report": _report_metadata(pdf_path),
+        "snapshot_path": str(snapshot_path),
+    }
+
+
 @app.get("/api/reports/{report_id}")
 def get_report(report_id: str) -> dict[str, Any]:
     path = _report_path(report_id)
@@ -413,6 +489,19 @@ def download_report(report_id: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="Report not found")
 
     return FileResponse(path, filename=path.name)
+
+
+@app.get("/api/reports/{report_id}/view")
+def view_report(report_id: str) -> FileResponse:
+    path = _report_path(report_id)
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="Report not found")
+    media_type = "application/pdf" if path.suffix.lower() == ".pdf" else None
+    return FileResponse(
+        path,
+        media_type=media_type,
+        content_disposition_type="inline",
+    )
 
 
 def _refresh_watchlist_prices(
@@ -1034,7 +1123,7 @@ def _massive_credential_status() -> MarketDataCredentialStatus:
 
 def _report_metadata(path: Path) -> dict[str, Any]:
     stat = path.stat()
-    return {
+    metadata = {
         "id": _report_id(path),
         "name": path.name,
         "path": str(path),
@@ -1042,6 +1131,24 @@ def _report_metadata(path: Path) -> dict[str, Any]:
         "size_bytes": stat.st_size,
         "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
     }
+    if path.suffix.lower() == ".pdf" and "_fundamental_analysis_" in path.name.lower():
+        snapshot_path = path.with_suffix(".json")
+        if snapshot_path.exists():
+            try:
+                snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+                analysis = snapshot.get("analysis") or {}
+                metadata.update(
+                    {
+                        "ticker": analysis.get("ticker"),
+                        "data_as_of": analysis.get("data_as_of"),
+                        "quality_label": (analysis.get("quality") or {}).get("label"),
+                        "valuation_label": (analysis.get("valuation") or {}).get("label"),
+                        "risk_label": (analysis.get("risk") or {}).get("label"),
+                    }
+                )
+            except (ValueError, TypeError):
+                pass
+    return metadata
 
 
 def _report_id(path: Path) -> str:
@@ -1070,6 +1177,8 @@ def _report_type(path: Path) -> str:
 
     if name.startswith("daily_scanner_report_") and path.suffix == ".html":
         return "daily_scanner"
+    if "_fundamental_analysis_" in name and path.suffix == ".pdf":
+        return "fundamental_analysis"
     if "backtest" in name and path.suffix == ".html":
         return "backtest"
     if "portfolio" in name and path.suffix == ".html":

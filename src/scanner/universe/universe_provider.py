@@ -1,6 +1,19 @@
 import pandas as pd
 import requests
 from io import StringIO
+import logging
+
+
+logger = logging.getLogger("scanner")
+
+# Validated against S&P Dow Jones Indices' June 29, 2026 constituent change.
+# Alphabet (GOOGL) replaced Verizon (VZ). Keep this fallback deliberately
+# explicit so an upstream HTML change cannot prevent scanner runs.
+DJIA_FALLBACK_TICKERS = (
+    "MMM", "GOOGL", "AMZN", "AXP", "AMGN", "AAPL", "BA", "CAT", "CVX", "CSCO",
+    "KO", "DIS", "GS", "HD", "HON", "IBM", "JNJ", "JPM", "MCD", "MRK", "MSFT",
+    "NKE", "NVDA", "PG", "CRM", "SHW", "TRV", "UNH", "V", "WMT",
+)
 
 
 class UniverseProvider:
@@ -40,17 +53,27 @@ class UniverseProvider:
         tables = pd.read_html(StringIO(response.text))
 
         for table in tables:
-            if "Symbol" in table.columns:
+            table = self._flatten_columns(table)
+            symbol_column = next(
+                (column for column in ("Symbol", "Ticker") if column in table.columns),
+                None,
+            )
+            if symbol_column:
                 name_column = next(
                     (column for column in ("Company", "Company name") if column in table.columns),
                     None,
                 )
                 if name_column:
-                    self._remember_company_names(table, "Symbol", name_column)
-                tickers = table["Symbol"].tolist()
-                return self._normalize_tickers(tickers)
+                    self._remember_company_names(table, symbol_column, name_column)
+                tickers = self._normalize_tickers(table[symbol_column].tolist())
+                if len(tickers) == 30:
+                    return tickers
 
-        raise ValueError("Could not find DJIA symbols table")
+        logger.warning(
+            "Could not find a validated 30-symbol DJIA table; using the "
+            "built-in fallback constituent list"
+        )
+        return list(DJIA_FALLBACK_TICKERS)
 
     def get_nasdaq_tickers(self) -> list[str]:
         listed = self._read_nasdaq_trader_file(
@@ -95,7 +118,6 @@ class UniverseProvider:
         if universe == "all":
             return self._dedupe_tickers(
                 self.get_sp500_tickers()
-                + self.get_djia_tickers()
                 + self.get_nasdaq_tickers()
                 + self.get_nyse_tickers()
             )
@@ -119,6 +141,22 @@ class UniverseProvider:
             if str(ticker).strip()
         ]
         return self._dedupe_tickers(normalized)
+
+    def _flatten_columns(self, table: pd.DataFrame) -> pd.DataFrame:
+        flattened = table.copy()
+        if isinstance(flattened.columns, pd.MultiIndex):
+            flattened.columns = [
+                next(
+                    (
+                        str(part).strip()
+                        for part in reversed(column)
+                        if str(part).strip() and not str(part).startswith("Unnamed")
+                    ),
+                    "",
+                )
+                for column in flattened.columns
+            ]
+        return flattened
 
     def _normalize_ticker(self, ticker: object) -> str:
         return str(ticker).strip().upper().replace(".", "-")

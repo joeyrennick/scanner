@@ -1,16 +1,20 @@
 import pandas as pd
 
-from scanner.universe.universe_provider import UniverseProvider
+from scanner.universe.universe_provider import DJIA_FALLBACK_TICKERS, UniverseProvider
 
 
 def test_get_universe_tickers_combines_supported_universes(monkeypatch):
     provider = UniverseProvider()
     monkeypatch.setattr(provider, "get_sp500_tickers", lambda: ["AAPL", "MSFT"])
-    monkeypatch.setattr(provider, "get_djia_tickers", lambda: ["AAPL", "V"])
+    monkeypatch.setattr(
+        provider,
+        "get_djia_tickers",
+        lambda: (_ for _ in ()).throw(AssertionError("all must not load DJIA")),
+    )
     monkeypatch.setattr(provider, "get_nasdaq_tickers", lambda: ["NVDA"])
     monkeypatch.setattr(provider, "get_nyse_tickers", lambda: ["IBM"])
 
-    assert provider.get_universe_tickers("all") == ["AAPL", "MSFT", "V", "NVDA", "IBM"]
+    assert provider.get_universe_tickers("all") == ["AAPL", "MSFT", "NVDA", "IBM"]
 
 
 def test_get_universe_tickers_routes_named_universe(monkeypatch):
@@ -77,3 +81,44 @@ def test_filter_tradeable_common_symbols_removes_warrants_units_and_rights():
     filtered = provider._filter_tradeable_common_symbols(listed, "Symbol")
 
     assert filtered["Symbol"].tolist() == ["AAPL", "MSFT"]
+
+
+def test_djia_uses_validated_symbol_table(monkeypatch):
+    provider = UniverseProvider()
+    symbols = list(DJIA_FALLBACK_TICKERS)
+
+    class FakeResponse:
+        text = "html"
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr("scanner.universe.universe_provider.requests.get", lambda *args, **kwargs: FakeResponse())
+    monkeypatch.setattr(
+        "scanner.universe.universe_provider.pd.read_html",
+        lambda _html: [pd.DataFrame({"Company": [f"Company {i}" for i in range(30)], "Symbol": symbols})],
+    )
+
+    assert provider.get_djia_tickers() == symbols
+
+
+def test_djia_falls_back_when_external_table_has_no_symbols(monkeypatch, caplog):
+    provider = UniverseProvider()
+
+    class FakeResponse:
+        text = "html"
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr("scanner.universe.universe_provider.requests.get", lambda *args, **kwargs: FakeResponse())
+    monkeypatch.setattr(
+        "scanner.universe.universe_provider.pd.read_html",
+        lambda _html: [pd.DataFrame({"Company": ["Apple", "Microsoft"]})],
+    )
+
+    assert provider.get_djia_tickers() == list(DJIA_FALLBACK_TICKERS)
+    assert len(set(DJIA_FALLBACK_TICKERS)) == 30
+    assert "GOOGL" in DJIA_FALLBACK_TICKERS
+    assert "VZ" not in DJIA_FALLBACK_TICKERS
+    assert "using the built-in fallback" in caplog.text

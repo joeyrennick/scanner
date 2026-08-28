@@ -52,6 +52,80 @@ def test_pullback_strategy_does_not_trigger_when_below_200ma():
     assert not pullback.triggered
 
 
+def test_pullback_strategy_requires_price_above_200ma_persistence():
+    market_data = create_market_data(
+        start_price=100,
+        ma20=126,
+        ma50=95,
+        ma200=80,
+    )
+    recent_index = market_data.history.index[-20:]
+    market_data.history.loc[recent_index[:3], "Close"] = 79
+
+    result = PullbackStrategy().evaluate(
+        market_data=market_data,
+        relative_strength=15,
+    )
+
+    assert not result.triggered
+    assert not result.checks["Price > 200MA ≥ 18/20 Sessions"]
+
+
+def test_pullback_strategy_requires_ma50_above_200ma_persistence():
+    market_data = create_market_data(
+        start_price=100,
+        ma20=126,
+        ma50=95,
+        ma200=80,
+    )
+    market_data.history.loc[market_data.history.index[-2], "MA50"] = 79
+
+    result = PullbackStrategy().evaluate(
+        market_data=market_data,
+        relative_strength=15,
+    )
+
+    assert not result.triggered
+    assert not result.checks["50MA > 200MA ≥ 20/20 Sessions"]
+
+
+def test_pullback_strategy_rejects_marginal_ma_spread():
+    market_data = create_market_data(
+        start_price=100,
+        ma20=126,
+        ma50=80.5,
+        ma200=80,
+    )
+
+    result = PullbackStrategy().evaluate(
+        market_data=market_data,
+        relative_strength=15,
+    )
+
+    assert not result.triggered
+    assert not result.checks["50MA ≥ 1% Above 200MA"]
+
+
+def test_pullback_strategy_rejects_price_ma200_whipsaw():
+    market_data = create_market_data(
+        start_price=100,
+        ma20=126,
+        ma50=95,
+        ma200=80,
+    )
+    recent_index = market_data.history.index[-60:-20]
+    alternating_prices = [79 if index % 2 == 0 else 81 for index in range(40)]
+    market_data.history.loc[recent_index, "Close"] = alternating_prices
+
+    result = PullbackStrategy().evaluate(
+        market_data=market_data,
+        relative_strength=15,
+    )
+
+    assert not result.triggered
+    assert not result.checks["Price/200MA Crosses ≤ 2 In 60 Sessions"]
+
+
 def test_pullback_strategy_config_can_modify_threshold():
     market_data = create_market_data(
         start_price=100,

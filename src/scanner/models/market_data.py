@@ -39,6 +39,23 @@ class MarketData:
     def ma200_rising(self) -> bool:
         return self.ma200 > self.ma200_20_days_ago
 
+    def price_above_ma200_days(self, lookback_days: int) -> int:
+        recent = self.history.tail(lookback_days)
+        return int((recent["Close"] > recent["MA200"]).sum())
+
+    def ma50_above_ma200_days(self, lookback_days: int) -> int:
+        recent = self.history.tail(lookback_days)
+        return int((recent["MA50"] > recent["MA200"]).sum())
+
+    @property
+    def ma50_ma200_spread(self) -> float:
+        return (self.ma50 - self.ma200) / self.ma200
+
+    def price_ma200_cross_count(self, lookback_days: int) -> int:
+        recent = self.history.tail(lookback_days)
+        above = recent["Close"] > recent["MA200"]
+        return int(above.ne(above.shift()).iloc[1:].sum())
+
     @property
     def high_52_week(self) -> float:
         return self.history["High"].tail(252).max().item()

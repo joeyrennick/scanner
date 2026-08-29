@@ -90,7 +90,7 @@ def test_market_data_history_endpoint_returns_daily_bars(monkeypatch):
     class FakeProvider:
         def download_price_data(self, ticker, period="1y"):
             assert ticker == "AAPL"
-            assert period == "1y"
+            assert period == "2y"
             return pd.DataFrame(
                 [
                     {
@@ -117,6 +117,7 @@ def test_market_data_history_endpoint_returns_daily_bars(monkeypatch):
         "ticker": "AAPL",
         "provider": "massive",
         "period": "1y",
+        "interval": "1d",
         "rows": [
             {
                 "date": "2026-01-02",
@@ -125,9 +126,58 @@ def test_market_data_history_endpoint_returns_daily_bars(monkeypatch):
                 "low": 99.0,
                 "close": 101.0,
                 "volume": 123456.0,
+                "sma_50": None,
+                "sma_200": None,
             }
         ],
     }
+
+
+def test_market_data_history_endpoint_returns_intraday_timestamps(monkeypatch):
+    from scanner.api import app as api_app
+
+    factory_calls = []
+
+    class FakeProvider:
+        def download_price_data(self, ticker, period="1y", interval="1d"):
+            assert ticker == "AAPL"
+            assert period == "10d"
+            assert interval == "5m"
+            return pd.DataFrame(
+                [{"Open": 100.0, "High": 101.0, "Low": 99.5, "Close": 100.5}],
+                index=pd.to_datetime(["2026-08-28T14:35:00+00:00"]),
+            )
+
+    def fake_create_provider(**kwargs):
+        factory_calls.append(kwargs)
+        return FakeProvider()
+
+    monkeypatch.setattr(api_app, "create_market_data_provider", fake_create_provider)
+
+    response = client.get(
+        "/api/market-data/history/AAPL?provider=massive&period=1d&interval=5m"
+    )
+
+    assert response.status_code == 200
+    assert factory_calls[0]["cache_enabled"] is False
+    assert response.json()["interval"] == "5m"
+    assert response.json()["rows"][0]["date"] == "2026-08-28T14:35:00+00:00"
+
+
+def test_market_data_history_calculates_50_and_200_period_moving_averages():
+    from scanner.api import app as api_app
+
+    history = pd.DataFrame(
+        {"Close": list(range(1, 211))},
+        index=pd.date_range("2025-01-01", periods=210, freq="D"),
+    )
+
+    result = api_app._add_moving_averages(history)
+
+    assert pd.isna(result.iloc[48]["SMA 50"])
+    assert result.iloc[49]["SMA 50"] == 25.5
+    assert pd.isna(result.iloc[198]["SMA 200"])
+    assert result.iloc[199]["SMA 200"] == 100.5
 
 
 def test_fundamental_analysis_endpoint_returns_service_result(tmp_path, monkeypatch):

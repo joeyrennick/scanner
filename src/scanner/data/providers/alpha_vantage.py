@@ -16,19 +16,35 @@ class AlphaVantageMarketDataProvider(MarketDataProvider):
     def __init__(self, api_key: str | None = None):
         self.api_key = api_key or os.environ.get("ALPHA_VANTAGE_API_KEY")
 
-    def download_price_data(self, ticker: str, period: str = "1y") -> pd.DataFrame:
+    def download_price_data(
+        self,
+        ticker: str,
+        period: str = "1y",
+        interval: str = "1d",
+    ) -> pd.DataFrame:
         if not self.api_key:
             raise RuntimeError(
                 "ALPHA_VANTAGE_API_KEY is required when market_data_provider=alpha_vantage"
             )
 
+        intraday_intervals = {"5m": "5min", "15m": "15min"}
+        if interval != "1d" and interval not in intraday_intervals:
+            raise ValueError(f"Unsupported Alpha Vantage interval: {interval}")
+
+        provider_interval = intraday_intervals.get(interval)
         params = {
-            "function": "TIME_SERIES_DAILY_ADJUSTED",
+            "function": (
+                "TIME_SERIES_INTRADAY"
+                if provider_interval
+                else "TIME_SERIES_DAILY_ADJUSTED"
+            ),
             "symbol": ticker,
             "outputsize": "full",
             "datatype": "json",
             "apikey": self.api_key,
         }
+        if provider_interval:
+            params["interval"] = provider_interval
         url = f"{self.base_url}?{urlencode(params)}"
 
         with urlopen(url, timeout=30) as response:
@@ -40,9 +56,16 @@ class AlphaVantageMarketDataProvider(MarketDataProvider):
         if "Note" in payload:
             raise RuntimeError(payload["Note"])
 
-        series = payload.get("Time Series (Daily)")
+        series_key = (
+            f"Time Series ({provider_interval})"
+            if provider_interval
+            else "Time Series (Daily)"
+        )
+        series = payload.get(series_key)
         if not series:
-            raise RuntimeError("Alpha Vantage response did not include daily price data")
+            raise RuntimeError(
+                f"Alpha Vantage response did not include {interval} price data"
+            )
 
         history = pd.DataFrame.from_dict(series, orient="index")
         history.index = pd.to_datetime(history.index)
@@ -59,6 +82,8 @@ class AlphaVantageMarketDataProvider(MarketDataProvider):
                 "8. split coefficient": "Stock Splits",
             }
         )
+        if provider_interval:
+            history = history.rename(columns={"5. volume": "Volume"})
 
         for column in [
             "Open",
@@ -81,6 +106,10 @@ class AlphaVantageMarketDataProvider(MarketDataProvider):
 def _apply_period(history: pd.DataFrame, period: str) -> pd.DataFrame:
     if period == "max":
         return history
+
+    if period == "ytd":
+        cutoff = pd.Timestamp(year=history.index.max().year, month=1, day=1)
+        return history.loc[history.index >= cutoff]
 
     match = re.fullmatch(r"(\d+)(d|w|mo|y)", period)
     if not match:

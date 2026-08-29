@@ -30,17 +30,23 @@ class MassiveMarketDataProvider(MarketDataProvider):
         )
         self.name = provider_name
 
-    def download_price_data(self, ticker: str, period: str = "1y") -> pd.DataFrame:
+    def download_price_data(
+        self,
+        ticker: str,
+        period: str = "1y",
+        interval: str = "1d",
+    ) -> pd.DataFrame:
         if not self.api_key:
             raise RuntimeError(
                 "MASSIVE_API_KEY is required when market_data_provider=massive"
             )
 
         start_date, end_date = _date_range_for_period(period)
+        multiplier, timespan = _aggregate_range_for_interval(interval)
         massive_ticker = _to_massive_ticker(ticker)
         url = (
             f"{self.base_url}/v2/aggs/ticker/{quote(massive_ticker)}/range/"
-            f"1/day/{start_date.isoformat()}/{end_date.isoformat()}"
+            f"{multiplier}/{timespan}/{start_date.isoformat()}/{end_date.isoformat()}"
         )
         params = {
             "adjusted": "true",
@@ -193,6 +199,9 @@ def _date_range_for_period(period: str) -> tuple[date, date]:
     if period == "max":
         return date(1970, 1, 1), end_date
 
+    if period == "ytd":
+        return date(end_date.year, 1, 1), end_date
+
     match = re.fullmatch(r"(\d+)(d|w|mo|y)", period)
 
     if not match:
@@ -213,12 +222,29 @@ def _date_range_for_period(period: str) -> tuple[date, date]:
     return (pd.Timestamp(end_date) - offsets[unit]).date(), end_date
 
 
+def _aggregate_range_for_interval(interval: str) -> tuple[int, str]:
+    ranges = {
+        "5m": (5, "minute"),
+        "15m": (15, "minute"),
+        "1d": (1, "day"),
+    }
+    aggregate_range = ranges.get(interval)
+
+    if aggregate_range is None:
+        supported = ", ".join(ranges)
+        raise ValueError(
+            f"Unsupported market data interval: {interval}. Supported: {supported}"
+        )
+
+    return aggregate_range
+
+
 def _history_from_results(results: list[dict]) -> pd.DataFrame:
     if not results:
         return pd.DataFrame()
 
     history = pd.DataFrame(results)
-    history.index = pd.to_datetime(history["t"], unit="ms")
+    history.index = pd.to_datetime(history["t"], unit="ms", utc=True)
     history = history.sort_index()
     history = history.rename(
         columns={

@@ -7,7 +7,12 @@ class MarketDataProvider(ABC):
     name: str
 
     @abstractmethod
-    def download_price_data(self, ticker: str, period: str = "1y") -> pd.DataFrame:
+    def download_price_data(
+        self,
+        ticker: str,
+        period: str = "1y",
+        interval: str = "1d",
+    ) -> pd.DataFrame:
         raise NotImplementedError
 
     def download_price_data_batch(

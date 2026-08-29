@@ -31,14 +31,15 @@ export function useWatchlistRun(runId: number | null) {
 export function useMarketDataHistory(
   ticker: string | null,
   provider = 'massive',
-  period = '1y'
+  period = '1y',
+  interval = '1d'
 ) {
   return useQuery({
-    queryKey: queryKeys.marketDataHistory(ticker, provider, period),
+    queryKey: queryKeys.marketDataHistory(ticker, provider, period, interval),
     enabled: Boolean(ticker),
     queryFn: () =>
       apiClient.request<MarketDataHistoryResponse>(
-        `/api/market-data/history/${encodeURIComponent(ticker ?? '')}?provider=${encodeURIComponent(provider)}&period=${encodeURIComponent(period)}`
+        `/api/market-data/history/${encodeURIComponent(ticker ?? '')}?provider=${encodeURIComponent(provider)}&period=${encodeURIComponent(period)}&interval=${encodeURIComponent(interval)}`
       )
   });
 }

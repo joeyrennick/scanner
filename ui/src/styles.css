@@ -1007,10 +1007,183 @@ input:disabled {
   z-index: 40;
   padding: 24px;
   background: #f5f7fa;
+  overflow: auto;
+  scrollbar-gutter: stable both-edges;
+  overscroll-behavior: contain;
 }
 
 .chart-maximized-shell .candidate-chart {
-  max-height: calc(100vh - 48px);
+  max-width: none;
+  max-height: none;
+  flex: 0 0 auto;
+  border-color: #31363d;
+  background: #111315;
+  box-shadow: 0 18px 48px rgb(0 0 0 / 26%);
+}
+
+.chart-maximized-shell::-webkit-scrollbar {
+  width: 14px;
+  height: 14px;
+}
+
+.chart-maximized-shell::-webkit-scrollbar-track {
+  background: #d8dee6;
+}
+
+.chart-maximized-shell::-webkit-scrollbar-thumb {
+  border: 3px solid #d8dee6;
+  border-radius: 999px;
+  background: #768292;
+}
+
+.chart-maximized-shell .chart-maximize-button {
+  position: fixed;
+  top: 34px;
+  right: 34px;
+  border-color: #475569;
+  background: #202428;
+  color: #e2e8f0;
+}
+
+.chart-dimension-controls {
+  position: fixed;
+  top: 34px;
+  right: 140px;
+  left: 268px;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  max-width: calc(100vw - 430px);
+  min-height: 36px;
+  border: 1px solid #3c4651;
+  border-radius: 7px;
+  padding: 4px 6px;
+  background: rgb(22 26 30 / 94%);
+  box-shadow: 0 5px 16px rgb(0 0 0 / 28%);
+  color: #cbd5e1;
+  cursor: default;
+  overflow-x: auto;
+}
+
+.chart-dimension-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.chart-ticker-navigation {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.chart-ticker-navigation button {
+  display: inline-grid;
+  place-items: center;
+  min-width: 30px;
+  min-height: 28px;
+  border: 1px solid #4c5865;
+  border-radius: 5px;
+  padding: 0 7px;
+  background: #252b31;
+  color: #f8fafc;
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.chart-ticker-navigation button:hover:not(:disabled) {
+  border-color: #7aa8ea;
+  background: #303943;
+}
+
+.chart-ticker-navigation button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.chart-ticker-navigation select {
+  width: 180px;
+  min-height: 28px;
+  border: 1px solid #4c5865;
+  border-radius: 5px;
+  padding: 0 26px 0 8px;
+  background: #252b31;
+  color: #f8fafc;
+  font-size: 12px;
+  font-weight: 760;
+  cursor: pointer;
+}
+
+.chart-dimension-group span {
+  margin: 0 3px;
+  color: #aeb7c2;
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.chart-dimension-group button,
+.chart-fit-button {
+  display: inline-grid;
+  place-items: center;
+  min-width: 28px;
+  min-height: 28px;
+  border: 1px solid #4c5865;
+  border-radius: 5px;
+  padding: 0 7px;
+  background: #252b31;
+  color: #f8fafc;
+  font-size: 16px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.chart-dimension-group button:hover,
+.chart-fit-button:hover {
+  border-color: #7aa8ea;
+  background: #303943;
+}
+
+.chart-dimension-group output {
+  min-width: 44px;
+  color: #e2e8f0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
+  text-align: center;
+}
+
+.chart-fit-button {
+  min-width: auto;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.chart-maximized-shell .chart-grid-svg {
+  stroke: #2b3036;
+}
+
+.chart-maximized-shell .candlestick.up .candlestick-wick,
+.chart-maximized-shell .candlestick.up .candlestick-body {
+  stroke: #16d13b;
+}
+
+.chart-maximized-shell .candlestick.down .candlestick-wick,
+.chart-maximized-shell .candlestick.down .candlestick-body {
+  stroke: #ff5a0a;
+}
+
+.chart-maximized-shell .candlestick.up .candlestick-body {
+  fill: #0fcf32;
+}
+
+.chart-maximized-shell .candlestick.down .candlestick-body {
+  fill: #ff5708;
 }
 
 .chart-maximize-button {
@@ -1068,6 +1241,102 @@ input:disabled {
 
 .candlestick.down .candlestick-body {
   fill: #ffecec;
+}
+
+.chart-volume {
+  opacity: 0.38;
+}
+
+.chart-volume.up {
+  fill: #148042;
+}
+
+.chart-volume.down {
+  fill: #b42318;
+}
+
+.chart-moving-average {
+  fill: none;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.chart-moving-average.ma-50 {
+  stroke: #2563eb;
+}
+
+.chart-moving-average.ma-200 {
+  stroke: #d97706;
+}
+
+.chart-moving-average-legend {
+  position: absolute;
+  top: 10px;
+  left: 44px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid #d9e0ea;
+  border-radius: 6px;
+  padding: 5px 8px;
+  background: rgb(255 255 255 / 90%);
+  color: #475569;
+  font-size: 12px;
+  font-weight: 760;
+  pointer-events: none;
+}
+
+.chart-moving-average-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.chart-moving-average-legend i {
+  width: 18px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentcolor;
+}
+
+.chart-moving-average-legend .ma-50 {
+  color: #2563eb;
+}
+
+.chart-moving-average-legend .ma-200 {
+  color: #d97706;
+}
+
+.chart-maximized-shell .chart-volume.up {
+  fill: #16d13b;
+}
+
+.chart-maximized-shell .chart-volume.down {
+  fill: #ff5a0a;
+}
+
+.chart-maximized-shell .chart-moving-average.ma-50 {
+  stroke: #60a5fa;
+}
+
+.chart-maximized-shell .chart-moving-average.ma-200 {
+  stroke: #fbbf24;
+}
+
+.chart-maximized-shell .chart-moving-average-legend {
+  top: 62px;
+  border-color: #3c4651;
+  background: rgb(22 26 30 / 88%);
+}
+
+.chart-maximized-shell .chart-moving-average-legend .ma-50 {
+  color: #60a5fa;
+}
+
+.chart-maximized-shell .chart-moving-average-legend .ma-200 {
+  color: #fbbf24;
 }
 
 .chart-level-line {
@@ -1135,6 +1404,10 @@ input:disabled {
 .trade-level.danger {
   border-top-color: #b42318;
   color: #b42318;
+}
+
+.trade-level.pinned-value {
+  z-index: 5;
 }
 
 .chart-price-scale {
@@ -1226,6 +1499,94 @@ input:disabled {
   line-height: 1;
   pointer-events: none;
   white-space: nowrap;
+}
+
+.chart-frequency-bar {
+  position: absolute;
+  box-sizing: border-box;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 36px;
+  height: 58px;
+  border-top: 1px solid #30353b;
+  padding: 0 22px;
+  background: #0d0f11;
+  color: #7d8289;
+  cursor: default;
+  overflow-x: auto;
+}
+
+.chart-frequency-options {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chart-frequency-options button {
+  min-width: 48px;
+  min-height: 36px;
+  border: 0;
+  border-radius: 5px;
+  padding: 0 10px;
+  background: transparent;
+  color: #858a90;
+  font-size: 16px;
+  font-weight: 780;
+  cursor: pointer;
+}
+
+.chart-frequency-options button:hover {
+  background: #202428;
+  color: #f8fafc;
+}
+
+.chart-frequency-options button.active {
+  background: #252a2f;
+  color: #ffffff;
+}
+
+.chart-interval-readout {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.chart-interval-readout strong {
+  color: #f8fafc;
+  font-size: 17px;
+}
+
+.chart-maximized-shell .chart-price-scale,
+.chart-maximized-shell .chart-time-axis {
+  border-color: #343a40;
+  background: #15181b;
+}
+
+.chart-maximized-shell .chart-price-scale:has(+ .chart-price-labels.resizable:hover),
+.chart-maximized-shell .chart-price-scale:has(+ .chart-price-labels.resizable:active),
+.chart-maximized-shell .chart-time-axis.resizable:hover,
+.chart-maximized-shell .chart-time-axis.resizable:active {
+  border-color: #526171;
+  background: #1b2025;
+}
+
+.chart-maximized-shell .chart-price-label,
+.chart-maximized-shell .chart-time-label {
+  color: #aeb4bb;
+}
+
+.chart-maximized-shell .chart-state {
+  color: #cbd5e1;
+}
+
+.chart-maximized-shell .chart-state.danger {
+  color: #ff8b80;
 }
 
 .trade-level.draggable {
@@ -1626,6 +1987,11 @@ input:disabled {
 
   .chart-maximized-shell {
     inset: 0;
+  }
+
+  .chart-dimension-controls {
+    left: 24px;
+    max-width: calc(100vw - 164px);
   }
 
   .scanner-control-grid {

@@ -75,6 +75,23 @@ def test_massive_provider_downloads_daily_history(monkeypatch):
     assert requests[0][2]["Authorization"] == "Bearer test-key"
 
 
+def test_massive_provider_maps_intraday_intervals_to_aggregate_ranges(monkeypatch):
+    requests = []
+
+    def fake_get(url, params, headers, timeout):
+        requests.append(url)
+        return FakeResponse({"status": "OK", "results": []})
+
+    monkeypatch.setattr("scanner.data.providers.massive.requests.get", fake_get)
+    provider = MassiveMarketDataProvider(api_key="test-key")
+
+    provider.download_price_data("AAPL", period="1d", interval="5m")
+    provider.download_price_data("AAPL", period="5d", interval="15m")
+
+    assert "/range/5/minute/" in requests[0]
+    assert "/range/15/minute/" in requests[1]
+
+
 def test_massive_provider_uses_encrypted_sqlite_key(monkeypatch, tmp_path):
     db_path = tmp_path / "market_data.sqlite"
     SQLiteSecretStore(db_path).set_secret("massive_api_key", "stored-key")

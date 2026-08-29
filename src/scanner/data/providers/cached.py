@@ -52,11 +52,26 @@ class CachedMarketDataProvider(MarketDataProvider):
         self.stats = MarketDataCacheStats()
         self.name = getattr(provider, "name", provider.__class__.__name__).lower()
 
-    def download_price_data(self, ticker: str, period: str = "1y") -> pd.DataFrame:
-        if not self.enabled:
-            return self._fetch_from_provider(ticker=ticker, period=period)
+    def download_price_data(
+        self,
+        ticker: str,
+        period: str = "1y",
+        interval: str = "1d",
+    ) -> pd.DataFrame:
+        if interval != "1d":
+            return self._fetch_from_provider(
+                ticker=ticker,
+                period=period,
+                interval=interval,
+            )
 
-        interval = "1d"
+        if not self.enabled:
+            return self._fetch_from_provider(
+                ticker=ticker,
+                period=period,
+                interval=interval,
+            )
+
         today = self.now().date()
         start_date = period_start_date(period=period, today=today)
         request = CacheFetchRequest(
@@ -91,6 +106,7 @@ class CachedMarketDataProvider(MarketDataProvider):
             fetched_history = self._fetch_from_provider(
                 ticker=ticker,
                 period=fetch_period,
+                interval=interval,
             )
         except Exception as error:
             self.cache.record_fetch(
@@ -304,9 +320,21 @@ class CachedMarketDataProvider(MarketDataProvider):
             for ticker in tickers
         ]
 
-    def _fetch_from_provider(self, ticker: str, period: str) -> pd.DataFrame:
+    def _fetch_from_provider(
+        self,
+        ticker: str,
+        period: str,
+        interval: str = "1d",
+    ) -> pd.DataFrame:
         self.stats.provider_calls += 1
-        history = self.provider.download_price_data(ticker=ticker, period=period)
+        if interval == "1d":
+            history = self.provider.download_price_data(ticker=ticker, period=period)
+        else:
+            history = self.provider.download_price_data(
+                ticker=ticker,
+                period=period,
+                interval=interval,
+            )
         self.stats.rows_fetched_from_provider += len(history)
         return history
 
@@ -425,6 +453,9 @@ class CachedMarketDataProvider(MarketDataProvider):
 def period_start_date(period: str, today: date) -> date | None:
     if period == "max":
         return None
+
+    if period == "ytd":
+        return date(today.year, 1, 1)
 
     match = re.fullmatch(r"(\d+)(d|w|mo|y)", period)
 

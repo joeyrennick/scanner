@@ -44,6 +44,7 @@ from scanner.config.settings import settings
 from scanner.context import ScannerContext
 from scanner.data.cache import SQLiteMarketDataCache
 from scanner.data.market_data import clear_market_data_provider_cache, create_market_data_provider
+from scanner.data.providers.cached import period_start_date
 from scanner.data.providers.massive import MASSIVE_API_KEY_SECRET, MassiveMarketDataProvider
 from scanner.data.providers.sec import SECFundamentalsProvider
 from scanner.data.scanner_results import SQLiteScannerResultStore
@@ -124,26 +125,43 @@ def get_market_data_history(
     ticker: str,
     provider: str = settings.market_data_provider,
     period: str = settings.scan_history_period,
+    interval: str = "1d",
 ) -> dict[str, Any]:
     normalized_ticker = ticker.strip().upper()
 
     if not normalized_ticker:
         raise HTTPException(status_code=422, detail="Ticker is required")
 
+    supported_intervals = {"5m", "15m", "1d"}
+    if interval not in supported_intervals:
+        supported = ", ".join(sorted(supported_intervals))
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported market data interval: {interval}. Supported: {supported}",
+        )
+
     try:
         market_data_provider = create_market_data_provider(
             name=provider,
-            cache_enabled=True,
+            cache_enabled=interval == "1d",
             cache_path=settings.market_data_cache_path,
         )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
     try:
-        history = market_data_provider.download_price_data(
-            ticker=normalized_ticker,
-            period=period,
-        )
+        fetch_period = _moving_average_fetch_period(period=period, interval=interval)
+        if interval == "1d":
+            history = market_data_provider.download_price_data(
+                ticker=normalized_ticker,
+                period=fetch_period,
+            )
+        else:
+            history = market_data_provider.download_price_data(
+                ticker=normalized_ticker,
+                period=fetch_period,
+                interval=interval,
+            )
     except Exception as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
@@ -152,15 +170,20 @@ def get_market_data_history(
             "ticker": normalized_ticker,
             "provider": provider,
             "period": period,
+            "interval": interval,
             "rows": [],
         }
+
+    history = _add_moving_averages(history)
+    history = _trim_history_to_period(history, period=period)
 
     return _json_safe(
         {
             "ticker": normalized_ticker,
             "provider": provider,
             "period": period,
-            "rows": _history_points_from_dataframe(history),
+            "interval": interval,
+            "rows": _history_points_from_dataframe(history, interval=interval),
         }
     )
 
@@ -1249,7 +1272,10 @@ def _daily_report_watchlist_path(
     return path
 
 
-def _history_points_from_dataframe(dataframe: pd.DataFrame) -> list[dict[str, Any]]:
+def _history_points_from_dataframe(
+    dataframe: pd.DataFrame,
+    interval: str = "1d",
+) -> list[dict[str, Any]]:
     rows = []
     history = dataframe.sort_index()
 
@@ -1262,16 +1288,53 @@ def _history_points_from_dataframe(dataframe: pd.DataFrame) -> list[dict[str, An
         timestamp = pd.Timestamp(index)
         rows.append(
             {
-                "date": timestamp.date().isoformat(),
+                "date": (
+                    timestamp.date().isoformat()
+                    if interval == "1d"
+                    else timestamp.isoformat()
+                ),
                 "open": _float_value(row.get("Open")),
                 "high": _float_value(row.get("High")),
                 "low": _float_value(row.get("Low")),
                 "close": close,
                 "volume": _float_value(row.get("Volume")),
+                "sma_50": _float_value(row.get("SMA 50")),
+                "sma_200": _float_value(row.get("SMA 200")),
             }
         )
 
     return rows
+
+
+def _moving_average_fetch_period(period: str, interval: str) -> str:
+    if interval == "5m" and period == "1d":
+        return "10d"
+    if interval == "15m" and period == "5d":
+        return "1mo"
+    if interval == "1d":
+        return {
+            "1mo": "1y",
+            "ytd": "2y",
+            "1y": "2y",
+        }.get(period, period)
+    return period
+
+
+def _add_moving_averages(history: pd.DataFrame) -> pd.DataFrame:
+    result = history.sort_index().copy()
+    close = pd.to_numeric(result["Close"], errors="coerce")
+    result["SMA 50"] = close.rolling(window=50, min_periods=50).mean()
+    result["SMA 200"] = close.rolling(window=200, min_periods=200).mean()
+    return result
+
+
+def _trim_history_to_period(history: pd.DataFrame, period: str) -> pd.DataFrame:
+    start_date = period_start_date(period=period, today=date.today())
+    if start_date is None:
+        return history
+
+    mask = [pd.Timestamp(index).date() >= start_date for index in history.index]
+    return history.loc[mask]
 
 
 def _json_safe(value: Any) -> Any:

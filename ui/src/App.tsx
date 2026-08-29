@@ -62,6 +62,13 @@ import type {
 } from './api/types';
 import { formatDuration, formatNumber, isJobActive, progressPercent } from './lib/progress';
 import {
+  chartFrequencyOption,
+  chartFrequencyOptions,
+  defaultChartFrequency,
+  type ChartFrequency
+} from './lib/chartFrequency';
+import { pinnedTrailingPosition } from './lib/chartViewport';
+import {
   candidateFromWatchlistRow,
   defaultScannerResultFilters,
   mergeWatchlistRows,
@@ -1471,16 +1478,22 @@ function CandidatesPage() {
     }
   }, [candidateState?.ticker, setSelectedTicker]);
   const selected = candidates.find((candidate) => candidate.ticker === selectedTicker) ?? candidates[0];
-  const historyQuery = useMarketDataHistory(
-    selected?.ticker ?? null,
-    marketDataSettings.primaryProvider,
-    '1y'
-  );
   const [edits, setEdits] = useLocalStorage<Record<string, CandidateTradeEdits>>(
     'swing-scanner.candidates.chart-state',
     {}
   );
   const selectedEdits = selected ? edits[selected.ticker] : undefined;
+  const [chartFrequency, setChartFrequency] = useLocalStorage<ChartFrequency>(
+    'swing-scanner.candidates.chart-frequency',
+    defaultChartFrequency
+  );
+  const chartRange = chartFrequencyOption(chartFrequency);
+  const historyQuery = useMarketDataHistory(
+    selected?.ticker ?? null,
+    marketDataSettings.primaryProvider,
+    chartRange.period,
+    chartRange.interval
+  );
   const entry = selectedEdits?.entry ?? selected?.entryArea ?? 'n/a';
   const stop = selectedEdits?.stop ?? selected?.stop ?? 'n/a';
   const target = selectedEdits?.target ?? selected?.targetExit ?? 'n/a';
@@ -1546,6 +1559,57 @@ function CandidatesPage() {
     }
 
     updateSelected({ target: roundedValue });
+  }
+
+  function updateChartFrequency(frequency: ChartFrequency) {
+    setChartFrequency(frequency);
+    updateSelected({
+      chartZoom: 1,
+      chartPanBars: 0,
+      chartPricePan: 0
+    });
+  }
+
+  function selectMaximizedTicker(ticker: string) {
+    const nextCandidate = candidates.find((candidate) => candidate.ticker === ticker);
+    if (!nextCandidate || nextCandidate.ticker === selected?.ticker) {
+      return;
+    }
+
+    setEdits((current) => {
+      const existing = current[nextCandidate.ticker];
+      const nextChartHeight = existing?.chartHeight ?? 300;
+
+      return {
+        ...current,
+        [nextCandidate.ticker]: {
+          entry: existing?.entry ?? nextCandidate.entryArea,
+          stop: existing?.stop ?? nextCandidate.stop,
+          target: existing?.target ?? nextCandidate.targetExit,
+          chartHeight: nextChartHeight,
+          chartZoom: 1,
+          chartPanBars: 0,
+          chartPricePan: 0,
+          maximizedChartHeight: viewportChartHeight(),
+          maximizedChartWidth: viewportChartWidth(),
+          previousChartHeight: nextChartHeight
+        }
+      };
+    });
+    setSelectedTicker(nextCandidate.ticker);
+  }
+
+  function traverseMaximizedCandidates(direction: -1 | 1) {
+    if (!selected || candidates.length < 2) {
+      return;
+    }
+
+    const selectedIndex = candidates.findIndex(
+      (candidate) => candidate.ticker === selected.ticker
+    );
+    const nextIndex =
+      (selectedIndex + direction + candidates.length) % candidates.length;
+    selectMaximizedTicker(candidates[nextIndex].ticker);
   }
 
   function startDetailResize(event: ReactPointerEvent<HTMLDivElement>) {
@@ -1638,6 +1702,16 @@ function CandidatesPage() {
     <CandidateDailyBarChart
       height={chartHeight}
       zoom={chartZoom}
+      ticker={selected.ticker}
+      tickerOptions={candidates.map((candidate) => ({
+        ticker: candidate.ticker,
+        strategy: candidate.strategy
+      }))}
+      onTickerChange={selectMaximizedTicker}
+      onPreviousTicker={() => traverseMaximizedCandidates(-1)}
+      onNextTicker={() => traverseMaximizedCandidates(1)}
+      frequency={chartFrequency}
+      onFrequencyChange={updateChartFrequency}
       history={historyQuery.data?.rows ?? []}
       loading={historyQuery.isLoading || historyQuery.isFetching}
       error={historyQuery.error?.message}
@@ -2761,15 +2835,37 @@ function viewportChartWidth() {
     return 900;
   }
 
-  const sidebarWidth = window.matchMedia('(max-width: 900px)').matches ? 0 : 232;
+  const sidebarWidth = window.matchMedia('(max-width: 980px)').matches ? 0 : 232;
   return Math.max(420, window.innerWidth - sidebarWidth - 48);
 }
 
-function formatChartDay(value: string) {
-  const date = new Date(`${value}T00:00:00`);
+function formatChartTime(value: string, frequency: ChartFrequency) {
+  const date = new Date(value.includes('T') ? value : `${value}T00:00:00`);
 
   if (Number.isNaN(date.getTime())) {
     return value;
+  }
+
+  if (frequency === '1d') {
+    return new Intl.DateTimeFormat(undefined, {
+      hour: 'numeric',
+      minute: '2-digit'
+    }).format(date);
+  }
+
+  if (frequency === '1w') {
+    return new Intl.DateTimeFormat(undefined, {
+      weekday: 'short',
+      hour: 'numeric',
+      minute: '2-digit'
+    }).format(date);
+  }
+
+  if (frequency === '5y') {
+    return new Intl.DateTimeFormat(undefined, {
+      month: 'short',
+      year: 'numeric'
+    }).format(date);
   }
 
   return new Intl.DateTimeFormat(undefined, {
@@ -2779,9 +2875,16 @@ function formatChartDay(value: string) {
 }
 
 function CandidateDailyBarChart({
+  ticker,
+  tickerOptions,
+  onTickerChange,
+  onPreviousTicker,
+  onNextTicker,
   history,
   height,
   zoom,
+  frequency,
+  onFrequencyChange,
   loading,
   error,
   entry,
@@ -2801,9 +2904,16 @@ function CandidateDailyBarChart({
   maximizedWidth,
   onMaximizedSizeChange
 }: {
+  ticker: string;
+  tickerOptions: { ticker: string; strategy: string }[];
+  onTickerChange: (ticker: string) => void;
+  onPreviousTicker: () => void;
+  onNextTicker: () => void;
   history: MarketDataHistoryPoint[];
   height: number;
   zoom: number;
+  frequency: ChartFrequency;
+  onFrequencyChange: (frequency: ChartFrequency) => void;
   loading: boolean;
   error?: string;
   entry: string;
@@ -2826,12 +2936,36 @@ function CandidateDailyBarChart({
   const chartRef = useRef<HTMLDivElement | null>(null);
   const priceScaleWidth = 76;
   const timeAxisHeight = 34;
+  const frequencyBarHeight = maximized ? 58 : 0;
+  const chartFooterHeight = timeAxisHeight + frequencyBarHeight;
+  const frequencyOption = chartFrequencyOption(frequency);
+  const maximizedMinHeight = 360;
+  const maximizedMinWidth = 420;
+  const maximizedMaxHeight = 6000;
+  const maximizedMaxWidth = 8000;
+  const dimensionZoomFactor = 1.25;
   const [chartContainerWidth, setChartContainerWidth] = useState(1000);
+  const [maximizedViewport, setMaximizedViewport] = useState({
+    scrollLeft: 0,
+    scrollTop: 0,
+    width: viewportChartWidth(),
+    height: viewportChartHeight()
+  });
   const resolvedMaximizedHeight = maximizedHeight ?? viewportChartHeight();
   const resolvedMaximizedWidth = maximizedWidth ?? viewportChartWidth();
-  const chartHeight = maximized ? resolvedMaximizedHeight : Math.max(240, height);
-  const chartWidth = Math.max(320, chartContainerWidth - priceScaleWidth);
-  const plotSvgHeight = Math.max(180, chartHeight - timeAxisHeight);
+  const maximizedFitHeight = Math.max(maximizedMinHeight, maximizedViewport.height);
+  const maximizedFitWidth = Math.max(maximizedMinWidth, maximizedViewport.width);
+  const maximizedDisplayHeight = Math.max(resolvedMaximizedHeight, maximizedFitHeight);
+  const maximizedDisplayWidth = Math.max(resolvedMaximizedWidth, maximizedFitWidth);
+  const chartHeight = maximized ? maximizedDisplayHeight : Math.max(240, height);
+  const chartWidth = Math.max(
+    320,
+    (maximized ? resolvedMaximizedWidth : chartContainerWidth) - priceScaleWidth
+  );
+  const plotSvgHeight = Math.max(
+    180,
+    (maximized ? resolvedMaximizedHeight : chartHeight) - chartFooterHeight
+  );
   const chartZoom = Math.min(Math.max(zoom, 1), 8);
   const padding = { top: 22, right: 18, bottom: 28, left: 28 };
   const bars = history
@@ -2851,8 +2985,9 @@ function CandidateDailyBarChart({
   );
   const priceValues = [
     ...bars.flatMap((bar) => [bar.high, bar.low, bar.open, bar.close]),
+    ...bars.flatMap((bar) => [bar.sma_50, bar.sma_200]),
     ...levelValues.map((level) => level.value)
-  ].filter((value) => Number.isFinite(value));
+  ].filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
   const fallbackPrice = levelValues[0]?.value ?? 1;
   const minPrice = priceValues.length > 0 ? Math.min(...priceValues) : fallbackPrice;
   const maxPrice = priceValues.length > 0 ? Math.max(...priceValues) : fallbackPrice;
@@ -2888,6 +3023,50 @@ function CandidateDailyBarChart({
   const latestVisiblePrice = bars[latestVisibleIndex]?.close;
   const xStep = visibleCount > 1 ? plotWidth / (visibleCount - 1) : plotWidth;
   const candleBodyWidth = Math.max(3, Math.min(12, xStep * 0.62));
+  const maxVisibleVolume = Math.max(
+    0,
+    ...visibleBars.map(({ bar }) => bar.volume ?? 0)
+  );
+  const volumeAreaHeight = Math.max(32, plotHeight * 0.18);
+  const movingAverageLines = [
+    { key: 'sma_50' as const, label: 'MA 50', className: 'ma-50' },
+    { key: 'sma_200' as const, label: 'MA 200', className: 'ma-200' }
+  ].map((average) => ({
+    ...average,
+    points: visibleBars
+      .filter(
+        ({ bar }) =>
+          typeof bar[average.key] === 'number' && Number.isFinite(bar[average.key])
+      )
+      .map(({ bar, sourceIndex }) =>
+        `${xForSourceIndex(sourceIndex)},${yFor(bar[average.key] as number)}`
+      )
+      .join(' ')
+  }));
+  const fixedYAxisLeft = maximized
+    ? pinnedTrailingPosition({
+        scrollOffset: maximizedViewport.scrollLeft,
+        viewportLength: maximizedViewport.width,
+        reservedLength: priceScaleWidth,
+        chartLength: maximizedDisplayWidth
+      })
+    : undefined;
+  const fixedXAxisTop = maximized
+    ? pinnedTrailingPosition({
+        scrollOffset: maximizedViewport.scrollTop,
+        viewportLength: maximizedViewport.height,
+        reservedLength: chartFooterHeight,
+        chartLength: chartHeight
+      })
+    : undefined;
+  const fixedFrequencyBarTop = maximized
+    ? pinnedTrailingPosition({
+        scrollOffset: maximizedViewport.scrollTop,
+        viewportLength: maximizedViewport.height,
+        reservedLength: frequencyBarHeight,
+        chartLength: chartHeight
+      })
+    : undefined;
 
   useEffect(() => {
     const chartElement = chartRef.current;
@@ -2913,22 +3092,66 @@ function CandidateDailyBarChart({
       return;
     }
 
-    function handleResize() {
-      const nextHeight = Math.min(Math.max(resolvedMaximizedHeight, 360), viewportChartHeight());
-      const nextWidth = Math.min(Math.max(resolvedMaximizedWidth, 420), viewportChartWidth());
+    const shellElement = chartRef.current?.closest<HTMLElement>('.chart-maximized-shell');
+    if (!shellElement) {
+      return;
+    }
+    const shell: HTMLElement = shellElement;
 
-      if (nextHeight !== resolvedMaximizedHeight || nextWidth !== resolvedMaximizedWidth) {
-        onMaximizedSizeChange?.({
-          maximizedChartHeight: nextHeight,
-          maximizedChartWidth: nextWidth
-        });
+    let animationFrame: number | null = null;
+
+    function updateViewport() {
+      const styles = window.getComputedStyle(shell);
+      const shellBounds = shell.getBoundingClientRect();
+      const horizontalPadding =
+        Number.parseFloat(styles.paddingLeft) + Number.parseFloat(styles.paddingRight);
+      const verticalPadding =
+        Number.parseFloat(styles.paddingTop) + Number.parseFloat(styles.paddingBottom);
+
+      setMaximizedViewport({
+        scrollLeft: shell.scrollLeft,
+        scrollTop: shell.scrollTop,
+        width: Math.max(0, shellBounds.width - horizontalPadding),
+        height: Math.max(0, shellBounds.height - verticalPadding)
+      });
+      animationFrame = null;
+    }
+
+    function scheduleViewportUpdate() {
+      if (animationFrame === null) {
+        animationFrame = window.requestAnimationFrame(updateViewport);
       }
     }
 
-    handleResize();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, [maximized, resolvedMaximizedHeight, resolvedMaximizedWidth]);
+    updateViewport();
+    shell.addEventListener('scroll', scheduleViewportUpdate, { passive: true });
+    window.addEventListener('resize', scheduleViewportUpdate);
+    const observer = new ResizeObserver(scheduleViewportUpdate);
+    observer.observe(shell);
+
+    return () => {
+      if (animationFrame !== null) {
+        window.cancelAnimationFrame(animationFrame);
+      }
+      shell.removeEventListener('scroll', scheduleViewportUpdate);
+      window.removeEventListener('resize', scheduleViewportUpdate);
+      observer.disconnect();
+    };
+  }, [maximized]);
+
+  useEffect(() => {
+    if (!maximized) {
+      return;
+    }
+
+    const shell = chartRef.current?.closest<HTMLElement>('.chart-maximized-shell');
+    if (!shell) {
+      return;
+    }
+
+    shell.scrollLeft = 0;
+    shell.scrollTop = 0;
+  }, [maximized, ticker]);
 
   function xForSourceIndex(sourceIndex: number) {
     if (visibleCount <= 1) {
@@ -2982,7 +3205,7 @@ function CandidateDailyBarChart({
 
     const targetElement = event.target as HTMLElement;
 
-    if (targetElement.closest('button, .trade-level, .chart-price-scale, .chart-price-labels, .chart-time-axis')) {
+    if (targetElement.closest('button, .trade-level, .chart-price-scale, .chart-price-labels, .chart-time-axis, .chart-frequency-bar, .chart-dimension-controls')) {
       return;
     }
 
@@ -3029,13 +3252,17 @@ function CandidateDailyBarChart({
     const scaleElement = event.currentTarget;
     scaleElement.setPointerCapture(event.pointerId);
     const startY = event.clientY;
-    const startHeight = chartHeight;
+    const startHeight = maximized ? resolvedMaximizedHeight : chartHeight;
     const previousCursor = document.body.style.cursor;
     document.body.style.cursor = 'ns-resize';
 
     function handleMove(moveEvent: PointerEvent) {
-      const maxHeight = maximized ? Math.max(900, viewportChartHeight()) : 900;
-      const nextHeight = Math.min(Math.max(startHeight + moveEvent.clientY - startY, 240), maxHeight);
+      const maxHeight = maximized ? maximizedMaxHeight : 900;
+      const minHeight = maximized ? maximizedMinHeight : 240;
+      const nextHeight = Math.min(
+        Math.max(startHeight + moveEvent.clientY - startY, minHeight),
+        maxHeight
+      );
       applyHeight(nextHeight);
     }
 
@@ -3075,8 +3302,12 @@ function CandidateDailyBarChart({
     document.body.style.cursor = 'ew-resize';
 
     function handleMove(moveEvent: PointerEvent) {
-      const maxWidth = maximized ? viewportChartWidth() : 900;
-      const nextWidth = Math.min(Math.max(startWidth - (moveEvent.clientX - startX), 420), maxWidth);
+      const maxWidth = maximized ? maximizedMaxWidth : 900;
+      const minWidth = maximized ? maximizedMinWidth : 420;
+      const nextWidth = Math.min(
+        Math.max(startWidth - (moveEvent.clientX - startX), minWidth),
+        maxWidth
+      );
       applyWidth(nextWidth);
     }
 
@@ -3093,6 +3324,38 @@ function CandidateDailyBarChart({
     window.addEventListener('pointermove', handleMove);
     window.addEventListener('pointerup', handleUp);
     window.addEventListener('pointercancel', handleUp);
+  }
+
+  function zoomMaximizedDimension(axis: 'horizontal' | 'vertical', direction: 'in' | 'out') {
+    if (!maximized || !onMaximizedSizeChange) {
+      return;
+    }
+
+    const factor = direction === 'in' ? dimensionZoomFactor : 1 / dimensionZoomFactor;
+
+    if (axis === 'horizontal') {
+      onMaximizedSizeChange({
+        maximizedChartWidth: Math.min(
+          Math.max(Math.round(resolvedMaximizedWidth * factor), maximizedMinWidth),
+          maximizedMaxWidth
+        )
+      });
+      return;
+    }
+
+    onMaximizedSizeChange({
+      maximizedChartHeight: Math.min(
+        Math.max(Math.round(resolvedMaximizedHeight * factor), maximizedMinHeight),
+        maximizedMaxHeight
+      )
+    });
+  }
+
+  function fitMaximizedChartToView() {
+    onMaximizedSizeChange?.({
+      maximizedChartHeight: maximizedFitHeight,
+      maximizedChartWidth: maximizedFitWidth
+    });
   }
 
   const timeTickCount = Math.min(5, visibleBars.length);
@@ -3121,7 +3384,7 @@ function CandidateDailyBarChart({
     <div
       ref={chartRef}
       className={maximized ? 'candidate-chart zoomable maximized' : 'candidate-chart zoomable'}
-      style={{ height: chartHeight, width: maximized ? resolvedMaximizedWidth : undefined }}
+      style={{ height: chartHeight, width: maximized ? maximizedDisplayWidth : undefined }}
       onPointerDown={startChartPan}
     >
       <button
@@ -3131,10 +3394,102 @@ function CandidateDailyBarChart({
       >
         {maximized ? 'Restore' : 'Maximize'}
       </button>
-      {loading && <div className="chart-state">Loading 1Y daily bars...</div>}
-      {error && <div className="chart-state danger">Unable to load chart data</div>}
+      {maximized && (
+        <div className="chart-dimension-controls" aria-label="Maximized chart zoom controls">
+          <div className="chart-ticker-navigation" aria-label="Candidate ticker navigation">
+            <button
+              type="button"
+              aria-label="Previous candidate ticker"
+              title="Previous candidate"
+              disabled={tickerOptions.length < 2}
+              onClick={onPreviousTicker}
+            >
+              ‹
+            </button>
+            <select
+              aria-label="Candidate ticker"
+              value={ticker}
+              onChange={(event) => onTickerChange(event.target.value)}
+            >
+              {tickerOptions.map((option) => (
+                <option key={option.ticker} value={option.ticker}>
+                  {option.ticker} · {option.strategy}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              aria-label="Next candidate ticker"
+              title="Next candidate"
+              disabled={tickerOptions.length < 2}
+              onClick={onNextTicker}
+            >
+              ›
+            </button>
+          </div>
+          <div className="chart-dimension-group">
+            <span>Horizontal</span>
+            <button
+              type="button"
+              aria-label="Zoom chart out horizontally"
+              title="Zoom out horizontally"
+              onClick={() => zoomMaximizedDimension('horizontal', 'out')}
+            >
+              −
+            </button>
+            <output>{Math.round((resolvedMaximizedWidth / maximizedFitWidth) * 100)}%</output>
+            <button
+              type="button"
+              aria-label="Zoom chart in horizontally"
+              title="Zoom in horizontally"
+              onClick={() => zoomMaximizedDimension('horizontal', 'in')}
+            >
+              +
+            </button>
+          </div>
+          <div className="chart-dimension-group">
+            <span>Vertical</span>
+            <button
+              type="button"
+              aria-label="Zoom chart out vertically"
+              title="Zoom out vertically"
+              onClick={() => zoomMaximizedDimension('vertical', 'out')}
+            >
+              −
+            </button>
+            <output>{Math.round((resolvedMaximizedHeight / maximizedFitHeight) * 100)}%</output>
+            <button
+              type="button"
+              aria-label="Zoom chart in vertically"
+              title="Zoom in vertically"
+              onClick={() => zoomMaximizedDimension('vertical', 'in')}
+            >
+              +
+            </button>
+          </div>
+          <button
+            type="button"
+            className="chart-fit-button"
+            onClick={fitMaximizedChartToView}
+          >
+            Fit view
+          </button>
+        </div>
+      )}
+      {loading && (
+        <div className="chart-state" style={{ bottom: chartFooterHeight }}>
+          Loading {frequencyOption.rangeLabel} · {frequencyOption.intervalLabel} bars...
+        </div>
+      )}
+      {error && (
+        <div className="chart-state danger" style={{ bottom: chartFooterHeight }}>
+          Unable to load {frequencyOption.rangeLabel} history ({frequencyOption.intervalLabel} interval).
+        </div>
+      )}
       {!loading && !error && bars.length === 0 && (
-        <div className="chart-state">No daily history available for this candidate.</div>
+        <div className="chart-state" style={{ bottom: chartFooterHeight }}>
+          No {frequencyOption.rangeLabel} history is available for this candidate ({frequencyOption.intervalLabel} interval).
+        </div>
       )}
       {visibleBars.length > 0 && (
         <>
@@ -3142,8 +3497,20 @@ function CandidateDailyBarChart({
             className="candidate-chart-svg"
             viewBox={`0 0 ${chartWidth} ${plotSvgHeight}`}
             role="img"
-            aria-label="One year daily candlestick chart"
+            aria-label={`${frequencyOption.rangeLabel} ${frequencyOption.intervalLabel} candlestick chart`}
             preserveAspectRatio="none"
+            style={
+              maximized
+                ? {
+                    top: 0,
+                    right: 'auto',
+                    bottom: 'auto',
+                    left: 0,
+                    width: chartWidth,
+                    height: plotSvgHeight
+                  }
+                : { bottom: chartFooterHeight, right: priceScaleWidth }
+            }
           >
             {gridPrices.map((price) => {
               const y = yFor(price);
@@ -3151,6 +3518,25 @@ function CandidateDailyBarChart({
                 <g key={price}>
                   <line className="chart-grid-svg" x1={padding.left} x2={chartWidth - padding.right} y1={y} y2={y} />
                 </g>
+              );
+            })}
+            {visibleBars.map(({ bar, sourceIndex }) => {
+              if (!bar.volume || maxVisibleVolume <= 0) {
+                return null;
+              }
+
+              const x = xForSourceIndex(sourceIndex);
+              const rising = bar.close >= bar.open;
+              const volumeHeight = (bar.volume / maxVisibleVolume) * volumeAreaHeight;
+              return (
+                <rect
+                  key={`volume-${bar.date}-${sourceIndex}`}
+                  className={rising ? 'chart-volume up' : 'chart-volume down'}
+                  x={x - candleBodyWidth / 2}
+                  y={padding.top + plotHeight - volumeHeight}
+                  width={candleBodyWidth}
+                  height={volumeHeight}
+                />
               );
             })}
             {visibleBars.map(({ bar, sourceIndex }) => {
@@ -3174,6 +3560,15 @@ function CandidateDailyBarChart({
                 </g>
               );
             })}
+            {movingAverageLines.map((average) =>
+              average.points ? (
+                <polyline
+                  key={average.key}
+                  className={`chart-moving-average ${average.className}`}
+                  points={average.points}
+                />
+              ) : null
+            )}
             {levelValues.map((level) => {
               const y = yFor(level.value);
               return (
@@ -3188,12 +3583,22 @@ function CandidateDailyBarChart({
               );
             })}
           </svg>
+          <div className="chart-moving-average-legend" aria-label="Moving average legend">
+            {movingAverageLines.map((average) => (
+              <span key={average.key} className={average.className}>
+                <i />
+                {average.label}
+              </span>
+            ))}
+          </div>
           {levelValues.map((level) => (
             <TradeLevel
               key={level.key}
               label={level.label}
               value={level.value.toFixed(2)}
               top={`${yFor(level.value)}px`}
+              width={maximized ? chartWidth - padding.left : undefined}
+              valueAnchorLeft={maximized ? fixedYAxisLeft : undefined}
               danger={level.danger}
               onPointerDown={(event) => startLevelDrag(level.key, event)}
             />
@@ -3201,7 +3606,10 @@ function CandidateDailyBarChart({
           <div
             className={maximized || onHeightChange ? 'chart-price-scale resizable' : 'chart-price-scale'}
             style={{
-              width: priceScaleWidth
+              width: priceScaleWidth,
+              right: maximized ? 'auto' : 0,
+              bottom: chartFooterHeight,
+              left: fixedYAxisLeft
             }}
           />
           <div
@@ -3209,7 +3617,12 @@ function CandidateDailyBarChart({
             role="separator"
             aria-label="Resize stock chart vertically"
             aria-orientation="horizontal"
-            style={{ width: priceScaleWidth }}
+            style={{
+              width: priceScaleWidth,
+              right: maximized ? 'auto' : 0,
+              bottom: chartFooterHeight,
+              left: fixedYAxisLeft
+            }}
             onPointerDownCapture={startPriceScaleResize}
           >
             {gridPrices.map((price) => (
@@ -3237,7 +3650,9 @@ function CandidateDailyBarChart({
             aria-orientation="vertical"
             style={{
               height: timeAxisHeight,
-              right: priceScaleWidth
+              right: priceScaleWidth,
+              top: fixedXAxisTop,
+              bottom: maximized ? 'auto' : frequencyBarHeight
             }}
             onPointerDownCapture={startTimeAxisResize}
           >
@@ -3247,11 +3662,42 @@ function CandidateDailyBarChart({
                 className="chart-time-label"
                 style={{ left: xForSourceIndex(sourceIndex) }}
               >
-                {formatChartDay(bar.date)}
+                {formatChartTime(bar.date, frequency)}
               </span>
             ))}
           </div>
         </>
+      )}
+      {maximized && (
+        <div
+          className="chart-frequency-bar"
+          aria-label="Chart display range"
+          style={{
+            top: fixedFrequencyBarTop,
+            right: 'auto',
+            bottom: 'auto',
+            left: maximizedViewport.scrollLeft,
+            width: maximizedViewport.width
+          }}
+        >
+          <div className="chart-frequency-options">
+            {chartFrequencyOptions.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className={option.value === frequency ? 'active' : ''}
+                aria-pressed={option.value === frequency}
+                onClick={() => onFrequencyChange(option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <div className="chart-interval-readout">
+            <span>Interval:</span>
+            <strong>{frequencyOption.intervalLabel}</strong>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -3261,23 +3707,43 @@ function TradeLevel({
   label,
   value,
   top,
+  width,
+  valueAnchorLeft,
   danger = false,
   onPointerDown
 }: {
   label: string;
   value: string;
   top: string;
+  width?: number;
+  valueAnchorLeft?: number;
   danger?: boolean;
   onPointerDown?: (event: ReactPointerEvent<HTMLDivElement>) => void;
 }) {
   return (
     <div
-      className={danger ? 'trade-level danger draggable' : 'trade-level draggable'}
-      style={{ top }}
+      className={`${danger ? 'trade-level danger draggable' : 'trade-level draggable'}${valueAnchorLeft === undefined ? '' : ' pinned-value'}`}
+      style={{
+        top,
+        right: width === undefined ? undefined : 'auto',
+        width
+      }}
       onPointerDown={onPointerDown}
     >
       <span>{label}</span>
-      <strong>{value}</strong>
+      <strong
+        style={
+          valueAnchorLeft === undefined
+            ? undefined
+            : {
+                position: 'absolute',
+                left: valueAnchorLeft - 28,
+                transform: 'translateX(-100%)'
+              }
+        }
+      >
+        {value}
+      </strong>
     </div>
   );
 }

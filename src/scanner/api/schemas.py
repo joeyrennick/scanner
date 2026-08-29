@@ -75,12 +75,15 @@ class MarketDataHistoryPoint(BaseModel):
     low: float | None = None
     close: float
     volume: float | None = None
+    sma_50: float | None = None
+    sma_200: float | None = None
 
 
 class MarketDataHistoryResponse(BaseModel):
     ticker: str
     provider: str
     period: str
+    interval: str
     rows: list[MarketDataHistoryPoint]
 
 

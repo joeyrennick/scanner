@@ -16,10 +16,16 @@ class YahooMarketDataProvider(MarketDataProvider):
     def _session(self):
         return new_session()
 
-    def download_price_data(self, ticker: str, period: str = "1y") -> pd.DataFrame:
+    def download_price_data(
+        self,
+        ticker: str,
+        period: str = "1y",
+        interval: str = "1d",
+    ) -> pd.DataFrame:
         return yf.download(
             ticker,
             period=period,
+            interval=interval,
             progress=False,
             session=self._session(),
         )

@@ -28,12 +28,15 @@ export interface MarketDataHistoryPoint {
   low: number | null;
   close: number;
   volume: number | null;
+  sma_50: number | null;
+  sma_200: number | null;
 }
 
 export interface MarketDataHistoryResponse {
   ticker: string;
   provider: string;
   period: string;
+  interval: string;
   rows: MarketDataHistoryPoint[];
 }
 

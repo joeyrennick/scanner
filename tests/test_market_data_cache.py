@@ -1,9 +1,9 @@
-from datetime import datetime
+from datetime import date, datetime
 
 import pandas as pd
 
 from scanner.data.cache import CacheFetchRequest, SQLiteMarketDataCache
-from scanner.data.providers.cached import CachedMarketDataProvider
+from scanner.data.providers.cached import CachedMarketDataProvider, period_start_date
 
 
 class FakeProvider:
@@ -55,6 +55,10 @@ def create_history(start="2026-06-01", days=30):
         },
         index=dates,
     )
+
+
+def test_period_start_date_supports_year_to_date():
+    assert period_start_date("ytd", date(2026, 8, 29)) == date(2026, 1, 1)
 
 
 def test_sqlite_cache_round_trips_price_history(tmp_path):

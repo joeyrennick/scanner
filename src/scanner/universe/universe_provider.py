@@ -2,6 +2,7 @@ import pandas as pd
 import requests
 from io import StringIO
 import logging
+import re
 
 
 logger = logging.getLogger("scanner")
@@ -13,6 +14,11 @@ DJIA_FALLBACK_TICKERS = (
     "MMM", "GOOGL", "AMZN", "AXP", "AMGN", "AAPL", "BA", "CAT", "CVX", "CSCO",
     "KO", "DIS", "GS", "HD", "HON", "IBM", "JNJ", "JPM", "MCD", "MRK", "MSFT",
     "NKE", "NVDA", "PG", "CRM", "SHW", "TRV", "UNH", "V", "WMT",
+)
+
+NON_COMMON_FUNDAMENTAL_SECURITY_PATTERN = re.compile(
+    r"\bpreferred\b|\bpreference\b|\bdepositary\s+shares?\b",
+    re.IGNORECASE,
 )
 
 
@@ -103,6 +109,12 @@ class UniverseProvider:
 
     def get_company_name(self, ticker: str) -> str | None:
         return self._company_names.get(self._normalize_ticker(ticker))
+
+    def is_fundamental_common_equity(self, ticker: str) -> bool:
+        security_name = self.get_company_name(ticker)
+        return security_name is None or not NON_COMMON_FUNDAMENTAL_SECURITY_PATTERN.search(
+            security_name
+        )
 
     def get_universe_tickers(self, universe: str) -> list[str]:
         universe = universe.lower()

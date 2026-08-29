@@ -19,6 +19,10 @@ export type DisplayCandidate = {
   stop: string;
   targetExit: string;
   holdTime: string;
+  fairValue: string;
+  marginOfSafety: string;
+  fundamentalDataAsOf: string;
+  freeCashFlow: string;
 };
 
 export type CandidateSortKey = keyof Omit<DisplayCandidate, 'id'>;
@@ -56,7 +60,11 @@ export function candidateFromWatchlistRow(
     stop: formatCurrency(stop),
     targetExit: formatCurrency(target ?? targetFromPriceAndStop(price, stop)),
     holdTime:
-      stringValue(row['Hold Time']) || stringValue(row['Suggested Hold Time']) || '5 trading days'
+      stringValue(row['Hold Time']) || stringValue(row['Suggested Hold Time']) || '5 trading days',
+    fairValue: formatCurrency(numericValue(row['Fair Value'])),
+    marginOfSafety: formatPercentLike(row['Margin of Safety']),
+    fundamentalDataAsOf: stringValue(row['SEC Data As Of']) || 'n/a',
+    freeCashFlow: formatCompactCurrency(numericValue(row['Free Cash Flow']))
   };
 }
 
@@ -166,6 +174,18 @@ function formatCurrency(value?: number): string {
 function formatNumber(value: unknown): string {
   const numeric = numericValue(value);
   return numeric === undefined ? 'n/a' : numeric.toFixed(2);
+}
+
+function formatCompactCurrency(value?: number): string {
+  if (value === undefined) {
+    return 'n/a';
+  }
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    notation: 'compact',
+    maximumFractionDigits: 1
+  }).format(value);
 }
 
 function formatInteger(value: unknown): string {

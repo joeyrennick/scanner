@@ -3,6 +3,7 @@ from scanner.strategies.breakout_strategy import BreakoutStrategy
 from scanner.strategies.configurable_bounce_strategy import ConfigurableBounceStrategy
 from scanner.strategies.minervini_trend_template import MinerviniTrendTemplate
 from scanner.strategies.pullback_strategy import PullbackStrategy
+from scanner.strategies.undervalued_strategy import UndervaluedStrategy
 
 
 class StrategyRegistry:
@@ -12,6 +13,7 @@ class StrategyRegistry:
         "pullback": PullbackStrategy,
         "breakout": BreakoutStrategy,
         "bounce": ConfigurableBounceStrategy,
+        "undervalued": UndervaluedStrategy,
     }
 
     @classmethod

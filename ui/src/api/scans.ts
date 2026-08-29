@@ -15,7 +15,8 @@ import type {
 export function useLatestWatchlist() {
   return useQuery({
     queryKey: queryKeys.latestWatchlist,
-    queryFn: () => apiClient.request<WatchlistResponse>('/api/watchlist/latest')
+    queryFn: () => apiClient.request<WatchlistResponse>('/api/watchlist/latest'),
+    refetchOnMount: 'always'
   });
 }
 

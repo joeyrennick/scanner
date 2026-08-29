@@ -62,6 +62,22 @@ def test_remembers_company_names_by_normalized_ticker():
     assert provider.get_company_name("UNKNOWN") is None
 
 
+def test_identifies_common_equity_for_fundamental_valuation():
+    provider = UniverseProvider()
+    provider._company_names = {
+        "FCNCA": "First Citizens BancShares, Inc. Class A Common Stock",
+        "FCNCN": "First Citizens BancShares, Inc. Depositary Shares, each representing a 1/40th interest in Preferred Stock",
+        "FCNCO": "First Citizens BancShares, Inc. 5.625% Non-Cumulative Perpetual Preferred Stock, Series C",
+        "BABA": "Alibaba Group Holding Limited American Depositary Shares",
+    }
+
+    assert provider.is_fundamental_common_equity("FCNCA") is True
+    assert provider.is_fundamental_common_equity("FCNCN") is False
+    assert provider.is_fundamental_common_equity("FCNCO") is False
+    assert provider.is_fundamental_common_equity("BABA") is False
+    assert provider.is_fundamental_common_equity("UNKNOWN") is True
+
+
 def test_filter_tradeable_common_symbols_removes_warrants_units_and_rights():
     provider = UniverseProvider()
     listed = pd.DataFrame(

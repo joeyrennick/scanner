@@ -6,6 +6,8 @@ from typing import Any
 
 import pandas as pd
 
+from scanner.fundamentals.validation import validate_fundamental_analysis
+
 
 DEFAULT_ASSUMPTIONS = {
     "discount_rate": 0.10,
@@ -15,8 +17,9 @@ DEFAULT_ASSUMPTIONS = {
 
 
 class FundamentalAnalysisService:
-    def __init__(self, provider):
-        self.provider = provider
+    def __init__(self, fundamentals_provider, price_provider=None):
+        self.fundamentals_provider = fundamentals_provider
+        self.price_provider = price_provider or fundamentals_provider
 
     def analyze(
         self,
@@ -24,10 +27,11 @@ class FundamentalAnalysisService:
         assumptions: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         ticker = ticker.strip().upper()
-        raw = self.provider.download_fundamental_data(ticker)
-        price_history = self.provider.download_price_data(ticker, period="5y")
+        raw = self.fundamentals_provider.download_fundamental_data(ticker)
+        price_history = self.price_provider.download_price_data(ticker, period="5y")
         normalized = _normalize(raw)
         current_price = _latest_price(price_history)
+        _add_market_context(normalized, current_price)
         quality = _quality_analysis(normalized)
         risk = _risk_analysis(normalized, price_history, current_price)
         valuation = _valuation_analysis(
@@ -37,11 +41,14 @@ class FundamentalAnalysisService:
         )
         warnings = _data_warnings(normalized, current_price)
 
-        return {
-            "schema_version": 1,
+        analysis = {
+            "schema_version": 3,
             "ticker": ticker,
             "generated_at": datetime.now(timezone.utc).isoformat(),
-            "source": "Massive",
+            "source": _source_label(
+                self.fundamentals_provider,
+                self.price_provider,
+            ),
             "company": normalized["company"],
             "current_price": current_price,
             "data_as_of": normalized["data_as_of"],
@@ -53,6 +60,65 @@ class FundamentalAnalysisService:
             "warnings": warnings,
             "confidence": _confidence(normalized, warnings),
         }
+        analysis["validation"] = validate_fundamental_analysis(analysis)
+        return analysis
+
+    def screen_valuation(
+        self,
+        ticker: str,
+        current_price: float | None,
+        assumptions: dict[str, Any] | None = None,
+        price_history: pd.DataFrame | None = None,
+    ) -> dict[str, Any]:
+        ticker = ticker.strip().upper()
+        raw = self.fundamentals_provider.download_fundamental_data(ticker)
+        normalized = _normalize(raw)
+        _add_market_context(normalized, current_price)
+        valuation = _valuation_analysis(
+            normalized,
+            current_price,
+            assumptions or {},
+        )
+        risk = _risk_analysis(
+            normalized,
+            price_history if price_history is not None else pd.DataFrame(),
+            current_price,
+        )
+        quality = _quality_analysis(normalized)
+        analysis = {
+            "schema_version": 3,
+            "ticker": ticker,
+            "source": _source_label(
+                self.fundamentals_provider,
+                self.price_provider,
+            ),
+            "company": normalized["company"],
+            "current_price": current_price,
+            "data_as_of": normalized["data_as_of"],
+            "financial_history": normalized["financial_history"],
+            "ratios": normalized["ratios"],
+            "quality": quality,
+            "valuation": valuation,
+            "risk": risk,
+        }
+        analysis["validation"] = validate_fundamental_analysis(analysis)
+        return analysis
+
+    def add_screen_risk(
+        self,
+        analysis: dict[str, Any],
+        price_history: pd.DataFrame,
+    ) -> dict[str, Any]:
+        enriched = {
+            **analysis,
+            "risk": _risk_analysis(
+                {"financial_history": analysis.get("financial_history") or []},
+                price_history,
+                analysis.get("current_price"),
+            ),
+        }
+        enriched["validation"] = validate_fundamental_analysis(enriched)
+        return enriched
 
 
 def _normalize(raw: dict[str, object]) -> dict[str, Any]:
@@ -247,7 +313,12 @@ def _risk_analysis(data: dict[str, Any], history: pd.DataFrame, current_price) -
     score = round(100 * sum(check["status"] == "risk" for check in checks) / len(checks))
     return {
         "score": score,
-        "label": "high" if score >= 60 else "moderate" if score >= 30 else "low",
+        "label": (
+            "unknown"
+            if volatility is None or drawdown is None
+            else "high" if score >= 60 else "moderate" if score >= 30 else "low"
+        ),
+        "complete": volatility is not None and drawdown is not None,
         "checks": checks,
         "metrics": {
             "annualized_volatility": volatility,
@@ -255,6 +326,51 @@ def _risk_analysis(data: dict[str, Any], history: pd.DataFrame, current_price) -
             "debt_to_fcf": debt_to_fcf,
         },
     }
+
+
+def _add_market_context(data: dict[str, Any], current_price: float | None) -> None:
+    history = data["financial_history"]
+    latest = history[-1] if history else {}
+    shares = latest.get("diluted_shares")
+    market_cap = data["company"].get("market_cap")
+    if market_cap is None and current_price is not None and shares is not None:
+        market_cap = current_price * shares
+        data["company"]["market_cap"] = market_cap
+
+    derived = {
+        "price_to_earnings": _ratio(
+            current_price,
+            latest.get("diluted_eps"),
+        ),
+        "price_to_free_cash_flow": _ratio(
+            market_cap,
+            latest.get("free_cash_flow"),
+        ),
+        "free_cash_flow_yield": _ratio(
+            latest.get("free_cash_flow"),
+            market_cap,
+        ),
+        "price_to_sales": _ratio(market_cap, latest.get("revenue")),
+        "debt_to_equity": _ratio(latest.get("debt"), latest.get("equity")),
+        "current_ratio": _ratio(
+            latest.get("current_assets"),
+            latest.get("current_liabilities"),
+        ),
+    }
+    data["ratios"] = {
+        **{key: value for key, value in derived.items() if value is not None},
+        **data["ratios"],
+    }
+
+
+def _source_label(fundamentals_provider, price_provider) -> str:
+    fundamentals_source = getattr(
+        fundamentals_provider,
+        "source_name",
+        fundamentals_provider.__class__.__name__,
+    )
+    price_source = getattr(price_provider, "name", price_provider.__class__.__name__)
+    return f"{fundamentals_source} (financials); {str(price_source).title()} (prices)"
 
 
 def _dcf_per_share(free_cash_flow, growth, discount_rate, terminal_growth, years, cash, debt, shares):
@@ -359,7 +475,10 @@ def _data_warnings(data: dict[str, Any], current_price) -> list[str]:
     if current_price is None:
         warnings.append("Current market price is unavailable.")
     if not data["ratios"]:
-        warnings.append("Provider ratios are unavailable for this ticker or subscription.")
+        warnings.append(
+            "Valuation multiples could not be derived from available SEC financials "
+            "and price data."
+        )
     return warnings
 
 

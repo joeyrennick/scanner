@@ -15,6 +15,8 @@ class BaseStrategy(ABC):
     name: str
     category: StrategyCategory
     config_class: type[StrategyConfig] = StrategyConfig
+    evaluation_mode: str = "technical"
+    backtestable: bool = True
 
     @abstractmethod
     def evaluate(

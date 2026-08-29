@@ -45,4 +45,5 @@ class StrategyEngine:
             )
             for strategy in self.strategies
             if strategy.category == category
+            and getattr(strategy, "evaluation_mode", "technical") == "technical"
         ]

@@ -6,16 +6,17 @@ from scanner.data import market_data
 
 
 def create_history(close: float = 100.0):
+    dates = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=4)
     return pd.DataFrame(
         {
-            "Open": [close],
-            "High": [close + 1],
-            "Low": [close - 1],
-            "Close": [close],
-            "Adj Close": [close],
-            "Volume": [1_000_000],
+            "Open": [close] * len(dates),
+            "High": [close + 1] * len(dates),
+            "Low": [close - 1] * len(dates),
+            "Close": [close] * len(dates),
+            "Adj Close": [close] * len(dates),
+            "Volume": [1_000_000] * len(dates),
         },
-        index=pd.to_datetime(["2026-07-03"]),
+        index=dates,
     )
 
 

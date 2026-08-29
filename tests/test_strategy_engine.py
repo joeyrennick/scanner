@@ -8,6 +8,7 @@ from scanner.strategies.pullback_strategy import (
 )
 from scanner.strategies.strategy_engine import StrategyEngine
 from scanner.strategies.strategy_registry import StrategyRegistry
+from scanner.strategies.undervalued_strategy import UndervaluedStrategy
 from tests.market_data_factory import create_market_data
 
 
@@ -162,9 +163,38 @@ def test_strategy_registry_instantiates_default_config():
 def test_strategy_registry_returns_default_configs_for_all_strategies():
     configs = StrategyRegistry.default_configs()
 
-    assert set(configs) == {"bounce", "breakout", "minervini", "pullback"}
+    assert set(configs) == {
+        "bounce",
+        "breakout",
+        "minervini",
+        "pullback",
+        "undervalued",
+    }
     assert isinstance(configs["bounce"], ConfigurableBounceStrategyConfig)
     assert isinstance(configs["pullback"], PullbackStrategyConfig)
+
+
+def test_undervalued_strategy_requires_fifteen_percent_margin_of_safety():
+    strategy = UndervaluedStrategy()
+
+    passing = strategy.evaluate_valuation(
+        {
+            "margin_of_safety": 0.15,
+            "scenarios": [{"name": "base", "fair_value": 115.0}],
+        }
+    )
+    failing = strategy.evaluate_valuation(
+        {
+            "margin_of_safety": 0.149,
+            "scenarios": [{"name": "base", "fair_value": 114.9}],
+        }
+    )
+
+    assert passing.triggered is True
+    assert passing.score == 20
+    assert failing.triggered is False
+    assert strategy.evaluation_mode == "fundamental"
+    assert strategy.backtestable is False
 
 
 def test_configurable_bounce_strategy_triggers_on_default_ma20_anchor():

@@ -82,6 +82,7 @@ export interface CacheWarmupRequest {
 
 export interface ScanRequest {
   universe: string;
+  strategy?: string;
   market_data_provider?: string;
   history_period: string;
   min_price?: number | null;
@@ -100,6 +101,11 @@ export interface WatchlistResponse {
   run_id?: number | null;
   created_at?: string | null;
   rows: WatchlistRow[];
+}
+
+export interface WatchlistRiskClassificationRequest {
+  run_id?: number | null;
+  market_data_provider?: string;
 }
 
 export interface WatchlistPriceRefreshRequest {
@@ -168,6 +174,7 @@ export interface ReportMetadata {
   quality_label?: string | null;
   valuation_label?: string | null;
   risk_label?: string | null;
+  validation_label?: string | null;
 }
 
 export type AnalysisCheck = {
@@ -175,6 +182,13 @@ export type AnalysisCheck = {
   status: string;
   value: number | string | null;
   unit: string;
+};
+
+export type ValidationCheck = {
+  name: string;
+  status: 'pass' | 'review' | 'fail';
+  value: unknown;
+  explanation: string;
 };
 
 export interface FundamentalAnalysis {
@@ -204,7 +218,18 @@ export interface FundamentalAnalysis {
     scenarios: Array<{ name: string; growth_rate: number; fair_value: number | null; upside: number | null }>;
     multiples: Record<string, number>;
   };
-  risk: { score: number; label: string; checks: AnalysisCheck[]; metrics: Record<string, number | null> };
+  risk: { score: number; label: string; complete: boolean; checks: AnalysisCheck[]; metrics: Record<string, number | null> };
+  validation: {
+    policy_version: number;
+    status: 'validated' | 'needs_review' | 'rejected';
+    label: string;
+    score: number;
+    checks: ValidationCheck[];
+    reasons: string[];
+    model: string;
+    manual_filing_review_required: boolean;
+    manual_review_items: string[];
+  };
   warnings: string[];
   confidence: string;
 }
@@ -233,6 +258,8 @@ export interface StrategyMetadata {
   key: string;
   display_name: string;
   category: string;
+  evaluation_mode: string;
+  backtestable: boolean;
   default_config: Record<string, unknown>;
   fields: Array<{
     name: string;

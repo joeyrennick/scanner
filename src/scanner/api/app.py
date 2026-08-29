@@ -36,6 +36,7 @@ from scanner.api.schemas import (
     StrategyMetadata,
     WatchlistPriceRefreshRequest,
     WatchlistPriceRefreshResponse,
+    WatchlistRiskClassificationRequest,
 )
 from scanner.backtesting.backtest_config import BacktestConfig
 from scanner.backtesting.backtest_service import BacktestService
@@ -44,6 +45,7 @@ from scanner.context import ScannerContext
 from scanner.data.cache import SQLiteMarketDataCache
 from scanner.data.market_data import clear_market_data_provider_cache, create_market_data_provider
 from scanner.data.providers.massive import MASSIVE_API_KEY_SECRET, MassiveMarketDataProvider
+from scanner.data.providers.sec import SECFundamentalsProvider
 from scanner.data.scanner_results import SQLiteScannerResultStore
 from scanner.portfolio.execution_model import ExecutionModel
 from scanner.portfolio.portfolio_simulator import PortfolioSimulator
@@ -55,6 +57,11 @@ from scanner.reports.fundamental_analysis_report import FundamentalAnalysisRepor
 from scanner.services.cache_warmup import CacheWarmupConfig, CacheWarmupService
 from scanner.security.secret_store import SQLiteSecretStore
 from scanner.services.scan_service import ScanCancelled, ScanConfig, ScanService
+from scanner.services.undervalued_scan import (
+    UndervaluedScanConfig,
+    UndervaluedScanService,
+)
+from scanner.services.watchlist_risk import WatchlistRiskClassificationService
 from scanner.strategies.strategy_registry import StrategyRegistry
 from scanner.universe.universe_provider import UniverseProvider
 from scanner.utils.cache_summary import format_cache_summary
@@ -169,14 +176,27 @@ def analyze_fundamentals(
 
     try:
         cache = FundamentalAnalysisCache(settings.market_data_cache_path)
-        cached = cache.get(normalized_ticker, request.assumptions)
-        if cached is not None:
-            return _json_safe(cached)
-        analysis = FundamentalAnalysisService(MassiveMarketDataProvider()).analyze(
+        analysis = cache.get(normalized_ticker, request.assumptions)
+        if analysis is None:
+            price_provider = create_market_data_provider(
+                name=settings.market_data_provider,
+                cache_enabled=True,
+                cache_path=settings.market_data_cache_path,
+            )
+            analysis = FundamentalAnalysisService(
+                SECFundamentalsProvider(
+                    user_agent=settings.sec_user_agent,
+                    cache_path=settings.market_data_cache_path,
+                    cache_ttl_hours=settings.sec_fundamentals_cache_ttl_hours,
+                    max_requests_per_second=settings.sec_max_requests_per_second,
+                ),
+                price_provider,
+            ).analyze(
                 normalized_ticker,
                 assumptions=request.assumptions,
             )
-        cache.set(normalized_ticker, request.assumptions, analysis)
+            cache.set(normalized_ticker, request.assumptions, analysis)
+        _persist_candidate_assessment(normalized_ticker, analysis, request.run_id)
         return _json_safe(analysis)
     except RuntimeError as error:
         status = 400 if "API_KEY" in str(error) else 502
@@ -238,6 +258,21 @@ def start_scan(request: ScanRequest) -> dict[str, Any]:
     return job.to_dict()
 
 
+@app.post("/api/watchlist/classify-risk", response_model=JobResponse)
+def classify_watchlist_risk(
+    request: WatchlistRiskClassificationRequest,
+) -> dict[str, Any]:
+    job = jobs.start(
+        "watchlist_risk_classification",
+        lambda progress, cancel: _run_watchlist_risk_classification(
+            request,
+            progress,
+            cancel,
+        ),
+    )
+    return job.to_dict()
+
+
 @app.get("/api/scans/{job_id}", response_model=JobResponse)
 def get_scan(job_id: str) -> dict[str, Any]:
     return get_job(job_id)
@@ -254,7 +289,7 @@ def get_latest_watchlist() -> dict[str, Any]:
             "path": latest_run.output_file,
             "run_id": latest_run.id,
             "created_at": latest_run.created_at,
-            "rows": latest_run.rows,
+            "rows": _rows_with_cached_risk(latest_run.rows),
         }
 
     path = Path(settings.output_file)
@@ -290,7 +325,7 @@ def get_latest_watchlist() -> dict[str, Any]:
                 "path": imported_run.output_file,
                 "run_id": imported_run.id,
                 "created_at": imported_run.created_at,
-                "rows": imported_run.rows,
+                "rows": _rows_with_cached_risk(imported_run.rows),
             }
 
     return {
@@ -312,7 +347,7 @@ def get_watchlist_run(run_id: int) -> dict[str, Any]:
         "path": run.output_file,
         "run_id": run.id,
         "created_at": run.created_at,
-        "rows": run.rows,
+        "rows": _rows_with_cached_risk(run.rows),
     }
 
 
@@ -453,7 +488,7 @@ def generate_fundamental_analysis_report(
     analysis_ticker = str(request.analysis.get("ticker") or "").upper()
     if not ticker or analysis_ticker != ticker:
         raise HTTPException(status_code=422, detail="Report ticker does not match analysis")
-    if request.analysis.get("schema_version") != 1:
+    if request.analysis.get("schema_version") not in {1, 3}:
         raise HTTPException(status_code=422, detail="Unsupported analysis schema version")
 
     output_dir = Path("output/fundamental_reports")
@@ -724,6 +759,33 @@ def _run_cache_warmup(request: CacheWarmupRequest, progress) -> dict[str, Any]:
     )
 
 
+def _run_watchlist_risk_classification(
+    request: WatchlistRiskClassificationRequest,
+    progress,
+    cancel_checker,
+) -> dict[str, Any]:
+    context = ScannerContext(
+        settings=replace(settings, market_data_provider=request.market_data_provider),
+        logger=setup_logging(),
+        market_data_cache_enabled=True,
+    )
+    result = WatchlistRiskClassificationService(
+        context,
+        _scanner_result_store(),
+        progress_callback=progress,
+        cancel_checker=cancel_checker,
+        max_workers=settings.fundamental_scan_workers,
+    ).run(request.run_id)
+    return _json_safe(
+        {
+            "scanner_run_id": result.run_id,
+            "classified_count": result.classified_count,
+            "skipped": result.skipped,
+            "cancelled": result.cancelled,
+        }
+    )
+
+
 def _run_scan(request: ScanRequest, progress, cancel_checker) -> dict[str, Any]:
     logger = setup_logging()
     log_path = _scan_log_path()
@@ -746,6 +808,7 @@ def _run_scan(request: ScanRequest, progress, cancel_checker) -> dict[str, Any]:
         logger.info(
             "Scan request: "
             f"universe={request.universe}, "
+            f"strategy={request.strategy}, "
             f"provider={request.market_data_provider}, "
             f"history_period={request.history_period}, "
             f"min_price={request.min_price}, "
@@ -757,6 +820,58 @@ def _run_scan(request: ScanRequest, progress, cancel_checker) -> dict[str, Any]:
             logger=logger,
             market_data_cache_enabled=True,
         )
+        if request.strategy.lower() == "undervalued":
+            strategy = StrategyRegistry.get("undervalued")
+            valuation_result = UndervaluedScanService(
+                context=context,
+                logger=logger,
+                progress_callback=scan_progress,
+                cancel_checker=cancel_checker,
+            ).run(
+                UndervaluedScanConfig(
+                    universe=request.universe,
+                    market_data_provider=request.market_data_provider,
+                    output_file=settings.output_file,
+                    minimum_margin_of_safety=(
+                        strategy.config.minimum_margin_of_safety
+                    ),
+                    discount_rate=strategy.config.discount_rate,
+                    terminal_growth_rate=strategy.config.terminal_growth_rate,
+                    projection_years=strategy.config.projection_years,
+                    max_workers=settings.fundamental_scan_workers,
+                )
+            )
+            logger.info("UI undervalued scan complete")
+            validation_status_counts = (
+                valuation_result.dataframe["Validation Status"]
+                .value_counts()
+                .to_dict()
+                if not valuation_result.dataframe.empty
+                else {}
+            )
+            return _json_safe(
+                {
+                    "scanner_run_id": valuation_result.scanner_run_id,
+                    "tickers": valuation_result.tickers,
+                    "analyses": valuation_result.analyzed_count,
+                    "candidates": len(valuation_result.dataframe),
+                    "fundamental_validations": len(valuation_result.dataframe),
+                    "validation_status_counts": validation_status_counts,
+                    "skipped": valuation_result.skipped,
+                    "excluded_non_common": valuation_result.excluded_non_common,
+                    "watchlist_path": settings.output_file,
+                    "log_path": str(log_path),
+                    "elapsed_seconds": valuation_result.elapsed_seconds,
+                    "rows": _records_from_dataframe(valuation_result.dataframe),
+                    "stopped_for_rate_limit": (
+                        valuation_result.stopped_for_rate_limit
+                    ),
+                    "output_paths": {
+                        "watchlist_csv": settings.output_file,
+                        "scan_log": str(log_path),
+                    },
+                }
+            )
         result = ScanService(
             context=context,
             logger=logger,
@@ -820,6 +935,11 @@ def _run_scan(request: ScanRequest, progress, cancel_checker) -> dict[str, Any]:
 
 def _run_backtest(request: BacktestRequest, progress) -> dict[str, Any]:
     strategy = StrategyRegistry.get(request.strategy)
+    if not getattr(strategy, "backtestable", True):
+        raise ValueError(
+            f"{strategy.name} is a point-in-time fundamental screen and cannot be "
+            "tested by the technical price-history backtester."
+        )
     result = BacktestService(
         config=BacktestConfig(
             history_period=request.history_period,
@@ -932,6 +1052,8 @@ def _strategy_metadata(name: str) -> StrategyMetadata:
         key=name,
         display_name=strategy.name,
         category=strategy.category.value,
+        evaluation_mode=getattr(strategy, "evaluation_mode", "technical"),
+        backtestable=getattr(strategy, "backtestable", True),
         default_config=asdict(config),
         fields=config_fields,
     )
@@ -1001,6 +1123,81 @@ def _records_from_dataframe(dataframe: pd.DataFrame) -> list[dict[str, Any]]:
 
 def _scanner_result_store() -> SQLiteScannerResultStore:
     return SQLiteScannerResultStore(settings.market_data_cache_path)
+
+
+def _persist_candidate_assessment(
+    ticker: str,
+    analysis: dict[str, Any],
+    run_id: int | None,
+) -> None:
+    risk = analysis.get("risk") or {}
+    label = str(risk.get("label") or "").strip().lower()
+    score = risk.get("score")
+    validation = analysis.get("validation") or {}
+    validation_status = str(validation.get("status") or "").strip().lower()
+    if (
+        label not in {"low", "moderate", "high"}
+        and validation_status not in {"validated", "needs_review", "rejected"}
+    ):
+        return
+
+    store = _scanner_result_store()
+    run = store.get_run(run_id) if run_id is not None else store.latest_run()
+    if run is None or not any(
+        str(row.get("Ticker") or "").strip().upper() == ticker for row in run.rows
+    ):
+        return
+    update: dict[str, Any] = {"Ticker": ticker}
+    if label in {"low", "moderate", "high"} and isinstance(score, (int, float)):
+        update.update({"Risk Level": label, "Risk Score": score})
+    if validation_status in {"validated", "needs_review", "rejected"}:
+        update.update(
+            {
+                "Validation Status": validation_status,
+                "Validation Label": validation.get("label") or validation_status.replace("_", " ").title(),
+                "Validation Score": validation.get("score"),
+                "Validation Reasons": " | ".join(validation.get("reasons") or []),
+                "Validation Model": validation.get("model") or "unknown",
+            }
+        )
+    store.update_rows_by_ticker(run_id=run.id, rows=[update])
+
+
+def _rows_with_cached_risk(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    cache = FundamentalAnalysisCache(settings.market_data_cache_path)
+    tickers = [str(row.get("Ticker") or "") for row in rows]
+    cached_risks = cache.latest_risks(tickers)
+    cached_validations = cache.latest_validations(tickers)
+    if not cached_risks and not cached_validations:
+        return rows
+
+    enriched = []
+    for row in rows:
+        existing_label = str(row.get("Risk Level") or "").strip().lower()
+        ticker = str(row.get("Ticker") or "").strip().upper()
+        cached_risk = cached_risks.get(ticker)
+        cached_validation = cached_validations.get(ticker)
+        update: dict[str, Any] = {}
+        if existing_label not in {"low", "moderate", "high"} and cached_risk is not None:
+            update.update(
+                {"Risk Level": cached_risk["label"], "Risk Score": cached_risk["score"]}
+            )
+        existing_validation = str(row.get("Validation Status") or "").strip().lower()
+        if (
+            existing_validation not in {"validated", "needs_review", "rejected"}
+            and cached_validation is not None
+        ):
+            update.update(
+                {
+                    "Validation Status": cached_validation["status"],
+                    "Validation Label": cached_validation["label"],
+                    "Validation Score": cached_validation["score"],
+                    "Validation Reasons": " | ".join(cached_validation["reasons"]),
+                    "Validation Model": cached_validation["model"],
+                }
+            )
+        enriched.append({**row, **update} if update else row)
+    return enriched
 
 
 def _parse_report_date(value: str | None) -> date:
@@ -1144,6 +1341,7 @@ def _report_metadata(path: Path) -> dict[str, Any]:
                         "quality_label": (analysis.get("quality") or {}).get("label"),
                         "valuation_label": (analysis.get("valuation") or {}).get("label"),
                         "risk_label": (analysis.get("risk") or {}).get("label"),
+                        "validation_label": (analysis.get("validation") or {}).get("label"),
                     }
                 )
             except (ValueError, TypeError):

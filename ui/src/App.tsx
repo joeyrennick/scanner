@@ -247,7 +247,10 @@ function DailyScannerPage() {
   const jobQuery = useJob(jobId);
   const job = jobQuery.data;
   const activeJob = isJobActive(job);
-  const [selectedStrategy, setSelectedStrategy] = useState('all');
+  const [selectedStrategy, setSelectedStrategy] = useLocalStorage(
+    'swing-scanner.daily-scanner.strategy',
+    'all'
+  );
   const [selectedTickers, setSelectedTickers] = useState<Set<string>>(new Set());
   const [journalMessage, setJournalMessage] = useState<string | null>(null);
   const [candidateSort, setCandidateSort] = useState<CandidateSort>({
@@ -288,6 +291,13 @@ function DailyScannerPage() {
     latestWatchlist.data?.rows
   ]);
   const rawRows = refreshedRows ?? baseRows;
+  const isFundamentalStrategy = selectedStrategy === 'undervalued';
+  const valuationMode =
+    isFundamentalStrategy ||
+    (rawRows.length > 0 &&
+      rawRows.every((row) =>
+        String(row['Triggered Strategies'] ?? '').toLowerCase().includes('undervalued')
+      ));
   const filteredRows = useMemo(
     () =>
       rawRows.filter(
@@ -326,6 +336,18 @@ function DailyScannerPage() {
   }, [job?.job_id, latestWatchlist.data?.run_id]);
 
   useEffect(() => {
+    if (
+      job?.status !== 'complete' ||
+      currentJobRunId === null ||
+      currentJobRunId === latestWatchlistRunId
+    ) {
+      return;
+    }
+
+    void latestWatchlist.refetch();
+  }, [currentJobRunId, job?.status, latestWatchlist.refetch, latestWatchlistRunId]);
+
+  useEffect(() => {
     const jobRows = scanRowsFromJob(job);
 
     if (
@@ -333,6 +355,7 @@ function DailyScannerPage() {
       job.status !== 'complete' ||
       !jobRows ||
       jobRows.length === 0 ||
+      valuationMode ||
       autoRefreshedJobId.current === job.job_id
     ) {
       return;
@@ -340,17 +363,22 @@ function DailyScannerPage() {
 
     autoRefreshedJobId.current = job.job_id;
     void refreshVisiblePrices(jobRows.filter((row) => rowMatchesStrategy(row, selectedStrategy)));
-  }, [job, selectedStrategy]);
+  }, [job, selectedStrategy, valuationMode]);
 
   async function submitScan() {
     setSelectedTickers(new Set());
     setRefreshedRows(null);
     const response = await startScan.mutateAsync({
       ...form,
+      strategy: selectedStrategy,
       market_data_provider: marketDataSettings.primaryProvider,
-      min_price: emptyNumberToNull(form.min_price),
-      max_price: emptyNumberToNull(form.max_price)
+      min_price: isFundamentalStrategy ? null : emptyNumberToNull(form.min_price),
+      max_price: isFundamentalStrategy ? null : emptyNumberToNull(form.max_price),
+      warm_market_data_cache: isFundamentalStrategy ? false : form.warm_market_data_cache
     });
+    if (isFundamentalStrategy) {
+      setCandidateSort({ key: 'marginOfSafety', direction: 'desc' });
+    }
     setJobId(response.job_id);
   }
 
@@ -426,6 +454,9 @@ function DailyScannerPage() {
   }
 
   function openCandidateBacktest() {
+    if (valuationMode) {
+      return;
+    }
     const rowsToBacktest = selectedCandidates.length > 0 ? selectedCandidates : sortedCandidates;
     const tickers = rowsToBacktest.map((candidate) => candidate.ticker);
 
@@ -439,6 +470,13 @@ function DailyScannerPage() {
   }
 
   function openCandidate(candidate: DisplayCandidate) {
+    if (valuationMode) {
+      navigate(
+        `/fundamentals?ticker=${encodeURIComponent(candidate.ticker)}` +
+          `${currentRunId ? `&run_id=${currentRunId}` : ''}&strategy=undervalued`
+      );
+      return;
+    }
     navigate('/candidates', {
       state: {
         ticker: candidate.ticker
@@ -504,7 +542,7 @@ function DailyScannerPage() {
             <select
               value={form.history_period}
               onChange={(event) => setForm({ ...form, history_period: event.target.value })}
-              disabled={activeJob}
+              disabled={activeJob || isFundamentalStrategy}
             >
               {historyPeriods.map((period) => (
                 <option key={period} value={period}>
@@ -523,7 +561,7 @@ function DailyScannerPage() {
               onChange={(event) =>
                 setForm({ ...form, min_price: inputNumberOrNull(event.target.value) })
               }
-              disabled={activeJob}
+              disabled={activeJob || isFundamentalStrategy}
             />
           </label>
 
@@ -536,7 +574,7 @@ function DailyScannerPage() {
               onChange={(event) =>
                 setForm({ ...form, max_price: inputNumberOrNull(event.target.value) })
               }
-              disabled={activeJob}
+              disabled={activeJob || isFundamentalStrategy}
             />
           </label>
 
@@ -549,7 +587,7 @@ function DailyScannerPage() {
               onChange={(event) =>
                 setForm({ ...form, cache_warmup_batch_size: Number(event.target.value) })
               }
-              disabled={activeJob}
+              disabled={activeJob || isFundamentalStrategy}
             />
           </label>
 
@@ -565,7 +603,7 @@ function DailyScannerPage() {
                   cache_warmup_max_provider_batches: inputNumberOrNull(event.target.value)
                 })
               }
-              disabled={activeJob}
+              disabled={activeJob || isFundamentalStrategy}
             />
           </label>
 
@@ -579,7 +617,7 @@ function DailyScannerPage() {
               onChange={(event) =>
                 setForm({ ...form, cache_warmup_batch_delay_ms: Number(event.target.value) })
               }
-              disabled={activeJob}
+              disabled={activeJob || isFundamentalStrategy}
             />
           </label>
 
@@ -591,10 +629,20 @@ function DailyScannerPage() {
               onChange={(event) =>
                 setForm({ ...form, warm_market_data_cache: event.target.checked })
               }
-              disabled={activeJob}
+              disabled={activeJob || isFundamentalStrategy}
             />
           </label>
         </div>
+
+        {isFundamentalStrategy && (
+          <div className="alert alert-warning">
+            <Info size={18} />
+            <span>
+              SEC valuation mode ignores price limits and technical rules. It returns stocks
+              whose base DCF fair value is at least 15% above the current price.
+            </span>
+          </div>
+        )}
 
         <div className="scanner-toolbar">
           <div className="segmented-control" aria-label="Strategy filter">
@@ -603,7 +651,7 @@ function DailyScannerPage() {
               onClick={() => setSelectedStrategy('all')}
               disabled={activeJob}
             >
-              All
+              All Technical
             </button>
             {activeStrategies.map((strategy) => (
               <button
@@ -717,7 +765,10 @@ function DailyScannerPage() {
             <button
               className="secondary-button"
               onClick={() => void refreshVisiblePrices()}
-              disabled={sortedCandidates.length === 0 || refreshPrices.isPending}
+              disabled={
+                sortedCandidates.length === 0 || refreshPrices.isPending || valuationMode
+              }
+              title={valuationMode ? 'Rerun the valuation scan to refresh prices and fair-value comparisons' : undefined}
             >
               {refreshPrices.isPending ? (
                 <LoaderCircle className="spin" size={18} />
@@ -738,7 +789,8 @@ function DailyScannerPage() {
             <button
               className="secondary-button"
               onClick={openCandidateBacktest}
-              disabled={sortedCandidates.length === 0}
+              disabled={sortedCandidates.length === 0 || valuationMode}
+              title={valuationMode ? 'Point-in-time fundamental valuation is not supported by the technical backtester' : undefined}
             >
               <BarChart3 size={18} />
               {selectedCount > 0 ? 'Backtest Selected' : 'Backtest Filtered'}
@@ -794,8 +846,9 @@ function DailyScannerPage() {
         <div className="selection-strip">
           <span>{selectedCount > 0 ? `${selectedCount} selected` : 'No rows selected'}</span>
           <span>
-            Min stop {displaySettings.minStopDistancePercent}% · Min 5D range{' '}
-            {displaySettings.minFiveDayRange}
+            {valuationMode
+              ? 'Ranked by base-case DCF margin of safety'
+              : `Min stop ${displaySettings.minStopDistancePercent}% · Min 5D range ${displaySettings.minFiveDayRange}`}
           </span>
         </div>
 
@@ -814,7 +867,12 @@ function DailyScannerPage() {
                 <SortableHeader label="Ticker" sortKey="ticker" sort={candidateSort} onSort={changeSort} />
                 <SortableHeader label="Sector" sortKey="sector" sort={candidateSort} onSort={changeSort} />
                 <SortableHeader label="Strategy" sortKey="strategy" sort={candidateSort} onSort={changeSort} />
-                <SortableHeader label="Score" sortKey="score" sort={candidateSort} onSort={changeSort} />
+                <SortableHeader
+                  label={valuationMode ? 'Strategy Score' : 'Score'}
+                  sortKey="score"
+                  sort={candidateSort}
+                  onSort={changeSort}
+                />
                 <SortableHeader
                   label={
                   <span className="th-with-info">
@@ -829,13 +887,24 @@ function DailyScannerPage() {
                   sort={candidateSort}
                   onSort={changeSort}
                 />
-                <SortableHeader label="RS" sortKey="relativeStrength" sort={candidateSort} onSort={changeSort} />
-                <SortableHeader label="RVOL" sortKey="relativeVolume" sort={candidateSort} onSort={changeSort} />
-                <SortableHeader label="ATR" sortKey="atr" sort={candidateSort} onSort={changeSort} />
-                <SortableHeader label="5D Range" sortKey="fiveDayRange" sort={candidateSort} onSort={changeSort} />
-                <SortableHeader label="Entry" sortKey="entryArea" sort={candidateSort} onSort={changeSort} />
-                <SortableHeader label="Stop" sortKey="stop" sort={candidateSort} onSort={changeSort} />
-                <SortableHeader label="Target/Exit" sortKey="targetExit" sort={candidateSort} onSort={changeSort} />
+                {valuationMode ? (
+                  <>
+                    <SortableHeader label="Fair Value" sortKey="fairValue" sort={candidateSort} onSort={changeSort} />
+                    <SortableHeader label="Margin of Safety" sortKey="marginOfSafety" sort={candidateSort} onSort={changeSort} />
+                    <SortableHeader label="Free Cash Flow" sortKey="freeCashFlow" sort={candidateSort} onSort={changeSort} />
+                    <SortableHeader label="SEC Data As Of" sortKey="fundamentalDataAsOf" sort={candidateSort} onSort={changeSort} />
+                  </>
+                ) : (
+                  <>
+                    <SortableHeader label="RS" sortKey="relativeStrength" sort={candidateSort} onSort={changeSort} />
+                    <SortableHeader label="RVOL" sortKey="relativeVolume" sort={candidateSort} onSort={changeSort} />
+                    <SortableHeader label="ATR" sortKey="atr" sort={candidateSort} onSort={changeSort} />
+                    <SortableHeader label="5D Range" sortKey="fiveDayRange" sort={candidateSort} onSort={changeSort} />
+                    <SortableHeader label="Entry" sortKey="entryArea" sort={candidateSort} onSort={changeSort} />
+                    <SortableHeader label="Stop" sortKey="stop" sort={candidateSort} onSort={changeSort} />
+                    <SortableHeader label="Target/Exit" sortKey="targetExit" sort={candidateSort} onSort={changeSort} />
+                  </>
+                )}
                 <th>Action</th>
               </tr>
             </thead>
@@ -858,31 +927,44 @@ function DailyScannerPage() {
                   <td>{candidate.strategy}</td>
                   <td>{candidate.score}</td>
                   <td>{candidate.currentPrice}</td>
-                  <td>{candidate.relativeStrength}</td>
-                  <td>{candidate.relativeVolume}</td>
-                  <td>{candidate.atr}</td>
-                  <td>{candidate.fiveDayRange}</td>
-                  <td>{candidate.entryArea}</td>
-                  <td>{candidate.stop}</td>
-                  <td>{candidate.targetExit}</td>
+                  {valuationMode ? (
+                    <>
+                      <td>{candidate.fairValue}</td>
+                      <td>{candidate.marginOfSafety}</td>
+                      <td>{candidate.freeCashFlow}</td>
+                      <td>{candidate.fundamentalDataAsOf}</td>
+                    </>
+                  ) : (
+                    <>
+                      <td>{candidate.relativeStrength}</td>
+                      <td>{candidate.relativeVolume}</td>
+                      <td>{candidate.atr}</td>
+                      <td>{candidate.fiveDayRange}</td>
+                      <td>{candidate.entryArea}</td>
+                      <td>{candidate.stop}</td>
+                      <td>{candidate.targetExit}</td>
+                    </>
+                  )}
                   <td>
                     <div className="row-actions">
                       <button className="link-button" onClick={() => openCandidate(candidate)}>
                         Open
                       </button>
-                      <button
-                        className="link-button"
-                        onClick={() => addCandidateToJournal(candidate)}
-                      >
-                        Add To Journal
-                      </button>
+                      {!valuationMode && (
+                        <button
+                          className="link-button"
+                          onClick={() => addCandidateToJournal(candidate)}
+                        >
+                          Add To Journal
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
               ))}
               {sortedCandidates.length === 0 && (
                 <tr>
-                  <td colSpan={14} className="empty-cell">
+                  <td colSpan={valuationMode ? 11 : 14} className="empty-cell">
                     {activeJob ? 'Scan is running.' : 'No candidates match the current filter.'}
                   </td>
                 </tr>
@@ -1531,9 +1613,11 @@ function BacktestPage() {
           <label>
             Strategy
             <select value={form.strategy} onChange={(event) => setForm({ ...form, strategy: event.target.value })}>
-              {(strategies.data ?? []).filter((strategy) => strategy.category === 'entry').map((strategy) => (
-                <option key={strategy.key} value={strategy.key}>{strategy.display_name}</option>
-              ))}
+              {(strategies.data ?? [])
+                .filter((strategy) => strategy.category === 'entry' && strategy.backtestable)
+                .map((strategy) => (
+                  <option key={strategy.key} value={strategy.key}>{strategy.display_name}</option>
+                ))}
             </select>
           </label>
           <label>
@@ -2736,7 +2820,7 @@ function ReportsTable({ reports }: { reports: ReportMetadata[] }) {
               <td>{formatDateTime(report.modified_at)}</td>
               <td>
                 {report.ticker
-                  ? `${report.ticker} · ${report.quality_label ?? 'unknown'} quality · ${report.valuation_label ?? 'unknown'} · ${report.risk_label ?? 'unknown'} risk`
+                  ? `${report.ticker} · ${report.validation_label ?? 'not validated'} · ${report.quality_label ?? 'unknown'} quality · ${report.valuation_label ?? 'unknown'} by DCF · ${report.risk_label ?? 'unknown'} risk`
                   : '—'}
               </td>
               <td>{formatFileSize(report.size_bytes)}</td>
@@ -3879,6 +3963,10 @@ function downloadCandidatesCsv(candidates: DisplayCandidate[]) {
     'Current Price',
     'Price As Of',
     'Price Source',
+    'Fair Value',
+    'Margin of Safety',
+    'SEC Data As Of',
+    'Free Cash Flow',
     'Relative Strength',
     'Relative Volume',
     'ATR',
@@ -3893,6 +3981,10 @@ function downloadCandidatesCsv(candidates: DisplayCandidate[]) {
     candidate.currentPrice,
     candidate.priceAsOf,
     candidate.priceSource,
+    candidate.fairValue,
+    candidate.marginOfSafety,
+    candidate.fundamentalDataAsOf,
+    candidate.freeCashFlow,
     candidate.relativeStrength,
     candidate.relativeVolume,
     candidate.atr,

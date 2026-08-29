@@ -27,7 +27,10 @@ def test_cache_only_market_data_service_reads_sqlite_without_provider(
     )
     monkeypatch.setattr(
         "scanner.services.market_data_service.settings",
-        ScannerSettings(market_data_cache_path=str(db_path)),
+        ScannerSettings(
+            market_data_provider="yahoo",
+            market_data_cache_path=str(db_path),
+        ),
     )
 
     def fail_provider_call(*args, **kwargs):

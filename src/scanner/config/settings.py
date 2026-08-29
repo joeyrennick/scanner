@@ -26,6 +26,19 @@ class ScannerSettings:
     cache_warmup_max_provider_batches: int | None = None
     cache_warmup_stop_on_rate_limit: bool = True
     massive_batch_workers: int = int(os.environ.get("MASSIVE_BATCH_WORKERS", "10"))
+    sec_user_agent: str = os.environ.get(
+        "SEC_USER_AGENT",
+        "Swing Scanner joe.rennick@servicenow.com",
+    )
+    sec_max_requests_per_second: float = float(
+        os.environ.get("SEC_MAX_REQUESTS_PER_SECOND", "8")
+    )
+    sec_fundamentals_cache_ttl_hours: int = int(
+        os.environ.get("SEC_FUNDAMENTALS_CACHE_TTL_HOURS", "24")
+    )
+    fundamental_scan_workers: int = int(
+        os.environ.get("FUNDAMENTAL_SCAN_WORKERS", "8")
+    )
     max_workers: int = 40
     backtest_max_workers: int = 80
     relative_strength_lookback_days: int = 63

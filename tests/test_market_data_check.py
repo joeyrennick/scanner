@@ -93,6 +93,7 @@ def test_download_price_data_uses_configured_provider():
 
 
 def test_download_price_data_uses_configured_cache(tmp_path):
+    recent_dates = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=2)
     history = pd.DataFrame(
         {
             "Open": [100.0, 101.0],
@@ -101,7 +102,7 @@ def test_download_price_data_uses_configured_cache(tmp_path):
             "Close": [100.0, 101.0],
             "Volume": [1_000_000, 1_000_000],
         },
-        index=pd.to_datetime(["2026-07-02", "2026-07-03"]),
+        index=recent_dates,
     )
     calls = []
 

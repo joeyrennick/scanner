@@ -22,6 +22,7 @@ class CacheWarmupRequest(BaseModel):
 
 class ScanRequest(BaseModel):
     universe: str = "all"
+    strategy: str = "all"
     market_data_provider: str = settings.market_data_provider
     history_period: str = settings.scan_history_period
     min_price: float | None = None
@@ -49,6 +50,11 @@ class WatchlistPriceRefreshResponse(BaseModel):
     rows: list[dict[str, Any]]
     refreshed_count: int
     fallback_count: int
+
+
+class WatchlistRiskClassificationRequest(BaseModel):
+    run_id: int | None = None
+    market_data_provider: str = settings.market_data_provider
 
 
 class MarketDataCredentialRequest(BaseModel):
@@ -109,6 +115,7 @@ class DailyScannerReportResponse(BaseModel):
 
 class FundamentalAnalysisRequest(BaseModel):
     assumptions: dict[str, Any] = Field(default_factory=dict)
+    run_id: int | None = None
 
 
 class FundamentalReportRequest(BaseModel):
@@ -181,6 +188,8 @@ class StrategyMetadata(BaseModel):
     key: str
     display_name: str
     category: str
+    evaluation_mode: str
+    backtestable: bool
     default_config: dict[str, Any]
     fields: list[StrategyField]
 

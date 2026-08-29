@@ -6,13 +6,14 @@ import re
 from typing import Any
 
 
-VALIDATION_POLICY_VERSION = 1
+VALIDATION_POLICY_VERSION = 3
 MINIMUM_DCF_MARGIN = 0.15
 LOW_RISK_MARGIN = 0.20
 MODERATE_RISK_MARGIN = 0.30
 MAXIMUM_AUTOMATIC_MARGIN = 2.0
 MINIMUM_QUALITY_SCORE = 50
-MINIMUM_FINANCIAL_PERIODS = 4
+MINIMUM_FINANCIAL_PERIODS = 2
+AUTOMATIC_VALIDATION_FINANCIAL_PERIODS = 4
 MAXIMUM_FINANCIAL_PERIOD_AGE_DAYS = 500
 
 SECTOR_SPECIFIC_MODEL_PATTERN = re.compile(
@@ -44,17 +45,24 @@ def validate_fundamental_analysis(
     fair_value = _number((scenarios.get("base") or {}).get("fair_value"))
     current_price = _number(analysis.get("current_price"))
     shares = _number(latest.get("diluted_shares"))
+    net_income = _number(latest.get("net_income"))
+    diluted_eps = _number(latest.get("diluted_eps"))
     free_cash_flow = _number(latest.get("free_cash_flow"))
     filing_age = _filing_age_days(analysis.get("data_as_of"), as_of)
     checks: list[dict[str, Any]] = []
 
+    history_periods = len(history)
     _append_check(
         checks,
         "Financial history",
-        len(history) >= MINIMUM_FINANCIAL_PERIODS,
-        "fail",
-        len(history),
-        f"At least {MINIMUM_FINANCIAL_PERIODS} annual periods are required.",
+        history_periods >= AUTOMATIC_VALIDATION_FINANCIAL_PERIODS,
+        "fail" if history_periods < MINIMUM_FINANCIAL_PERIODS else "review",
+        history_periods,
+        f"At least {MINIMUM_FINANCIAL_PERIODS} annual periods are required; "
+        f"{MINIMUM_FINANCIAL_PERIODS} or "
+        f"{AUTOMATIC_VALIDATION_FINANCIAL_PERIODS - 1} periods require review, "
+        f"while {AUTOMATIC_VALIDATION_FINANCIAL_PERIODS} or more qualify for "
+        "automatic validation.",
     )
     _append_check(
         checks,
@@ -82,6 +90,27 @@ def validate_fundamental_analysis(
         shares,
         "A positive diluted share count is required for per-share fair value.",
     )
+    if (
+        shares is not None
+        and shares > 0
+        and net_income is not None
+        and net_income != 0
+        and diluted_eps is not None
+        and diluted_eps != 0
+        and net_income * diluted_eps > 0
+    ):
+        implied_shares = abs(net_income / diluted_eps)
+        share_consistency = shares / implied_shares
+        _append_check(
+            checks,
+            "Share-count consistency",
+            0.5 <= share_consistency <= 2,
+            "fail",
+            share_consistency,
+            "Diluted shares must be consistent with net income divided by "
+            "diluted EPS; a large mismatch can indicate an SEC filing unit "
+            "or metric mismatch.",
+        )
     _append_check(
         checks,
         "Base DCF available",

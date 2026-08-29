@@ -328,6 +328,11 @@ def _candidate_row(
         "Free Cash Flow": latest.get("free_cash_flow"),
         "Revenue": latest.get("revenue"),
         "Diluted EPS": latest.get("diluted_eps"),
+        "Diluted Shares": latest.get("diluted_shares"),
+        "Diluted Shares Reported": latest.get("diluted_shares_reported"),
+        "Diluted Shares Scale Factor": latest.get(
+            "diluted_shares_scale_factor"
+        ),
         "Price / Earnings": analysis.get("ratios", {}).get("price_to_earnings"),
         "Price / Free Cash Flow": analysis.get("ratios", {}).get(
             "price_to_free_cash_flow"

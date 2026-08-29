@@ -6,7 +6,8 @@ import {
   candidateStrategyForRows,
   candidateTickerForStrategy,
   candidateValidationCounts,
-  loadFundamentalState
+  loadFundamentalState,
+  validationSummaryIssues
 } from './FundamentalAnalysisPage';
 
 const displaySettings = { minStopDistancePercent: 1, minFiveDayRange: 10 };
@@ -123,6 +124,29 @@ describe('fundamental analysis state', () => {
       rejected: 1,
       not_calculated: 1
     });
+  });
+
+  it('summarizes only the checks responsible for review or rejection', () => {
+    const checks = [
+      { name: 'History', status: 'pass' as const, value: 5, explanation: 'History is complete.' },
+      { name: 'DCF sanity', status: 'review' as const, value: 3, explanation: 'DCF output is unusually large.' },
+      { name: 'Share count', status: 'fail' as const, value: 0.001, explanation: 'Share count is inconsistent.' }
+    ];
+    const validation = {
+      policy_version: 2,
+      status: 'needs_review' as const,
+      label: 'Needs review',
+      score: 79,
+      checks,
+      reasons: [],
+      model: 'dcf',
+      manual_filing_review_required: true,
+      manual_review_items: []
+    };
+
+    expect(validationSummaryIssues(validation).map((check) => check.name)).toEqual(['DCF sanity']);
+    expect(validationSummaryIssues({ ...validation, status: 'rejected' }).map((check) => check.name)).toEqual(['Share count']);
+    expect(validationSummaryIssues({ ...validation, status: 'validated' })).toEqual([]);
   });
 
   it('selects a matching candidate when the strategy filter changes', () => {

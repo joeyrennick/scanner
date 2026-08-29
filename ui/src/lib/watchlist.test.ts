@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   candidateFromWatchlistRow,
+  defaultScannerResultFilters,
   mergeWatchlistRows,
+  normalizeScannerResultFilters,
   rowMatchesDisplaySettings,
+  rowMatchesScannerResultFilters,
   rowMatchesStrategy,
   sortCandidates,
   stopDistancePercent
@@ -37,6 +40,40 @@ describe('watchlist display helpers', () => {
       targetExit: '$227.43',
       fiveDayRange: '12',
       holdTime: '5 trading days'
+    });
+    expect(candidate).toMatchObject({
+      validationLabel: 'Not calculated',
+      qualityLabel: 'Not calculated',
+      dcfLabel: 'Not calculated',
+      riskLabel: 'Not calculated'
+    });
+  });
+
+  it('maps the Fundamentals summary classifications into scanner candidates', () => {
+    const candidate = candidateFromWatchlistRow(
+      {
+        Ticker: 'SFNC',
+        'Validation Status': 'needs_review',
+        'Validation Score': 79,
+        'Quality Label': 'weak',
+        'Quality Score': 33,
+        'Valuation Label': 'undervalued',
+        'Margin of Safety': 42.15,
+        'Risk Level': 'low',
+        'Risk Score': 25
+      },
+      0
+    );
+
+    expect(candidate).toMatchObject({
+      validationLabel: 'Needs Review',
+      validationScore: '79',
+      qualityLabel: 'Weak',
+      qualityScore: '33',
+      dcfLabel: 'Undervalued by DCF',
+      marginOfSafety: '42.15%',
+      riskLabel: 'Low',
+      riskScore: '25'
     });
   });
 
@@ -166,5 +203,120 @@ describe('watchlist display helpers', () => {
       'AAPL',
       'MSFT'
     ]);
+  });
+
+  it('normalizes persisted scanner result filters and rejects obsolete values', () => {
+    expect(
+      normalizeScannerResultFilters({
+        validation: 'needs_review',
+        quality: 'weak',
+        dcf: 'undervalued',
+        risk: 'low'
+      })
+    ).toEqual({
+      validation: 'needs_review',
+      quality: 'weak',
+      dcf: 'undervalued',
+      risk: 'low'
+    });
+
+    expect(
+      normalizeScannerResultFilters({
+        validation: 'obsolete',
+        quality: 12,
+        dcf: null,
+        risk: 'medium'
+      })
+    ).toEqual(defaultScannerResultFilters);
+    expect(
+      rowMatchesScannerResultFilters(
+        {
+          'Validation Status': 'rejected',
+          'Quality Label': 'weak',
+          'Valuation Label': 'overvalued',
+          'Risk Level': 'high'
+        },
+        defaultScannerResultFilters
+      )
+    ).toBe(true);
+  });
+
+  it('recognizes every scanner result classification and missing values', () => {
+    const cases = [
+      ['validation', 'Validation Status', ['validated', 'needs_review', 'rejected']],
+      ['quality', 'Quality Label', ['strong', 'acceptable', 'weak']],
+      ['dcf', 'Valuation Label', ['undervalued', 'fairly_valued', 'overvalued']],
+      ['risk', 'Risk Level', ['low', 'moderate', 'high']]
+    ] as const;
+
+    for (const [filterName, columnName, values] of cases) {
+      for (const value of values) {
+        expect(
+          rowMatchesScannerResultFilters(
+            { [columnName]: value },
+            { ...defaultScannerResultFilters, [filterName]: value }
+          )
+        ).toBe(true);
+      }
+      expect(
+        rowMatchesScannerResultFilters(
+          {},
+          { ...defaultScannerResultFilters, [filterName]: 'not_calculated' }
+        )
+      ).toBe(true);
+    }
+  });
+
+  it('combines result filters with AND semantics and preserves them while sorting', () => {
+    const rows = [
+      {
+        Ticker: 'SFNC',
+        'Composite Score': 75,
+        'Validation Status': 'needs_review',
+        'Quality Label': 'weak',
+        'Valuation Label': 'undervalued',
+        'Risk Level': 'low'
+      },
+      {
+        Ticker: 'MATCH',
+        'Composite Score': 90,
+        'Validation Status': 'needs_review',
+        'Quality Label': 'weak',
+        'Valuation Label': 'undervalued',
+        'Risk Level': 'low'
+      },
+      {
+        Ticker: 'WRONGRISK',
+        'Composite Score': 99,
+        'Validation Status': 'needs_review',
+        'Quality Label': 'weak',
+        'Valuation Label': 'undervalued',
+        'Risk Level': 'high'
+      }
+    ];
+    const filters = {
+      validation: 'needs_review',
+      quality: 'weak',
+      dcf: 'undervalued',
+      risk: 'low'
+    } as const;
+    const candidates = rows
+      .filter((row) => rowMatchesScannerResultFilters(row, filters))
+      .map((row, index) => candidateFromWatchlistRow(row, index));
+
+    expect(sortCandidates(candidates, { key: 'score', direction: 'asc' }).map((row) => row.ticker)).toEqual([
+      'SFNC',
+      'MATCH'
+    ]);
+    expect(sortCandidates(candidates, { key: 'score', direction: 'desc' }).map((row) => row.ticker)).toEqual([
+      'MATCH',
+      'SFNC'
+    ]);
+    expect(filters).toEqual({
+      validation: 'needs_review',
+      quality: 'weak',
+      dcf: 'undervalued',
+      risk: 'low'
+    });
   });
 });

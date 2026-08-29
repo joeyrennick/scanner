@@ -63,20 +63,54 @@ import type {
 import { formatDuration, formatNumber, isJobActive, progressPercent } from './lib/progress';
 import {
   candidateFromWatchlistRow,
+  defaultScannerResultFilters,
   mergeWatchlistRows,
+  normalizeScannerResultFilters,
   rowMatchesDisplaySettings,
+  rowMatchesScannerResultFilters,
   rowMatchesStrategy,
   sortCandidates,
   type CandidateSort,
   type CandidateSortKey,
-  type DisplayCandidate
+  type DisplayCandidate,
+  type ScannerResultFilters
 } from './lib/watchlist';
 import { useScannerDisplaySettings } from './lib/scannerSettings';
+import {
+  clampScannerColumnWidth,
+  defaultScannerColumnVisibility,
+  defaultScannerColumnWidths,
+  normalizeScannerColumnVisibility,
+  normalizeScannerColumnWidths,
+  type ScannerColumnKey,
+  type ScannerColumnVisibility,
+  type ScannerColumnWidths
+} from './lib/scannerColumns';
 import { appRoutes, getRouteMeta } from './routes';
 import { FundamentalAnalysisPage } from './features/fundamentals/FundamentalAnalysisPage';
 
 const universes = ['all', 'sp500', 'djia', 'nasdaq', 'nyse'];
 const historyPeriods = ['6mo', '1y', '5y'];
+const scannerColumnLabels: Record<ScannerColumnKey, string> = {
+  select: 'Row Selection',
+  ticker: 'Ticker',
+  strategy: 'Strategy',
+  score: 'Score',
+  currentPrice: 'Current Price',
+  fairValue: 'Fair Value',
+  dcfUpside: 'DCF Upside',
+  validation: 'Validation',
+  quality: 'Business Quality',
+  dcfEstimate: 'DCF Estimate',
+  risk: 'Risk',
+  relativeStrength: 'Relative Strength',
+  relativeVolume: 'Relative Volume',
+  atr: 'ATR',
+  fiveDayRange: '5D Range',
+  entry: 'Entry',
+  stop: 'Stop',
+  target: 'Target/Exit'
+};
 
 const routeIcons: Record<string, ReactNode> = {
   '/': <LayoutDashboard />,
@@ -244,6 +278,7 @@ function DailyScannerPage() {
   );
   const [jobId, setJobId] = useState<string | null>(null);
   const autoRefreshedJobId = useRef<string | null>(null);
+  const scannerResultsTableRef = useRef<HTMLTableElement | null>(null);
   const jobQuery = useJob(jobId);
   const job = jobQuery.data;
   const activeJob = isJobActive(job);
@@ -251,8 +286,23 @@ function DailyScannerPage() {
     'swing-scanner.daily-scanner.strategy',
     'all'
   );
+  const [resultFilters, setResultFilters] = useLocalStorage<ScannerResultFilters>(
+    'swing-scanner.daily-scanner.result-filters.v1',
+    defaultScannerResultFilters,
+    normalizeScannerResultFilters
+  );
+  const [scannerColumnWidths, setScannerColumnWidths] = useLocalStorage<ScannerColumnWidths>(
+    'swing-scanner.daily-scanner.column-widths.v1',
+    { ...defaultScannerColumnWidths },
+    normalizeScannerColumnWidths
+  );
+  const [scannerColumnVisibility, setScannerColumnVisibility] =
+    useLocalStorage<ScannerColumnVisibility>(
+      'swing-scanner.daily-scanner.column-visibility.v1',
+      { ...defaultScannerColumnVisibility },
+      normalizeScannerColumnVisibility
+    );
   const [selectedTickers, setSelectedTickers] = useState<Set<string>>(new Set());
-  const [journalMessage, setJournalMessage] = useState<string | null>(null);
   const [candidateSort, setCandidateSort] = useState<CandidateSort>({
     key: 'score',
     direction: 'desc'
@@ -298,14 +348,27 @@ function DailyScannerPage() {
       rawRows.every((row) =>
         String(row['Triggered Strategies'] ?? '').toLowerCase().includes('undervalued')
       ));
+  const modeScannerColumns = scannerColumnsForMode(valuationMode);
+  const configurableScannerColumns = modeScannerColumns.filter(
+    (key) => key !== 'select' && key !== 'ticker'
+  );
+  const visibleScannerColumns = modeScannerColumns.filter(
+    (key) => scannerColumnVisibility[key]
+  );
+  const visibleScannerColumnSet = new Set(visibleScannerColumns);
+  const scannerTableWidth = visibleScannerColumns.reduce(
+    (total, key) => total + scannerColumnWidths[key],
+    0
+  );
   const filteredRows = useMemo(
     () =>
       rawRows.filter(
         (row) =>
           rowMatchesStrategy(row, selectedStrategy) &&
-          rowMatchesDisplaySettings(row, displaySettings)
+          rowMatchesDisplaySettings(row, displaySettings) &&
+          rowMatchesScannerResultFilters(row, resultFilters)
       ),
-    [displaySettings, rawRows, selectedStrategy]
+    [displaySettings, rawRows, resultFilters, selectedStrategy]
   );
   const candidates = useMemo(
     () =>
@@ -324,6 +387,12 @@ function DailyScannerPage() {
   );
   const selectedCount = selectedCandidates.length;
   const exportScope = selectedCount > 0 ? `${selectedCount} selected` : `${sortedCandidates.length} filtered`;
+  const activeResultFilterCount = Object.values(resultFilters).filter(
+    (value) => value !== 'all'
+  ).length;
+  const allConfigurableColumnsVisible = configurableScannerColumns.every(
+    (key) => scannerColumnVisibility[key]
+  );
   const percent = progressPercent(job?.progress);
   const activeStrategies = strategies.data?.filter((strategy) => strategy.category === 'entry') ?? [];
   const anyCachedPrice = candidates.some((candidate) => candidate.priceSource === 'Cached Close');
@@ -362,8 +431,15 @@ function DailyScannerPage() {
     }
 
     autoRefreshedJobId.current = job.job_id;
-    void refreshVisiblePrices(jobRows.filter((row) => rowMatchesStrategy(row, selectedStrategy)));
-  }, [job, selectedStrategy, valuationMode]);
+    void refreshVisiblePrices(
+      jobRows.filter(
+        (row) =>
+          rowMatchesStrategy(row, selectedStrategy) &&
+          rowMatchesDisplaySettings(row, displaySettings) &&
+          rowMatchesScannerResultFilters(row, resultFilters)
+      )
+    );
+  }, [displaySettings, job, resultFilters, selectedStrategy, valuationMode]);
 
   async function submitScan() {
     setSelectedTickers(new Set());
@@ -469,38 +545,116 @@ function DailyScannerPage() {
     });
   }
 
-  function openCandidate(candidate: DisplayCandidate) {
-    if (valuationMode) {
-      navigate(
-        `/fundamentals?ticker=${encodeURIComponent(candidate.ticker)}` +
-          `${currentRunId ? `&run_id=${currentRunId}` : ''}&strategy=undervalued`
-      );
-      return;
-    }
-    navigate('/candidates', {
-      state: {
-        ticker: candidate.ticker
-      } satisfies CandidateDetailState
-    });
-  }
-
-  function addCandidateToJournal(candidate: DisplayCandidate) {
-    const trade = plannedTradeFromCandidate(candidate);
-    const current = readPlannedTradesFromStorage();
-
-    if (current.some((item) => item.id === trade.id)) {
-      setJournalMessage(`${candidate.ticker} is already in Planned Trades`);
-      return;
-    }
-
-    window.localStorage.setItem('planned-trades', JSON.stringify([trade, ...current]));
-    setJournalMessage(`Added ${candidate.ticker} to Planned Trades`);
-  }
-
   function changeSort(key: CandidateSortKey) {
     setCandidateSort((current) => ({
       key,
       direction: current.key === key && current.direction === 'asc' ? 'desc' : 'asc'
+    }));
+  }
+
+  function changeResultFilter<K extends keyof ScannerResultFilters>(
+    key: K,
+    value: ScannerResultFilters[K]
+  ) {
+    setResultFilters((current) => ({ ...current, [key]: value }));
+  }
+
+  function clearResultFilters() {
+    setResultFilters(defaultScannerResultFilters);
+  }
+
+  function startColumnResize(
+    key: ScannerColumnKey,
+    event: ReactPointerEvent<HTMLDivElement>
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    const startX = event.clientX;
+    const startWidth = scannerColumnWidths[key];
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    function handleMove(moveEvent: PointerEvent) {
+      const nextWidth = clampScannerColumnWidth(
+        startWidth + moveEvent.clientX - startX
+      );
+      setScannerColumnWidths((current) => ({ ...current, [key]: nextWidth }));
+    }
+
+    function handleUp() {
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+      window.removeEventListener('pointercancel', handleUp);
+    }
+
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+    window.addEventListener('pointercancel', handleUp);
+  }
+
+  function resizeColumnBy(key: ScannerColumnKey, delta: number) {
+    setScannerColumnWidths((current) => ({
+      ...current,
+      [key]: clampScannerColumnWidth(current[key] + delta)
+    }));
+  }
+
+  function autoFitColumn(key: ScannerColumnKey) {
+    const table = scannerResultsTableRef.current;
+    const columnIndex = visibleScannerColumns.indexOf(key);
+    if (!table || columnIndex < 0) return;
+
+    const column = table.querySelectorAll('col')[columnIndex] as
+      | HTMLTableColElement
+      | undefined;
+    if (!column) return;
+
+    const previousTableLayout = table.style.tableLayout;
+    const previousTableWidth = table.style.width;
+    const previousTableMinWidth = table.style.minWidth;
+    const previousColumnWidth = column.style.width;
+    let measuredWidth = scannerColumnWidths[key];
+
+    try {
+      table.style.tableLayout = 'auto';
+      table.style.width = 'max-content';
+      table.style.minWidth = '0';
+      column.style.width = 'auto';
+      void table.offsetWidth;
+      const contentWidths = Array.from(table.rows)
+        .map((row) => row.cells[columnIndex]?.scrollWidth ?? 0)
+        .filter((width) => width > 0);
+      measuredWidth = contentWidths.length > 0
+        ? Math.max(...contentWidths)
+        : defaultScannerColumnWidths[key];
+    } finally {
+      table.style.tableLayout = previousTableLayout;
+      table.style.width = previousTableWidth;
+      table.style.minWidth = previousTableMinWidth;
+      column.style.width = previousColumnWidth;
+    }
+
+    setScannerColumnWidths((current) => ({
+      ...current,
+      [key]: clampScannerColumnWidth(measuredWidth + 2)
+    }));
+  }
+
+  function toggleScannerColumn(key: ScannerColumnKey) {
+    setScannerColumnVisibility((current) => ({
+      ...current,
+      [key]: !current[key]
+    }));
+  }
+
+  function showAllScannerColumns() {
+    setScannerColumnVisibility((current) => ({
+      ...current,
+      ...Object.fromEntries(configurableScannerColumns.map((key) => [key, true]))
     }));
   }
 
@@ -762,6 +916,33 @@ function DailyScannerPage() {
             </div>
           </div>
           <div className="button-row inline-actions">
+            <details className="column-chooser">
+              <summary className="secondary-button">Columns</summary>
+              <div className="column-chooser-menu" aria-label="Visible scanner columns">
+                <strong>Show or hide columns</strong>
+                <span className="column-chooser-note">Ticker and row selection remain visible.</span>
+                <div className="column-chooser-options">
+                  {configurableScannerColumns.map((key) => (
+                    <label key={key}>
+                      <input
+                        type="checkbox"
+                        checked={scannerColumnVisibility[key]}
+                        onChange={() => toggleScannerColumn(key)}
+                      />
+                      {scannerColumnLabels[key]}
+                    </label>
+                  ))}
+                </div>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={showAllScannerColumns}
+                  disabled={allConfigurableColumnsVisible}
+                >
+                  Show All
+                </button>
+              </div>
+            </details>
             <button
               className="secondary-button"
               onClick={() => void refreshVisiblePrices()}
@@ -836,12 +1017,90 @@ function DailyScannerPage() {
           </div>
         )}
 
-        {journalMessage && (
-          <div className="alert alert-success">
-            <CheckCircle2 size={18} />
-            <span>{journalMessage}</span>
+        <div className="scanner-result-filter-bar" aria-label="Scanner result filters">
+          <div className="scanner-result-filter-grid">
+            <label>
+              Validation
+              <select
+                value={resultFilters.validation}
+                onChange={(event) =>
+                  changeResultFilter(
+                    'validation',
+                    event.target.value as ScannerResultFilters['validation']
+                  )
+                }
+              >
+                <option value="all">All validation statuses</option>
+                <option value="validated">Validated</option>
+                <option value="needs_review">Needs Review</option>
+                <option value="rejected">Rejected</option>
+                <option value="not_calculated">Not Calculated</option>
+              </select>
+            </label>
+            <label>
+              Business Quality
+              <select
+                value={resultFilters.quality}
+                onChange={(event) =>
+                  changeResultFilter(
+                    'quality',
+                    event.target.value as ScannerResultFilters['quality']
+                  )
+                }
+              >
+                <option value="all">All quality levels</option>
+                <option value="strong">Strong</option>
+                <option value="acceptable">Acceptable</option>
+                <option value="weak">Weak</option>
+                <option value="not_calculated">Not Calculated</option>
+              </select>
+            </label>
+            <label>
+              DCF Estimate
+              <select
+                value={resultFilters.dcf}
+                onChange={(event) =>
+                  changeResultFilter(
+                    'dcf',
+                    event.target.value as ScannerResultFilters['dcf']
+                  )
+                }
+              >
+                <option value="all">All DCF estimates</option>
+                <option value="undervalued">Undervalued</option>
+                <option value="fairly_valued">Fairly Valued</option>
+                <option value="overvalued">Overvalued</option>
+                <option value="not_calculated">Not Calculated</option>
+              </select>
+            </label>
+            <label>
+              Risk
+              <select
+                value={resultFilters.risk}
+                onChange={(event) =>
+                  changeResultFilter(
+                    'risk',
+                    event.target.value as ScannerResultFilters['risk']
+                  )
+                }
+              >
+                <option value="all">All risk levels</option>
+                <option value="low">Low</option>
+                <option value="moderate">Moderate</option>
+                <option value="high">High</option>
+                <option value="not_calculated">Not Calculated</option>
+              </select>
+            </label>
           </div>
-        )}
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={clearResultFilters}
+            disabled={activeResultFilterCount === 0}
+          >
+            Clear Filters{activeResultFilterCount > 0 ? ` (${activeResultFilterCount})` : ''}
+          </button>
+        </div>
 
         <div className="selection-strip">
           <span>{selectedCount > 0 ? `${selectedCount} selected` : 'No rows selected'}</span>
@@ -853,7 +1112,16 @@ function DailyScannerPage() {
         </div>
 
         <div className="table-wrap">
-          <table className="data-table">
+          <table
+            ref={scannerResultsTableRef}
+            className="data-table scanner-results-table"
+            style={{ width: scannerTableWidth, minWidth: '100%' }}
+          >
+            <colgroup>
+              {visibleScannerColumns.map((key) => (
+                <col key={key} style={{ width: scannerColumnWidths[key] }} />
+              ))}
+            </colgroup>
             <thead>
               <tr>
                 <th>
@@ -864,48 +1132,225 @@ function DailyScannerPage() {
                     aria-label="Select all scanner candidates"
                   />
                 </th>
-                <SortableHeader label="Ticker" sortKey="ticker" sort={candidateSort} onSort={changeSort} />
-                <SortableHeader label="Sector" sortKey="sector" sort={candidateSort} onSort={changeSort} />
-                <SortableHeader label="Strategy" sortKey="strategy" sort={candidateSort} onSort={changeSort} />
                 <SortableHeader
-                  label={valuationMode ? 'Strategy Score' : 'Score'}
-                  sortKey="score"
+                  label="Ticker"
+                  sortKey="ticker"
+                  columnKey="ticker"
                   sort={candidateSort}
                   onSort={changeSort}
+                  onResize={startColumnResize}
+                  onResizeBy={resizeColumnBy}
+                  onAutoFit={autoFitColumn}
                 />
-                <SortableHeader
-                  label={
-                  <span className="th-with-info">
-                    Current Price
-                    <Info
-                      size={14}
-                      aria-label="Current Price comes from Yahoo/latest provider data and may be delayed or stale. Confirm the live price in your trading platform, such as TradingView or thinkorswim, before placing a trade."
-                    />
-                  </span>
-                  }
-                  sortKey="currentPrice"
-                  sort={candidateSort}
-                  onSort={changeSort}
-                />
-                {valuationMode ? (
+                {visibleScannerColumnSet.has('strategy') && (
+                  <SortableHeader
+                    label="Strategy"
+                    sortKey="strategy"
+                    columnKey="strategy"
+                    sort={candidateSort}
+                    onSort={changeSort}
+                    onResize={startColumnResize}
+                    onResizeBy={resizeColumnBy}
+                    onAutoFit={autoFitColumn}
+                  />
+                )}
+                {visibleScannerColumnSet.has('score') && (
+                  <SortableHeader
+                    label={valuationMode ? 'Strategy Score' : 'Score'}
+                    sortKey="score"
+                    columnKey="score"
+                    sort={candidateSort}
+                    onSort={changeSort}
+                    onResize={startColumnResize}
+                    onResizeBy={resizeColumnBy}
+                    onAutoFit={autoFitColumn}
+                  />
+                )}
+                {visibleScannerColumnSet.has('currentPrice') && (
+                  <SortableHeader
+                    label={
+                    <span className="th-with-info">
+                      Current Price
+                      <Info
+                        size={14}
+                        aria-label="Current Price comes from Yahoo/latest provider data and may be delayed or stale. Confirm the live price in your trading platform, such as TradingView or thinkorswim, before placing a trade."
+                      />
+                    </span>
+                    }
+                    sortKey="currentPrice"
+                    columnKey="currentPrice"
+                    resizeLabel="Current Price"
+                    sort={candidateSort}
+                    onSort={changeSort}
+                    onResize={startColumnResize}
+                    onResizeBy={resizeColumnBy}
+                    onAutoFit={autoFitColumn}
+                  />
+                )}
+                {valuationMode && (
                   <>
-                    <SortableHeader label="Fair Value" sortKey="fairValue" sort={candidateSort} onSort={changeSort} />
-                    <SortableHeader label="Margin of Safety" sortKey="marginOfSafety" sort={candidateSort} onSort={changeSort} />
-                    <SortableHeader label="Free Cash Flow" sortKey="freeCashFlow" sort={candidateSort} onSort={changeSort} />
-                    <SortableHeader label="SEC Data As Of" sortKey="fundamentalDataAsOf" sort={candidateSort} onSort={changeSort} />
-                  </>
-                ) : (
-                  <>
-                    <SortableHeader label="RS" sortKey="relativeStrength" sort={candidateSort} onSort={changeSort} />
-                    <SortableHeader label="RVOL" sortKey="relativeVolume" sort={candidateSort} onSort={changeSort} />
-                    <SortableHeader label="ATR" sortKey="atr" sort={candidateSort} onSort={changeSort} />
-                    <SortableHeader label="5D Range" sortKey="fiveDayRange" sort={candidateSort} onSort={changeSort} />
-                    <SortableHeader label="Entry" sortKey="entryArea" sort={candidateSort} onSort={changeSort} />
-                    <SortableHeader label="Stop" sortKey="stop" sort={candidateSort} onSort={changeSort} />
-                    <SortableHeader label="Target/Exit" sortKey="targetExit" sort={candidateSort} onSort={changeSort} />
+                    {visibleScannerColumnSet.has('fairValue') && (
+                      <SortableHeader
+                        label="Fair Value"
+                        sortKey="fairValue"
+                        columnKey="fairValue"
+                        sort={candidateSort}
+                        onSort={changeSort}
+                        onResize={startColumnResize}
+                        onResizeBy={resizeColumnBy}
+                        onAutoFit={autoFitColumn}
+                      />
+                    )}
+                    {visibleScannerColumnSet.has('dcfUpside') && (
+                      <SortableHeader
+                        label="DCF Upside"
+                        sortKey="marginOfSafety"
+                        columnKey="dcfUpside"
+                        sort={candidateSort}
+                        onSort={changeSort}
+                        onResize={startColumnResize}
+                        onResizeBy={resizeColumnBy}
+                        onAutoFit={autoFitColumn}
+                      />
+                    )}
                   </>
                 )}
-                <th>Action</th>
+                {visibleScannerColumnSet.has('validation') && (
+                  <SortableHeader
+                    label="Validation"
+                    sortKey="validationScore"
+                    columnKey="validation"
+                    sort={candidateSort}
+                    onSort={changeSort}
+                    onResize={startColumnResize}
+                    onResizeBy={resizeColumnBy}
+                    onAutoFit={autoFitColumn}
+                  />
+                )}
+                {visibleScannerColumnSet.has('quality') && (
+                  <SortableHeader
+                    label="Business Quality"
+                    sortKey="qualityScore"
+                    columnKey="quality"
+                    sort={candidateSort}
+                    onSort={changeSort}
+                    onResize={startColumnResize}
+                    onResizeBy={resizeColumnBy}
+                    onAutoFit={autoFitColumn}
+                  />
+                )}
+                {visibleScannerColumnSet.has('dcfEstimate') && (
+                  <SortableHeader
+                    label="DCF Estimate"
+                    sortKey="marginOfSafety"
+                    columnKey="dcfEstimate"
+                    sort={candidateSort}
+                    onSort={changeSort}
+                    onResize={startColumnResize}
+                    onResizeBy={resizeColumnBy}
+                    onAutoFit={autoFitColumn}
+                  />
+                )}
+                {visibleScannerColumnSet.has('risk') && (
+                  <SortableHeader
+                    label="Risk"
+                    sortKey="riskScore"
+                    columnKey="risk"
+                    sort={candidateSort}
+                    onSort={changeSort}
+                    onResize={startColumnResize}
+                    onResizeBy={resizeColumnBy}
+                    onAutoFit={autoFitColumn}
+                  />
+                )}
+                {!valuationMode && (
+                  <>
+                    {visibleScannerColumnSet.has('relativeStrength') && (
+                      <SortableHeader
+                        label="RS"
+                        sortKey="relativeStrength"
+                        columnKey="relativeStrength"
+                        sort={candidateSort}
+                        onSort={changeSort}
+                        onResize={startColumnResize}
+                        onResizeBy={resizeColumnBy}
+                        onAutoFit={autoFitColumn}
+                      />
+                    )}
+                    {visibleScannerColumnSet.has('relativeVolume') && (
+                      <SortableHeader
+                        label="RVOL"
+                        sortKey="relativeVolume"
+                        columnKey="relativeVolume"
+                        sort={candidateSort}
+                        onSort={changeSort}
+                        onResize={startColumnResize}
+                        onResizeBy={resizeColumnBy}
+                        onAutoFit={autoFitColumn}
+                      />
+                    )}
+                    {visibleScannerColumnSet.has('atr') && (
+                      <SortableHeader
+                        label="ATR"
+                        sortKey="atr"
+                        columnKey="atr"
+                        sort={candidateSort}
+                        onSort={changeSort}
+                        onResize={startColumnResize}
+                        onResizeBy={resizeColumnBy}
+                        onAutoFit={autoFitColumn}
+                      />
+                    )}
+                    {visibleScannerColumnSet.has('fiveDayRange') && (
+                      <SortableHeader
+                        label="5D Range"
+                        sortKey="fiveDayRange"
+                        columnKey="fiveDayRange"
+                        sort={candidateSort}
+                        onSort={changeSort}
+                        onResize={startColumnResize}
+                        onResizeBy={resizeColumnBy}
+                        onAutoFit={autoFitColumn}
+                      />
+                    )}
+                    {visibleScannerColumnSet.has('entry') && (
+                      <SortableHeader
+                        label="Entry"
+                        sortKey="entryArea"
+                        columnKey="entry"
+                        sort={candidateSort}
+                        onSort={changeSort}
+                        onResize={startColumnResize}
+                        onResizeBy={resizeColumnBy}
+                        onAutoFit={autoFitColumn}
+                      />
+                    )}
+                    {visibleScannerColumnSet.has('stop') && (
+                      <SortableHeader
+                        label="Stop"
+                        sortKey="stop"
+                        columnKey="stop"
+                        sort={candidateSort}
+                        onSort={changeSort}
+                        onResize={startColumnResize}
+                        onResizeBy={resizeColumnBy}
+                        onAutoFit={autoFitColumn}
+                      />
+                    )}
+                    {visibleScannerColumnSet.has('target') && (
+                      <SortableHeader
+                        label="Target/Exit"
+                        sortKey="targetExit"
+                        columnKey="target"
+                        sort={candidateSort}
+                        onSort={changeSort}
+                        onResize={startColumnResize}
+                        onResizeBy={resizeColumnBy}
+                        onAutoFit={autoFitColumn}
+                      />
+                    )}
+                  </>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -920,51 +1365,67 @@ function DailyScannerPage() {
                     />
                   </td>
                   <td className="ticker-cell">
-                    <span>{candidate.ticker}</span>
+                    <Link
+                      className="ticker-link"
+                      to={fundamentalsPath(
+                        candidate.ticker,
+                        currentRunId,
+                        valuationMode ? 'undervalued' : selectedStrategy
+                      )}
+                    >
+                      {candidate.ticker}
+                    </Link>
                     {candidate.companyName && <span className="company-name">{candidate.companyName}</span>}
                   </td>
-                  <td>{candidate.sector}</td>
-                  <td>{candidate.strategy}</td>
-                  <td>{candidate.score}</td>
-                  <td>{candidate.currentPrice}</td>
-                  {valuationMode ? (
+                  {visibleScannerColumnSet.has('strategy') && <td>{candidate.strategy}</td>}
+                  {visibleScannerColumnSet.has('score') && <td>{candidate.score}</td>}
+                  {visibleScannerColumnSet.has('currentPrice') && <td>{candidate.currentPrice}</td>}
+                  {valuationMode && (
                     <>
-                      <td>{candidate.fairValue}</td>
-                      <td>{candidate.marginOfSafety}</td>
-                      <td>{candidate.freeCashFlow}</td>
-                      <td>{candidate.fundamentalDataAsOf}</td>
-                    </>
-                  ) : (
-                    <>
-                      <td>{candidate.relativeStrength}</td>
-                      <td>{candidate.relativeVolume}</td>
-                      <td>{candidate.atr}</td>
-                      <td>{candidate.fiveDayRange}</td>
-                      <td>{candidate.entryArea}</td>
-                      <td>{candidate.stop}</td>
-                      <td>{candidate.targetExit}</td>
+                      {visibleScannerColumnSet.has('fairValue') && <td>{candidate.fairValue}</td>}
+                      {visibleScannerColumnSet.has('dcfUpside') && <td>{candidate.marginOfSafety}</td>}
                     </>
                   )}
-                  <td>
-                    <div className="row-actions">
-                      <button className="link-button" onClick={() => openCandidate(candidate)}>
-                        Open
-                      </button>
-                      {!valuationMode && (
-                        <button
-                          className="link-button"
-                          onClick={() => addCandidateToJournal(candidate)}
-                        >
-                          Add To Journal
-                        </button>
-                      )}
-                    </div>
-                  </td>
+                  {visibleScannerColumnSet.has('validation') && (
+                    <FundamentalSummaryCell
+                      label={candidate.validationLabel}
+                      value={scoreOutOf100(candidate.validationScore)}
+                    />
+                  )}
+                  {visibleScannerColumnSet.has('quality') && (
+                    <FundamentalSummaryCell
+                      label={candidate.qualityLabel}
+                      value={scoreOutOf100(candidate.qualityScore)}
+                    />
+                  )}
+                  {visibleScannerColumnSet.has('dcfEstimate') && (
+                    <FundamentalSummaryCell
+                      label={candidate.dcfLabel}
+                      value={candidate.marginOfSafety}
+                    />
+                  )}
+                  {visibleScannerColumnSet.has('risk') && (
+                    <FundamentalSummaryCell
+                      label={candidate.riskLabel}
+                      value={scoreOutOf100(candidate.riskScore)}
+                    />
+                  )}
+                  {!valuationMode && (
+                    <>
+                      {visibleScannerColumnSet.has('relativeStrength') && <td>{candidate.relativeStrength}</td>}
+                      {visibleScannerColumnSet.has('relativeVolume') && <td>{candidate.relativeVolume}</td>}
+                      {visibleScannerColumnSet.has('atr') && <td>{candidate.atr}</td>}
+                      {visibleScannerColumnSet.has('fiveDayRange') && <td>{candidate.fiveDayRange}</td>}
+                      {visibleScannerColumnSet.has('entry') && <td>{candidate.entryArea}</td>}
+                      {visibleScannerColumnSet.has('stop') && <td>{candidate.stop}</td>}
+                      {visibleScannerColumnSet.has('target') && <td>{candidate.targetExit}</td>}
+                    </>
+                  )}
                 </tr>
               ))}
               {sortedCandidates.length === 0 && (
                 <tr>
-                  <td colSpan={valuationMode ? 11 : 14} className="empty-cell">
+                  <td colSpan={visibleScannerColumns.length} className="empty-cell">
                     {activeJob ? 'Scan is running.' : 'No candidates match the current filter.'}
                   </td>
                 </tr>
@@ -2147,13 +2608,23 @@ function CacheWarmupPage() {
 function SortableHeader({
   label,
   sortKey,
+  columnKey,
+  resizeLabel,
   sort,
-  onSort
+  onSort,
+  onResize,
+  onResizeBy,
+  onAutoFit
 }: {
   label: ReactNode;
   sortKey: CandidateSortKey;
+  columnKey: ScannerColumnKey;
+  resizeLabel?: string;
   sort: CandidateSort;
   onSort: (key: CandidateSortKey) => void;
+  onResize: (key: ScannerColumnKey, event: ReactPointerEvent<HTMLDivElement>) => void;
+  onResizeBy: (key: ScannerColumnKey, delta: number) => void;
+  onAutoFit: (key: ScannerColumnKey) => void;
 }) {
   const active = sort.key === sortKey;
 
@@ -2170,8 +2641,111 @@ function SortableHeader({
         <span>{label}</span>
         <span className="sort-indicator">{active ? (sort.direction === 'asc' ? '^' : 'v') : '-'}</span>
       </button>
+      <ColumnResizeHandle
+        label={resizeLabel ?? String(label)}
+        columnKey={columnKey}
+        onResize={onResize}
+        onResizeBy={onResizeBy}
+        onAutoFit={onAutoFit}
+      />
     </th>
   );
+}
+
+function ColumnResizeHandle({
+  label,
+  columnKey,
+  onResize,
+  onResizeBy,
+  onAutoFit
+}: {
+  label: string;
+  columnKey: ScannerColumnKey;
+  onResize: (key: ScannerColumnKey, event: ReactPointerEvent<HTMLDivElement>) => void;
+  onResizeBy: (key: ScannerColumnKey, delta: number) => void;
+  onAutoFit: (key: ScannerColumnKey) => void;
+}) {
+  return (
+    <div
+      className="column-resize-handle"
+      role="separator"
+      aria-label={`Resize ${label} column`}
+      aria-orientation="vertical"
+      title={`Drag to resize ${label}; double-click to fit content`}
+      tabIndex={0}
+      onPointerDown={(event) => onResize(columnKey, event)}
+      onDoubleClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onAutoFit(columnKey);
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+        event.preventDefault();
+        event.stopPropagation();
+        onResizeBy(columnKey, event.key === 'ArrowLeft' ? -8 : 8);
+      }}
+    />
+  );
+}
+
+function FundamentalSummaryCell({ label, value }: { label: string; value: string | null }) {
+  const calculated = label !== 'Not calculated';
+  return (
+    <td className="fundamental-summary-cell">
+      <strong>{label}</strong>
+      {calculated && value && value !== 'n/a' && <span>{value}</span>}
+    </td>
+  );
+}
+
+function scoreOutOf100(value: string): string | null {
+  return value === 'n/a' ? null : `${value}/100`;
+}
+
+function scannerColumnsForMode(valuationMode: boolean): ScannerColumnKey[] {
+  const summaryColumns: ScannerColumnKey[] = [
+    'validation',
+    'quality',
+    'dcfEstimate',
+    'risk'
+  ];
+  return valuationMode
+    ? [
+        'select',
+        'ticker',
+        'strategy',
+        'score',
+        'currentPrice',
+        'fairValue',
+        'dcfUpside',
+        ...summaryColumns
+      ]
+    : [
+        'select',
+        'ticker',
+        'strategy',
+        'score',
+        'currentPrice',
+        ...summaryColumns,
+        'relativeStrength',
+        'relativeVolume',
+        'atr',
+        'fiveDayRange',
+        'entry',
+        'stop',
+        'target'
+      ];
+}
+
+function fundamentalsPath(
+  ticker: string,
+  runId: number | null,
+  strategy: string
+): string {
+  const params = new URLSearchParams({ ticker, strategy });
+  if (runId !== null) params.set('run_id', String(runId));
+  return `/fundamentals?${params.toString()}`;
 }
 
 function viewportChartHeight() {
@@ -3716,7 +4290,11 @@ const defaultAppearanceSettings: AppearanceSettings = {
   rememberChartResize: true
 };
 
-function useLocalStorage<T>(key: string, initialValue: T) {
+function useLocalStorage<T>(
+  key: string,
+  initialValue: T,
+  normalize?: (value: unknown) => T
+) {
   const [value, setValue] = useState<T>(() => {
     const stored = window.localStorage.getItem(key);
 
@@ -3725,7 +4303,8 @@ function useLocalStorage<T>(key: string, initialValue: T) {
     }
 
     try {
-      return JSON.parse(stored) as T;
+      const parsed = JSON.parse(stored) as unknown;
+      return normalize ? normalize(parsed) : (parsed as T);
     } catch {
       return initialValue;
     }
@@ -3963,10 +4542,15 @@ function downloadCandidatesCsv(candidates: DisplayCandidate[]) {
     'Current Price',
     'Price As Of',
     'Price Source',
+    'Validation',
+    'Validation Score',
+    'Business Quality',
+    'Quality Score',
+    'DCF Valuation',
+    'Risk',
+    'Risk Score',
     'Fair Value',
-    'Margin of Safety',
-    'SEC Data As Of',
-    'Free Cash Flow',
+    'DCF Upside',
     'Relative Strength',
     'Relative Volume',
     'ATR',
@@ -3981,10 +4565,15 @@ function downloadCandidatesCsv(candidates: DisplayCandidate[]) {
     candidate.currentPrice,
     candidate.priceAsOf,
     candidate.priceSource,
+    candidate.validationLabel,
+    candidate.validationScore,
+    candidate.qualityLabel,
+    candidate.qualityScore,
+    candidate.dcfLabel,
+    candidate.riskLabel,
+    candidate.riskScore,
     candidate.fairValue,
     candidate.marginOfSafety,
-    candidate.fundamentalDataAsOf,
-    candidate.freeCashFlow,
     candidate.relativeStrength,
     candidate.relativeVolume,
     candidate.atr,

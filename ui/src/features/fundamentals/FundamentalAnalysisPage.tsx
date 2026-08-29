@@ -469,13 +469,53 @@ export function FundamentalAnalysisPage() {
 
 function Summary({ analysis }: { analysis: FundamentalAnalysis }) {
   return (
-    <div className="analysis-card-grid">
-      <ScoreCard title="Automated Validation" value={`${analysis.validation.score}/100`} label={analysis.validation.label} />
-      <ScoreCard title="Business Quality" value={`${analysis.quality.score}/100`} label={analysis.quality.label} />
-      <ScoreCard title="DCF Estimate" value={percent(analysis.valuation.margin_of_safety)} label={dcfLabel(analysis.valuation.label)} />
-      <ScoreCard title="Risk" value={`${analysis.risk.score}/100`} label={analysis.risk.label} />
+    <div className="summary-section">
+      <div className="analysis-card-grid">
+        <ScoreCard title="Automated Validation" value={`${analysis.validation.score}/100`} label={analysis.validation.label} />
+        <ScoreCard title="Business Quality" value={`${analysis.quality.score}/100`} label={analysis.quality.label} />
+        <ScoreCard title="DCF Estimate" value={percent(analysis.valuation.margin_of_safety)} label={dcfLabel(analysis.valuation.label)} />
+        <ScoreCard title="Risk" value={`${analysis.risk.score}/100`} label={analysis.risk.label} />
+      </div>
+      <ValidationSummary validation={analysis.validation} />
     </div>
   );
+}
+
+function ValidationSummary({ validation }: { validation: FundamentalAnalysis['validation'] }) {
+  const issues = validationSummaryIssues(validation);
+  const rejected = validation.status === 'rejected';
+  const validated = validation.status === 'validated';
+  const title = rejected
+    ? 'Why this candidate was rejected'
+    : validated
+      ? 'Automated validation passed'
+      : 'Why this candidate needs review';
+  return (
+    <section className={`panel summary-validation-reasons ${validation.status}`} aria-label={title}>
+      <h3>{title}</h3>
+      {issues.length > 0 ? (
+        <ul>
+          {issues.map((issue) => (
+            <li key={issue.name}><strong>{issue.name}:</strong> {issue.explanation}</li>
+          ))}
+        </ul>
+      ) : (
+        <p>No automated review or rejection flags were found.</p>
+      )}
+      <p className="summary-validation-note">
+        Automated validation is complete; no additional scan is required.
+      </p>
+    </section>
+  );
+}
+
+export function validationSummaryIssues(
+  validation: FundamentalAnalysis['validation']
+): ValidationCheck[] {
+  const issueStatus = validation.status === 'rejected' ? 'fail' : 'review';
+  return validation.status === 'validated'
+    ? []
+    : validation.checks.filter((check) => check.status === issueStatus);
 }
 
 function FundamentalClassificationProgress({ job }: { job: NonNullable<ReturnType<typeof useJob>['data']> }) {
@@ -781,6 +821,7 @@ function formatValidationValue(check: ValidationCheck) {
   }
   if (check.name === 'Financial period recency' && typeof check.value === 'number') return `${check.value} days`;
   if (check.name === 'Business quality' && typeof check.value === 'number') return `${check.value}/100`;
+  if (check.name === 'Share-count consistency' && typeof check.value === 'number') return `${check.value.toFixed(2)}× implied`;
   if (typeof check.value === 'object') {
     return Object.entries(check.value as Record<string, unknown>)
       .map(([key, value]) => `${key.replaceAll('_', ' ')}: ${typeof value === 'number' ? percent(value) : value ?? 'n/a'}`)

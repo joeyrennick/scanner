@@ -79,6 +79,10 @@ identity such as `Your Company admin@example.com` when deploying automated SEC
 access. Generated PDF reports and their immutable JSON snapshots are written under
 `output/fundamental_reports` and appear on the Reports page.
 
+SEC diluted-share facts reported in thousands or millions are normalized to
+actual shares by reconciling them with net income and diluted EPS. The original
+reported value and applied scale remain in scanner output for auditability.
+
 ## Undervalued Strategy
 
 On the Daily Scanner page, select `Undervalued` with the desired universe and
@@ -103,7 +107,9 @@ The separate automated validation status is `Validated`, `Needs review`, or
 diluted shares, DCF model suitability, business quality, completed risk,
 risk-adjusted margin of safety, independent earnings or cash-flow yield support,
 and bear-case resilience. Extreme DCF margins above 200% require review. A
-`Validated` result is an automated research-screen result, not final investment
+company with four or more annual financial periods can pass the history check;
+two or three periods require review, while fewer than two periods are rejected.
+A `Validated` result is an automated research-screen result, not final investment
 approval: the latest 10-K, subsequent 10-Qs, and material 8-Ks still require
 human review.
 

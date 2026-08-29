@@ -148,7 +148,7 @@ def test_undervalued_scan_ignores_price_and_technical_rules(tmp_path):
         "validated",
         "needs_review",
     }
-    assert result.dataframe.iloc[0]["Validation Policy Version"] == 1
+    assert result.dataframe.iloc[0]["Validation Policy Version"] == 3
     assert sec_provider.prepared == ["PENNY"]
     assert sec_provider.calls == ["PENNY", "EXPENSIVE"]
     assert price_provider.calls == [

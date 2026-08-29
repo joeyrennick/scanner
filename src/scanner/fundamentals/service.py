@@ -185,6 +185,14 @@ def _normalize(raw: dict[str, object]) -> dict[str, Any]:
                     "total_equity",
                 ),
                 "diluted_shares": _number(income, "diluted_shares_outstanding"),
+                "diluted_shares_reported": _number(
+                    income,
+                    "diluted_shares_reported",
+                ),
+                "diluted_shares_scale_factor": _number(
+                    income,
+                    "diluted_shares_scale_factor",
+                ),
                 "diluted_eps": _number(income, "diluted_earnings_per_share"),
             }
         )

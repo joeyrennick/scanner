@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import date
+import math
 import os
 from threading import Lock
 import time
@@ -147,10 +148,13 @@ class SECFundamentalsProvider:
                 company,
                 company_facts,
             )
+            _normalize_diluted_share_units(data)
             if self.cache:
                 self.cache.set(normalized_ticker, data)
         else:
             data = deepcopy(cached)
+            if _normalize_diluted_share_units(data) and self.cache:
+                self.cache.set(normalized_ticker, data)
 
         if self.include_submissions:
             submissions = self._get_json(SEC_SUBMISSIONS_URL.format(cik=cik))
@@ -451,6 +455,63 @@ def _rows_from_series(fields: dict[str, dict[str, float]]) -> list[dict[str, Any
         )
         rows.append(row)
     return rows
+
+
+def _normalize_diluted_share_units(data: dict[str, object]) -> bool:
+    """Expand SEC share facts reported in thousands or millions into shares."""
+    changed = False
+    for row in data.get("income_statements") or []:
+        if not isinstance(row, dict):
+            continue
+        if row.get("diluted_shares_scale_factor") is not None:
+            continue
+        shares = _finite_number(row.get("diluted_shares_outstanding"))
+        net_income = _finite_number(row.get("consolidated_net_income_loss"))
+        diluted_eps = _finite_number(row.get("diluted_earnings_per_share"))
+        scale = _share_scale_factor(shares, net_income, diluted_eps)
+        if shares is None or scale == 1:
+            continue
+        row["diluted_shares_reported"] = shares
+        row["diluted_shares_scale_factor"] = scale
+        row["diluted_shares_outstanding"] = shares * scale
+        changed = True
+    return changed
+
+
+def _share_scale_factor(
+    shares: float | None,
+    net_income: float | None,
+    diluted_eps: float | None,
+) -> int:
+    if (
+        shares is None
+        or shares <= 0
+        or net_income is None
+        or net_income == 0
+        or diluted_eps is None
+        or diluted_eps == 0
+        or net_income * diluted_eps <= 0
+    ):
+        return 1
+
+    implied_shares = abs(net_income / diluted_eps)
+    scales = (1, 1_000, 1_000_000, 1_000_000_000)
+    best_scale = min(
+        scales,
+        key=lambda candidate: abs(
+            math.log10((shares * candidate) / implied_shares)
+        ),
+    )
+    consistency_ratio = shares * best_scale / implied_shares
+    return best_scale if 0.5 <= consistency_ratio <= 2 else 1
+
+
+def _finite_number(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def _wait_for_sec_request_slot(minimum_interval: float) -> None:

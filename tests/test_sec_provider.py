@@ -3,6 +3,7 @@ from datetime import date, timedelta
 import requests
 
 from scanner.data.providers.sec import SECFundamentalsProvider
+from scanner.fundamentals.sec_cache import SECFundamentalsCache
 
 
 def _duration(value, end, filed, days=364):
@@ -151,3 +152,96 @@ def test_sec_provider_reports_missing_ticker(monkeypatch):
         assert str(error) == "Ticker MISSING was not found in the SEC company ticker list."
     else:
         raise AssertionError("Expected missing SEC ticker to raise RuntimeError")
+
+
+def test_sec_provider_expands_share_counts_reported_in_thousands_or_millions(
+    monkeypatch,
+):
+    filed = "2026-02-15"
+    first_end = "2024-12-31"
+    second_end = "2025-12-31"
+    ticker_payload = {
+        "0": {"cik_str": 63908, "ticker": "MCD", "title": "McDonald's Corp"}
+    }
+    facts = {
+        "entityName": "McDonald's Corp",
+        "facts": {
+            "us-gaap": {
+                "NetIncomeLoss": _concept(
+                    "USD",
+                    [
+                        _duration(100_000_000, first_end, filed),
+                        _duration(8_563_000_000, second_end, filed),
+                    ],
+                ),
+                "WeightedAverageNumberOfDilutedSharesOutstanding": _concept(
+                    "shares",
+                    [
+                        _duration(100_000, first_end, filed),
+                        _duration(716.4, second_end, filed),
+                    ],
+                ),
+                "EarningsPerShareDiluted": _concept(
+                    "USD/shares",
+                    [
+                        _duration(1.0, first_end, filed),
+                        _duration(11.95, second_end, filed),
+                    ],
+                ),
+            }
+        },
+    }
+    payloads = iter((ticker_payload, facts))
+    monkeypatch.setattr(
+        "scanner.data.providers.sec.requests.get",
+        lambda *_args, **_kwargs: FakeResponse(next(payloads)),
+    )
+
+    result = SECFundamentalsProvider(
+        user_agent="Share Scale Test test@example.com",
+        include_submissions=False,
+    ).download_fundamental_data("MCD")
+    rows = {row["period_end"]: row for row in result["income_statements"]}
+
+    assert rows[first_end]["diluted_shares_outstanding"] == 100_000_000
+    assert rows[first_end]["diluted_shares_scale_factor"] == 1_000
+    assert rows[second_end]["diluted_shares_outstanding"] == 716_400_000
+    assert rows[second_end]["diluted_shares_reported"] == 716.4
+    assert rows[second_end]["diluted_shares_scale_factor"] == 1_000_000
+
+
+def test_sec_provider_repairs_cached_share_units_without_refetching(tmp_path):
+    cache_path = tmp_path / "cache.sqlite"
+    cache = SECFundamentalsCache(cache_path)
+    cache.set(
+        "MCD",
+        {
+            "profile": {"ticker": "MCD", "name": "McDonald's Corp"},
+            "income_statements": [
+                {
+                    "period_end": "2025-12-31",
+                    "consolidated_net_income_loss": 8_563_000_000,
+                    "diluted_shares_outstanding": 716.4,
+                    "diluted_earnings_per_share": 11.95,
+                }
+            ],
+            "balance_sheets": [],
+            "cash_flow_statements": [],
+            "ratios": [],
+        },
+    )
+    provider = SECFundamentalsProvider(
+        user_agent="Cached Share Scale Test test@example.com",
+        cache_path=str(cache_path),
+        include_submissions=False,
+    )
+    provider._ticker_map = {
+        "MCD": {"cik_str": 63908, "ticker": "MCD", "title": "McDonald's Corp"}
+    }
+
+    result = provider.download_fundamental_data("MCD")
+
+    assert result["income_statements"][0]["diluted_shares_outstanding"] == 716_400_000
+    assert cache.get("MCD")["income_statements"][0][
+        "diluted_shares_outstanding"
+    ] == 716_400_000

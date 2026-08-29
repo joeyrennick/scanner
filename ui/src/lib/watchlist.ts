@@ -1,6 +1,74 @@
 import type { WatchlistRow } from '../api/types';
 import type { ScannerDisplaySettings } from './scannerSettings';
 
+export type ValidationResultFilter =
+  | 'all'
+  | 'validated'
+  | 'needs_review'
+  | 'rejected'
+  | 'not_calculated';
+export type QualityResultFilter =
+  | 'all'
+  | 'strong'
+  | 'acceptable'
+  | 'weak'
+  | 'not_calculated';
+export type DcfResultFilter =
+  | 'all'
+  | 'undervalued'
+  | 'fairly_valued'
+  | 'overvalued'
+  | 'not_calculated';
+export type RiskResultFilter =
+  | 'all'
+  | 'low'
+  | 'moderate'
+  | 'high'
+  | 'not_calculated';
+
+export type ScannerResultFilters = {
+  validation: ValidationResultFilter;
+  quality: QualityResultFilter;
+  dcf: DcfResultFilter;
+  risk: RiskResultFilter;
+};
+
+export const defaultScannerResultFilters: ScannerResultFilters = {
+  validation: 'all',
+  quality: 'all',
+  dcf: 'all',
+  risk: 'all'
+};
+
+const validationResultFilters = [
+  'all',
+  'validated',
+  'needs_review',
+  'rejected',
+  'not_calculated'
+] as const;
+const qualityResultFilters = [
+  'all',
+  'strong',
+  'acceptable',
+  'weak',
+  'not_calculated'
+] as const;
+const dcfResultFilters = [
+  'all',
+  'undervalued',
+  'fairly_valued',
+  'overvalued',
+  'not_calculated'
+] as const;
+const riskResultFilters = [
+  'all',
+  'low',
+  'moderate',
+  'high',
+  'not_calculated'
+] as const;
+
 export type DisplayCandidate = {
   id: string;
   ticker: string;
@@ -21,6 +89,13 @@ export type DisplayCandidate = {
   holdTime: string;
   fairValue: string;
   marginOfSafety: string;
+  validationLabel: string;
+  validationScore: string;
+  qualityLabel: string;
+  qualityScore: string;
+  dcfLabel: string;
+  riskLabel: string;
+  riskScore: string;
   fundamentalDataAsOf: string;
   freeCashFlow: string;
 };
@@ -63,6 +138,13 @@ export function candidateFromWatchlistRow(
       stringValue(row['Hold Time']) || stringValue(row['Suggested Hold Time']) || '5 trading days',
     fairValue: formatCurrency(numericValue(row['Fair Value'])),
     marginOfSafety: formatPercentLike(row['Margin of Safety']),
+    validationLabel: validationLabel(row),
+    validationScore: formatScore(row['Validation Score']),
+    qualityLabel: summaryLabel(row['Quality Label']),
+    qualityScore: formatScore(row['Quality Score']),
+    dcfLabel: dcfSummaryLabel(row['Valuation Label']),
+    riskLabel: summaryLabel(row['Risk Level']),
+    riskScore: formatScore(row['Risk Score']),
     fundamentalDataAsOf: stringValue(row['SEC Data As Of']) || 'n/a',
     freeCashFlow: formatCompactCurrency(numericValue(row['Free Cash Flow']))
   };
@@ -155,12 +237,103 @@ export function rowMatchesStrategy(row: WatchlistRow, strategy: string): boolean
   );
 }
 
+export function normalizeScannerResultFilters(value: unknown): ScannerResultFilters {
+  const filters = isRecord(value) ? value : {};
+  return {
+    validation: allowedValue(
+      filters.validation,
+      validationResultFilters,
+      defaultScannerResultFilters.validation
+    ),
+    quality: allowedValue(
+      filters.quality,
+      qualityResultFilters,
+      defaultScannerResultFilters.quality
+    ),
+    dcf: allowedValue(filters.dcf, dcfResultFilters, defaultScannerResultFilters.dcf),
+    risk: allowedValue(filters.risk, riskResultFilters, defaultScannerResultFilters.risk)
+  };
+}
+
+export function rowMatchesScannerResultFilters(
+  row: WatchlistRow,
+  filters: ScannerResultFilters
+): boolean {
+  return (
+    matchesResultFilter(validationCategory(row), filters.validation) &&
+    matchesResultFilter(qualityCategory(row), filters.quality) &&
+    matchesResultFilter(dcfCategory(row), filters.dcf) &&
+    matchesResultFilter(riskCategory(row), filters.risk)
+  );
+}
+
 function targetFromPriceAndStop(price?: number, stop?: number): number | undefined {
   if (price === undefined || stop === undefined || stop >= price) {
     return undefined;
   }
 
   return price + (price - stop) * 2;
+}
+
+function validationCategory(row: WatchlistRow): Exclude<ValidationResultFilter, 'all'> {
+  const status = categoryValue(row['Validation Status']);
+  if (status === 'validated' || status === 'needs_review' || status === 'rejected') {
+    return status;
+  }
+
+  const label = categoryValue(row['Validation Label']);
+  if (label === 'validated' || label === 'validated_candidate') return 'validated';
+  if (label === 'needs_review') return 'needs_review';
+  if (label === 'rejected') return 'rejected';
+  return 'not_calculated';
+}
+
+function qualityCategory(row: WatchlistRow): Exclude<QualityResultFilter, 'all'> {
+  const label = categoryValue(row['Quality Label']);
+  return label === 'strong' || label === 'acceptable' || label === 'weak'
+    ? label
+    : 'not_calculated';
+}
+
+function dcfCategory(row: WatchlistRow): Exclude<DcfResultFilter, 'all'> {
+  const label = categoryValue(row['Valuation Label']);
+  return label === 'undervalued' || label === 'fairly_valued' || label === 'overvalued'
+    ? label
+    : 'not_calculated';
+}
+
+function riskCategory(row: WatchlistRow): Exclude<RiskResultFilter, 'all'> {
+  const label = categoryValue(row['Risk Level']);
+  if (label === 'medium') return 'moderate';
+  return label === 'low' || label === 'moderate' || label === 'high'
+    ? label
+    : 'not_calculated';
+}
+
+function matchesResultFilter<T extends string>(category: T, filter: T | 'all'): boolean {
+  return filter === 'all' || category === filter;
+}
+
+function categoryValue(value: unknown): string {
+  return stringValue(value)
+    .trim()
+    .toLowerCase()
+    .replaceAll('-', '_')
+    .replaceAll(/\s+/g, '_');
+}
+
+function allowedValue<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+  fallback: T
+): T {
+  return typeof value === 'string' && allowed.includes(value as T)
+    ? (value as T)
+    : fallback;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function formatCurrency(value?: number): string {
@@ -196,6 +369,44 @@ function formatInteger(value: unknown): string {
 function formatPercentLike(value: unknown): string {
   const numeric = numericValue(value);
   return numeric === undefined ? 'n/a' : `${numeric.toFixed(2)}%`;
+}
+
+function formatScore(value: unknown): string {
+  const numeric = numericValue(value);
+  if (numeric === undefined) {
+    return 'n/a';
+  }
+  return Number.isInteger(numeric) ? String(numeric) : numeric.toFixed(1);
+}
+
+function validationLabel(row: WatchlistRow): string {
+  const explicit = summaryLabel(row['Validation Label']);
+  if (explicit !== 'Not calculated') {
+    return explicit;
+  }
+  return summaryLabel(row['Validation Status']);
+}
+
+function dcfSummaryLabel(value: unknown): string {
+  const label = summaryLabel(value);
+  if (label === 'Not calculated' || label.toLowerCase().includes('dcf')) {
+    return label;
+  }
+  return `${label} by DCF`;
+}
+
+function summaryLabel(value: unknown): string {
+  const normalized = stringValue(value).trim().replaceAll('_', ' ');
+  if (
+    !normalized ||
+    ['unknown', 'not calculated', 'n/a', 'none'].includes(normalized.toLowerCase())
+  ) {
+    return 'Not calculated';
+  }
+  return normalized
+    .split(/\s+/)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ');
 }
 
 function formatCell(value: unknown): string {

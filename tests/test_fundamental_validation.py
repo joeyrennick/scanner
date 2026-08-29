@@ -45,6 +45,7 @@ def test_validation_accepts_candidate_that_passes_all_automated_gates():
     assert result["status"] == "validated"
     assert result["label"] == "Validated candidate"
     assert result["score"] == 100
+    assert result["policy_version"] == 3
     assert result["manual_filing_review_required"] is True
 
 
@@ -78,6 +79,44 @@ def test_validation_rejects_incomplete_core_dcf_data():
     assert any(check["name"] == "Valid diluted share count" and check["status"] == "fail" for check in result["checks"])
 
 
+def test_validation_routes_two_or_three_financial_periods_to_review():
+    for period_count in (2, 3):
+        analysis = deepcopy(valid_analysis())
+        analysis["financial_history"] = analysis["financial_history"][-period_count:]
+
+        result = validate_fundamental_analysis(
+            analysis,
+            as_of=date(2026, 8, 28),
+        )
+
+        assert result["status"] == "needs_review"
+        assert any(
+            check["name"] == "Financial history"
+            and check["status"] == "review"
+            and check["value"] == period_count
+            for check in result["checks"]
+        )
+
+
+def test_validation_rejects_fewer_than_two_financial_periods():
+    for period_count in (0, 1):
+        analysis = deepcopy(valid_analysis())
+        analysis["financial_history"] = analysis["financial_history"][:period_count]
+
+        result = validate_fundamental_analysis(
+            analysis,
+            as_of=date(2026, 8, 28),
+        )
+
+        assert result["status"] == "rejected"
+        assert any(
+            check["name"] == "Financial history"
+            and check["status"] == "fail"
+            and check["value"] == period_count
+            for check in result["checks"]
+        )
+
+
 def test_validation_flags_implausibly_large_dcf_output_for_review():
     analysis = deepcopy(valid_analysis())
     analysis["valuation"]["margin_of_safety"] = 4.0
@@ -87,3 +126,23 @@ def test_validation_flags_implausibly_large_dcf_output_for_review():
 
     assert result["status"] == "needs_review"
     assert any(check["name"] == "DCF output sanity" and check["status"] == "review" for check in result["checks"])
+
+
+def test_validation_rejects_a_share_count_inconsistent_with_income_and_eps():
+    analysis = deepcopy(valid_analysis())
+    analysis["financial_history"][-1].update(
+        {
+            "net_income": 8_563_000_000,
+            "diluted_eps": 11.95,
+            "diluted_shares": 716.4,
+        }
+    )
+
+    result = validate_fundamental_analysis(analysis, as_of=date(2026, 8, 28))
+
+    assert result["status"] == "rejected"
+    assert any(
+        check["name"] == "Share-count consistency"
+        and check["status"] == "fail"
+        for check in result["checks"]
+    )

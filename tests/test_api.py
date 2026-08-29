@@ -438,7 +438,7 @@ def test_undervalued_scan_job_uses_fundamental_mode(monkeypatch, tmp_path):
                             "Risk Level": "low",
                             "Risk Complete": True,
                             "Validation Status": "validated",
-                            "Validation Policy Version": 1,
+                            "Validation Policy Version": 2,
                         }
                     ]
                 ),

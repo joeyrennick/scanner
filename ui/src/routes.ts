@@ -25,6 +25,12 @@ export const appRoutes: AppRoute[] = [
     description: 'Review scanner candidates and trade checklist values'
   },
   {
+    path: '/watchlists',
+    title: 'Watchlists',
+    navLabel: 'Watchlists',
+    description: 'Organize saved stocks and continue chart or fundamental research'
+  },
+  {
     path: '/fundamentals',
     title: 'Fundamental Analysis',
     navLabel: 'Fundamentals',

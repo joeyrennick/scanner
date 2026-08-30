@@ -93,6 +93,18 @@ describe('fundamental analysis state', () => {
     expect(state.runId).toBe(6);
   });
 
+  it('preserves saved-watchlist ticker navigation context', () => {
+    const linked = loadFundamentalState(
+      new URLSearchParams('ticker=AAPL&watchlist_id=12')
+    );
+    expect(linked.watchlistId).toBe(12);
+
+    rememberRecentTicker('MSFT', 'watchlists', 12);
+    const restored = loadFundamentalState(new URLSearchParams());
+    expect(restored.ticker).toBe('MSFT');
+    expect(restored.watchlistId).toBe(12);
+  });
+
   it('uses the same display thresholds as the Candidates page', () => {
     const rows = [
       { Ticker: 'AAPL', 'Triggered Strategies': 'Pullback', 'Current Price': 100, 'Suggested Stop': 98, '5D Range': 12 },

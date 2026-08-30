@@ -57,6 +57,16 @@ class WatchlistRiskClassificationRequest(BaseModel):
     market_data_provider: str = settings.market_data_provider
 
 
+class SavedWatchlistRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+
+
+class SavedWatchlistItemRequest(BaseModel):
+    ticker: str = Field(min_length=1, max_length=20)
+    source: str | None = Field(default=None, max_length=80)
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
 class MarketDataCredentialRequest(BaseModel):
     api_key: str = Field(min_length=1)
 

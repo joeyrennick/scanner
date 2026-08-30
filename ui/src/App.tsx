@@ -5,6 +5,7 @@ import {
   Activity,
   AlertTriangle,
   BarChart3,
+  Bookmark,
   BriefcaseBusiness,
   CheckCircle2,
   Clock3,
@@ -45,6 +46,7 @@ import {
   useStartScan,
   useUpdateCandidateTradeLevels
 } from './api/scans';
+import { useSavedWatchlist } from './api/savedWatchlists';
 import {
   useDeleteMassiveCredential,
   useMassiveCredentialStatus,
@@ -84,7 +86,10 @@ import {
   type ScannerResultFilters
 } from './lib/watchlist';
 import { useScannerDisplaySettings } from './lib/scannerSettings';
-import { rememberRecentTicker } from './lib/recentTicker';
+import {
+  loadRecentTickerSelection,
+  rememberRecentTicker
+} from './lib/recentTicker';
 import {
   clampScannerColumnWidth,
   defaultScannerColumnVisibility,
@@ -97,6 +102,9 @@ import {
 } from './lib/scannerColumns';
 import { appRoutes, getRouteMeta } from './routes';
 import { FundamentalAnalysisPage } from './features/fundamentals/FundamentalAnalysisPage';
+import { WatchlistsPage } from './features/watchlists/WatchlistsPage';
+import { SavedWatchlistButton } from './features/watchlists/SavedWatchlistButton';
+import { MultiSelectFilter } from './components/MultiSelectFilter';
 
 const universes = ['all', 'sp500', 'djia', 'nasdaq', 'nyse'];
 const historyPeriods = ['6mo', '1y', '5y'];
@@ -122,11 +130,36 @@ const scannerColumnLabels: Record<ScannerColumnKey, string> = {
   stop: 'Stop',
   target: 'Target/Exit'
 };
+const validationResultFilterOptions = [
+  { value: 'validated', label: 'Validated' },
+  { value: 'needs_review', label: 'Needs Review' },
+  { value: 'rejected', label: 'Rejected' },
+  { value: 'not_calculated', label: 'Not Calculated' }
+] as const;
+const qualityResultFilterOptions = [
+  { value: 'strong', label: 'Strong' },
+  { value: 'acceptable', label: 'Acceptable' },
+  { value: 'weak', label: 'Weak' },
+  { value: 'not_calculated', label: 'Not Calculated' }
+] as const;
+const dcfResultFilterOptions = [
+  { value: 'undervalued', label: 'Undervalued' },
+  { value: 'fairly_valued', label: 'Fairly Valued' },
+  { value: 'overvalued', label: 'Overvalued' },
+  { value: 'not_calculated', label: 'Not Calculated' }
+] as const;
+const riskResultFilterOptions = [
+  { value: 'low', label: 'Low' },
+  { value: 'moderate', label: 'Moderate' },
+  { value: 'high', label: 'High' },
+  { value: 'not_calculated', label: 'Not Calculated' }
+] as const;
 
 const routeIcons: Record<string, ReactNode> = {
   '/': <LayoutDashboard />,
   '/daily-scanner': <Activity />,
   '/candidates': <ListChecks />,
+  '/watchlists': <Bookmark />,
   '/fundamentals': <ShieldCheck />,
   '/backtest': <BarChart3 />,
   '/portfolio': <BriefcaseBusiness />,
@@ -143,6 +176,7 @@ export function App() {
         <Route index element={<DashboardPage />} />
         <Route path="daily-scanner" element={<DailyScannerPage />} />
         <Route path="candidates" element={<CandidatesPage />} />
+        <Route path="watchlists" element={<WatchlistsPage />} />
         <Route path="fundamentals" element={<FundamentalAnalysisPage />} />
         <Route path="backtest" element={<BacktestPage />} />
         <Route path="portfolio" element={<PortfolioPage />} />
@@ -313,6 +347,11 @@ function DailyScannerPage() {
       { ...defaultScannerColumnVisibility },
       normalizeScannerColumnVisibility
     );
+  const [activeTicker, setActiveTicker] = useLocalStorage<string | null>(
+    'swing-scanner.daily-scanner.active-ticker.v1',
+    null,
+    normalizeOptionalTicker
+  );
   const [selectedTickers, setSelectedTickers] = useState<Set<string>>(new Set());
   const [candidateSort, setCandidateSort] = useState<CandidateSort>({
     key: 'score',
@@ -392,6 +431,11 @@ function DailyScannerPage() {
     () => sortCandidates(candidates, candidateSort),
     [candidateSort, candidates]
   );
+  const activeCandidate =
+    sortedCandidates.find((candidate) => candidate.ticker === activeTicker) ?? null;
+  const activeCandidateRow = activeCandidate
+    ? rawRows.find((row) => String(row.Ticker ?? '').toUpperCase() === activeCandidate.ticker)
+    : undefined;
   const selectedCandidates = sortedCandidates.filter((candidate) => selectedTickers.has(candidate.id));
   const selectedRows = filteredRows.filter((row) =>
     selectedTickers.has(String(row.Ticker ?? '').toUpperCase())
@@ -496,7 +540,7 @@ function DailyScannerPage() {
 
   function toggleTicker(ticker: string) {
     if (!selectedTickers.has(ticker)) {
-      rememberRecentTicker(ticker, 'daily-scanner');
+      selectDailyTicker(ticker);
     }
     setSelectedTickers((current) => {
       const next = new Set(current);
@@ -507,6 +551,26 @@ function DailyScannerPage() {
       }
       return next;
     });
+  }
+
+  function selectDailyTicker(ticker: string) {
+    setActiveTicker(ticker);
+    rememberRecentTicker(ticker, 'daily-scanner');
+  }
+
+  function openSelectedFundamentals() {
+    if (!activeCandidate) {
+      return;
+    }
+
+    selectDailyTicker(activeCandidate.ticker);
+    navigate(
+      fundamentalsPath(
+        activeCandidate.ticker,
+        currentRunId,
+        valuationMode ? 'undervalued' : selectedStrategy
+      )
+    );
   }
 
   function toggleAllCandidates() {
@@ -906,6 +970,28 @@ function DailyScannerPage() {
             </div>
           </div>
           <div className="button-row inline-actions">
+            {activeCandidate && (
+              <SavedWatchlistButton
+                ticker={activeCandidate.ticker}
+                source="daily-scanner"
+                data={candidateSnapshot(activeCandidate, activeCandidateRow)}
+                label="Watchlists"
+              />
+            )}
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={openSelectedFundamentals}
+              disabled={!activeCandidate}
+              title={
+                activeCandidate
+                  ? `Open fundamentals for ${activeCandidate.ticker}`
+                  : 'Select a scanner result row first'
+              }
+            >
+              <BriefcaseBusiness size={18} />
+              Fundamentals{activeCandidate ? `: ${activeCandidate.ticker}` : ''}
+            </button>
             <details className="column-chooser">
               <summary className="secondary-button">Columns</summary>
               <div className="column-chooser-menu" aria-label="Visible scanner columns">
@@ -1009,78 +1095,34 @@ function DailyScannerPage() {
 
         <div className="scanner-result-filter-bar" aria-label="Scanner result filters">
           <div className="scanner-result-filter-grid">
-            <label>
-              Validation
-              <select
-                value={resultFilters.validation}
-                onChange={(event) =>
-                  changeResultFilter(
-                    'validation',
-                    event.target.value as ScannerResultFilters['validation']
-                  )
-                }
-              >
-                <option value="all">All validation statuses</option>
-                <option value="validated">Validated</option>
-                <option value="needs_review">Needs Review</option>
-                <option value="rejected">Rejected</option>
-                <option value="not_calculated">Not Calculated</option>
-              </select>
-            </label>
-            <label>
-              Business Quality
-              <select
-                value={resultFilters.quality}
-                onChange={(event) =>
-                  changeResultFilter(
-                    'quality',
-                    event.target.value as ScannerResultFilters['quality']
-                  )
-                }
-              >
-                <option value="all">All quality levels</option>
-                <option value="strong">Strong</option>
-                <option value="acceptable">Acceptable</option>
-                <option value="weak">Weak</option>
-                <option value="not_calculated">Not Calculated</option>
-              </select>
-            </label>
-            <label>
-              DCF Estimate
-              <select
-                value={resultFilters.dcf}
-                onChange={(event) =>
-                  changeResultFilter(
-                    'dcf',
-                    event.target.value as ScannerResultFilters['dcf']
-                  )
-                }
-              >
-                <option value="all">All DCF estimates</option>
-                <option value="undervalued">Undervalued</option>
-                <option value="fairly_valued">Fairly Valued</option>
-                <option value="overvalued">Overvalued</option>
-                <option value="not_calculated">Not Calculated</option>
-              </select>
-            </label>
-            <label>
-              Risk
-              <select
-                value={resultFilters.risk}
-                onChange={(event) =>
-                  changeResultFilter(
-                    'risk',
-                    event.target.value as ScannerResultFilters['risk']
-                  )
-                }
-              >
-                <option value="all">All risk levels</option>
-                <option value="low">Low</option>
-                <option value="moderate">Moderate</option>
-                <option value="high">High</option>
-                <option value="not_calculated">Not Calculated</option>
-              </select>
-            </label>
+            <MultiSelectFilter
+              label="Validation"
+              allLabel="All validation statuses"
+              selected={resultFilters.validation}
+              options={validationResultFilterOptions}
+              onChange={(values) => changeResultFilter('validation', values)}
+            />
+            <MultiSelectFilter
+              label="Business Quality"
+              allLabel="All quality levels"
+              selected={resultFilters.quality}
+              options={qualityResultFilterOptions}
+              onChange={(values) => changeResultFilter('quality', values)}
+            />
+            <MultiSelectFilter
+              label="DCF Estimate"
+              allLabel="All DCF estimates"
+              selected={resultFilters.dcf}
+              options={dcfResultFilterOptions}
+              onChange={(values) => changeResultFilter('dcf', values)}
+            />
+            <MultiSelectFilter
+              label="Risk"
+              allLabel="All risk levels"
+              selected={resultFilters.risk}
+              options={riskResultFilterOptions}
+              onChange={(values) => changeResultFilter('risk', values)}
+            />
             <label>
               Minimum Price
               <input
@@ -1368,24 +1410,40 @@ function DailyScannerPage() {
             </thead>
             <tbody>
               {sortedCandidates.map((candidate) => (
-                <tr key={candidate.id}>
+                <tr
+                  key={candidate.id}
+                  className={candidate.ticker === activeTicker ? 'selected-row selectable-row' : 'selectable-row'}
+                  aria-selected={candidate.ticker === activeTicker}
+                  tabIndex={0}
+                  onClick={() => selectDailyTicker(candidate.ticker)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      selectDailyTicker(candidate.ticker);
+                    }
+                  }}
+                >
                   <td>
                     <input
                       type="checkbox"
                       checked={selectedTickers.has(candidate.id)}
                       onChange={() => toggleTicker(candidate.id)}
+                      onClick={(event) => event.stopPropagation()}
                       aria-label={`Select ${candidate.ticker}`}
                     />
                   </td>
                   <td className="ticker-cell">
                     <Link
                       className="ticker-link"
-                      onClick={() => rememberRecentTicker(candidate.ticker, 'daily-scanner')}
-                      to={fundamentalsPath(
-                        candidate.ticker,
-                        currentRunId,
-                        valuationMode ? 'undervalued' : selectedStrategy
-                      )}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        selectDailyTicker(candidate.ticker);
+                      }}
+                      to="/candidates"
+                      state={{
+                        ticker: candidate.ticker,
+                        maximized: true
+                      } satisfies CandidateDetailState}
                     >
                       {candidate.ticker}
                     </Link>
@@ -1455,6 +1513,14 @@ function DailyScannerPage() {
 function CandidatesPage() {
   const location = useLocation();
   const candidateState = isCandidateDetailState(location.state) ? location.state : null;
+  const [recentSelectionAtEntry] = useState(() => loadRecentTickerSelection());
+  const incomingTicker = candidateState?.ticker ?? recentSelectionAtEntry?.ticker ?? null;
+  const incomingSavedWatchlistId =
+    candidateState?.savedWatchlistId ??
+    (candidateState === null ? recentSelectionAtEntry?.savedWatchlistId ?? null : null);
+  const maximizeIncomingTicker =
+    candidateState?.maximized ?? (candidateState === null && incomingTicker !== null);
+  const savedWatchlistContext = useSavedWatchlist(incomingSavedWatchlistId);
   const latestWatchlist = useLatestWatchlist();
   const cacheOverview = useCacheOverview();
   const candidateResultsTableRef = useRef<HTMLTableElement | null>(null);
@@ -1486,6 +1552,27 @@ function CandidatesPage() {
     );
   const updateTradeLevels = useUpdateCandidateTradeLevels();
   const rows = latestWatchlist.data?.rows ?? [];
+  const allCandidates = useMemo(
+    () =>
+      rows.map((row, index) =>
+        candidateFromWatchlistRow(row, index, cacheOverview.data?.latest_bar_date)
+      ),
+    [cacheOverview.data?.latest_bar_date, rows]
+  );
+  const savedWatchlistCandidates = useMemo(
+    () =>
+      (savedWatchlistContext.data?.items ?? []).map((item, index) =>
+        candidateFromWatchlistRow(
+          { ...item.data, Ticker: item.ticker },
+          index,
+          cacheOverview.data?.latest_bar_date
+        )
+      ),
+    [cacheOverview.data?.latest_bar_date, savedWatchlistContext.data?.items]
+  );
+  const availableChartCandidates = incomingSavedWatchlistId !== null
+    ? savedWatchlistCandidates
+    : allCandidates;
   const valuationMode =
     rows.length > 0 &&
     rows.every((row) =>
@@ -1528,17 +1615,51 @@ function CandidatesPage() {
   );
   const [selectedTicker, setSelectedTicker] = useLocalStorage<string | null>(
     'swing-scanner.candidates.selected-ticker',
-    candidateState?.ticker ?? null
+    incomingTicker
   );
+  const selectedFromAvailableCandidates =
+    availableChartCandidates.find((candidate) => candidate.ticker === selectedTicker) ?? null;
+  const chartCandidates = incomingSavedWatchlistId !== null
+    ? availableChartCandidates
+    : selectedFromAvailableCandidates &&
+        !sortedCandidates.some(
+          (candidate) => candidate.ticker === selectedFromAvailableCandidates.ticker
+        )
+      ? [selectedFromAvailableCandidates, ...sortedCandidates]
+      : sortedCandidates;
+  const appliedCandidateState = useRef<string | null>(null);
   useEffect(() => {
-    if (candidateState?.ticker) {
-      setSelectedTicker(candidateState.ticker);
-      rememberRecentTicker(candidateState.ticker, 'candidates');
+    if (!incomingTicker) {
+      return;
     }
-  }, [candidateState?.ticker, setSelectedTicker]);
+
+    const stateKey = `${incomingTicker}:${maximizeIncomingTicker}:${incomingSavedWatchlistId ?? ''}`;
+    if (appliedCandidateState.current === stateKey) {
+      return;
+    }
+    if (
+      maximizeIncomingTicker &&
+      !availableChartCandidates.some((candidate) => candidate.ticker === incomingTicker)
+    ) {
+      return;
+    }
+
+    appliedCandidateState.current = stateKey;
+    setSelectedTicker(incomingTicker);
+    rememberRecentTicker(incomingTicker, 'candidates', incomingSavedWatchlistId);
+    if (maximizeIncomingTicker) {
+      openMaximizedTicker(incomingTicker);
+    }
+  }, [
+    availableChartCandidates,
+    incomingSavedWatchlistId,
+    incomingTicker,
+    maximizeIncomingTicker,
+    setSelectedTicker
+  ]);
   const selected =
-    sortedCandidates.find((candidate) => candidate.ticker === selectedTicker) ??
-    sortedCandidates[0];
+    chartCandidates.find((candidate) => candidate.ticker === selectedTicker) ??
+    chartCandidates[0];
   const [edits, setEdits] = useLocalStorage<Record<string, CandidateTradeEdits>>(
     'swing-scanner.candidates.chart-state',
     {}
@@ -1573,7 +1694,7 @@ function CandidatesPage() {
 
   function selectCandidateTicker(ticker: string) {
     setSelectedTicker(ticker);
-    rememberRecentTicker(ticker, 'candidates');
+    rememberRecentTicker(ticker, 'candidates', incomingSavedWatchlistId);
   }
 
   function updateSelected(changes: Partial<CandidateTradeEdits>) {
@@ -1637,7 +1758,7 @@ function CandidatesPage() {
   }
 
   function selectMaximizedTicker(ticker: string) {
-    const nextCandidate = sortedCandidates.find((candidate) => candidate.ticker === ticker);
+    const nextCandidate = availableChartCandidates.find((candidate) => candidate.ticker === ticker);
     if (!nextCandidate || nextCandidate.ticker === selected?.ticker) {
       return;
     }
@@ -1666,7 +1787,7 @@ function CandidatesPage() {
   }
 
   function openMaximizedTicker(ticker: string) {
-    const nextCandidate = sortedCandidates.find((candidate) => candidate.ticker === ticker);
+    const nextCandidate = availableChartCandidates.find((candidate) => candidate.ticker === ticker);
     if (!nextCandidate) {
       return;
     }
@@ -1695,16 +1816,16 @@ function CandidatesPage() {
   }
 
   function traverseMaximizedCandidates(direction: -1 | 1) {
-    if (!selected || sortedCandidates.length < 2) {
+    if (!selected || chartCandidates.length < 2) {
       return;
     }
 
-    const selectedIndex = sortedCandidates.findIndex(
+    const selectedIndex = chartCandidates.findIndex(
       (candidate) => candidate.ticker === selected.ticker
     );
     const nextIndex =
-      (selectedIndex + direction + sortedCandidates.length) % sortedCandidates.length;
-    selectMaximizedTicker(sortedCandidates[nextIndex].ticker);
+      (selectedIndex + direction + chartCandidates.length) % chartCandidates.length;
+    selectMaximizedTicker(chartCandidates[nextIndex].ticker);
   }
 
   function changeSort(key: CandidateSortKey) {
@@ -1912,7 +2033,8 @@ function CandidatesPage() {
       height={chartHeight}
       zoom={chartZoom}
       ticker={selected.ticker}
-      tickerOptions={sortedCandidates.map((candidate) => ({
+      companyName={selected.companyName}
+      tickerOptions={chartCandidates.map((candidate) => ({
         ticker: candidate.ticker,
         strategy: candidate.strategy
       }))}
@@ -1985,78 +2107,34 @@ function CandidatesPage() {
 
           <div className="scanner-result-filter-bar" aria-label="Candidate result filters">
             <div className="scanner-result-filter-grid">
-              <label>
-                Validation
-                <select
-                  value={resultFilters.validation}
-                  onChange={(event) =>
-                    changeResultFilter(
-                      'validation',
-                      event.target.value as ScannerResultFilters['validation']
-                    )
-                  }
-                >
-                  <option value="all">All validation statuses</option>
-                  <option value="validated">Validated</option>
-                  <option value="needs_review">Needs Review</option>
-                  <option value="rejected">Rejected</option>
-                  <option value="not_calculated">Not Calculated</option>
-                </select>
-              </label>
-              <label>
-                Business Quality
-                <select
-                  value={resultFilters.quality}
-                  onChange={(event) =>
-                    changeResultFilter(
-                      'quality',
-                      event.target.value as ScannerResultFilters['quality']
-                    )
-                  }
-                >
-                  <option value="all">All quality levels</option>
-                  <option value="strong">Strong</option>
-                  <option value="acceptable">Acceptable</option>
-                  <option value="weak">Weak</option>
-                  <option value="not_calculated">Not Calculated</option>
-                </select>
-              </label>
-              <label>
-                DCF Estimate
-                <select
-                  value={resultFilters.dcf}
-                  onChange={(event) =>
-                    changeResultFilter(
-                      'dcf',
-                      event.target.value as ScannerResultFilters['dcf']
-                    )
-                  }
-                >
-                  <option value="all">All DCF estimates</option>
-                  <option value="undervalued">Undervalued</option>
-                  <option value="fairly_valued">Fairly Valued</option>
-                  <option value="overvalued">Overvalued</option>
-                  <option value="not_calculated">Not Calculated</option>
-                </select>
-              </label>
-              <label>
-                Risk
-                <select
-                  value={resultFilters.risk}
-                  onChange={(event) =>
-                    changeResultFilter(
-                      'risk',
-                      event.target.value as ScannerResultFilters['risk']
-                    )
-                  }
-                >
-                  <option value="all">All risk levels</option>
-                  <option value="low">Low</option>
-                  <option value="moderate">Moderate</option>
-                  <option value="high">High</option>
-                  <option value="not_calculated">Not Calculated</option>
-                </select>
-              </label>
+              <MultiSelectFilter
+                label="Validation"
+                allLabel="All validation statuses"
+                selected={resultFilters.validation}
+                options={validationResultFilterOptions}
+                onChange={(values) => changeResultFilter('validation', values)}
+              />
+              <MultiSelectFilter
+                label="Business Quality"
+                allLabel="All quality levels"
+                selected={resultFilters.quality}
+                options={qualityResultFilterOptions}
+                onChange={(values) => changeResultFilter('quality', values)}
+              />
+              <MultiSelectFilter
+                label="DCF Estimate"
+                allLabel="All DCF estimates"
+                selected={resultFilters.dcf}
+                options={dcfResultFilterOptions}
+                onChange={(values) => changeResultFilter('dcf', values)}
+              />
+              <MultiSelectFilter
+                label="Risk"
+                allLabel="All risk levels"
+                selected={resultFilters.risk}
+                options={riskResultFilterOptions}
+                onChange={(values) => changeResultFilter('risk', values)}
+              />
               <label>
                 Minimum Price
                 <input
@@ -2164,13 +2242,36 @@ function CandidatesPage() {
               <p>{selected?.strategy ?? 'Select a candidate'}</p>
             </div>
             {selected && (
-              <Link
-                className="link-button"
-                onClick={() => rememberRecentTicker(selected.ticker, 'candidates')}
-                to={`/fundamentals?ticker=${encodeURIComponent(selected.ticker)}${latestWatchlist.data?.run_id ? `&run_id=${latestWatchlist.data.run_id}` : ''}`}
-              >
-                Fundamental Analysis
-              </Link>
+              <div className="button-row inline-actions">
+                <SavedWatchlistButton
+                  ticker={selected.ticker}
+                  source="candidates"
+                  data={candidateSnapshot(
+                    selected,
+                    rows.find((row) => String(row.Ticker ?? '').toUpperCase() === selected.ticker) ??
+                      savedWatchlistContext.data?.items.find(
+                        (item) => item.ticker === selected.ticker
+                      )?.data
+                  )}
+                />
+                <Link
+                  className="link-button"
+                  onClick={() =>
+                    rememberRecentTicker(
+                      selected.ticker,
+                      'candidates',
+                      incomingSavedWatchlistId
+                    )
+                  }
+                  to={candidateFundamentalsPath(
+                    selected.ticker,
+                    latestWatchlist.data?.run_id ?? null,
+                    incomingSavedWatchlistId
+                  )}
+                >
+                  Fundamental Analysis
+                </Link>
+              </div>
             )}
           </div>
 
@@ -2245,6 +2346,22 @@ function CandidatesPage() {
       </div>
       {selected && chartMaximized && (
         <div className="chart-maximized-shell" role="dialog" aria-label={`${selected.ticker} maximized chart`}>
+          <div className="chart-maximized-watchlist-action">
+            <SavedWatchlistButton
+              ticker={selected.ticker}
+              source="candidates-chart"
+              data={candidateSnapshot(
+                selected,
+                rows.find(
+                  (row) => String(row.Ticker ?? '').toUpperCase() === selected.ticker
+                ) ??
+                  savedWatchlistContext.data?.items.find(
+                    (item) => item.ticker === selected.ticker
+                  )?.data
+              )}
+              label="Watchlists"
+            />
+          </div>
           {selectedChart}
         </div>
       )}
@@ -3392,7 +3509,7 @@ function countActiveScannerResultFilters(filters: ScannerResultFilters): number 
     filters.quality,
     filters.dcf,
     filters.risk
-  ].filter((value) => value !== 'all').length;
+  ].filter((value) => value.length > 0).length;
 
   return classificationCount +
     (filters.minPrice === null ? 0 : 1) +
@@ -3442,6 +3559,46 @@ function fundamentalsPath(
   const params = new URLSearchParams({ ticker, strategy });
   if (runId !== null) params.set('run_id', String(runId));
   return `/fundamentals?${params.toString()}`;
+}
+
+function candidateFundamentalsPath(
+  ticker: string,
+  runId: number | null,
+  savedWatchlistId: number | null
+): string {
+  const params = new URLSearchParams({ ticker, strategy: 'all' });
+  if (savedWatchlistId !== null) {
+    params.set('watchlist_id', String(savedWatchlistId));
+  } else if (runId !== null) {
+    params.set('run_id', String(runId));
+  }
+  return `/fundamentals?${params.toString()}`;
+}
+
+function candidateSnapshot(
+  candidate: DisplayCandidate,
+  raw?: WatchlistRow
+): WatchlistRow {
+  return {
+    'Company Name': candidate.companyName,
+    'Triggered Strategies': candidate.strategy,
+    'Composite Score': candidate.score,
+    'Current Price': candidate.currentPrice,
+    'Fair Value': candidate.fairValue,
+    'Margin of Safety': candidate.marginOfSafety,
+    'Validation Label': candidate.validationLabel,
+    'Validation Score': candidate.validationScore,
+    'Quality Label': candidate.qualityLabel,
+    'Quality Score': candidate.qualityScore,
+    'Valuation Label': candidate.dcfLabel,
+    'Risk Level': candidate.riskLabel,
+    'Risk Score': candidate.riskScore,
+    'Entry Area': candidate.entryArea,
+    'Suggested Stop': candidate.stop,
+    'Target/Exit': candidate.targetExit,
+    ...(raw ?? {}),
+    Ticker: candidate.ticker
+  };
 }
 
 function viewportChartHeight() {
@@ -3498,6 +3655,7 @@ function formatChartTime(value: string, frequency: ChartFrequency) {
 
 function CandidateDailyBarChart({
   ticker,
+  companyName,
   tickerOptions,
   onTickerChange,
   onPreviousTicker,
@@ -3527,6 +3685,7 @@ function CandidateDailyBarChart({
   onMaximizedSizeChange
 }: {
   ticker: string;
+  companyName: string;
   tickerOptions: { ticker: string; strategy: string }[];
   onTickerChange: (ticker: string) => void;
   onPreviousTicker: () => void;
@@ -3623,7 +3782,10 @@ function CandidateDailyBarChart({
   const visibleCount = bars.length > 0
     ? Math.min(bars.length, Math.max(20, Math.ceil(bars.length / chartZoom)))
     : 0;
-  const overscrollBars = visibleCount > 0 ? Math.min(Math.max(4, Math.ceil(visibleCount * 0.2)), visibleCount) : 0;
+  // Keep one plot-width of horizontal breathing room on both sides. A smaller
+  // future-side allowance made a leftward drag appear to stop immediately when
+  // the chart was already positioned at the newest bar.
+  const overscrollBars = visibleCount;
   const minPanBars = -overscrollBars;
   const maxPanBars = Math.max(0, bars.length - visibleCount) + overscrollBars;
   const clampedPanBars = Math.min(Math.max(panBars, minPanBars), maxPanBars);
@@ -3832,6 +3994,15 @@ function CandidateDailyBarChart({
     }
 
     event.preventDefault();
+    event.stopPropagation();
+    const chartElement = event.currentTarget;
+    const pointerId = event.pointerId;
+    chartElement.setPointerCapture(pointerId);
+    chartElement.classList.add('panning');
+    const previousBodyCursor = document.body.style.cursor;
+    const previousBodyUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = 'grabbing';
+    document.body.style.userSelect = 'none';
     const startX = event.clientX;
     const startY = event.clientY;
     const startPanBars = clampedPanBars;
@@ -3839,6 +4010,11 @@ function CandidateDailyBarChart({
     const domainRange = domainMax - domainMin;
 
     function handleMove(moveEvent: PointerEvent) {
+      if (moveEvent.pointerId !== pointerId) {
+        return;
+      }
+
+      moveEvent.preventDefault();
       const deltaX = moveEvent.clientX - startX;
       const deltaY = moveEvent.clientY - startY;
       const barsMoved = xStep > 0 ? deltaX / xStep : 0;
@@ -3849,13 +4025,31 @@ function CandidateDailyBarChart({
       });
     }
 
-    function handleUp() {
+    function handleUp(upEvent?: PointerEvent) {
+      if (upEvent && upEvent.pointerId !== pointerId) {
+        return;
+      }
+
+      if (chartElement.hasPointerCapture(pointerId)) {
+        chartElement.releasePointerCapture(pointerId);
+      }
+      chartElement.classList.remove('panning');
+      document.body.style.cursor = previousBodyCursor;
+      document.body.style.userSelect = previousBodyUserSelect;
       window.removeEventListener('pointermove', handleMove);
       window.removeEventListener('pointerup', handleUp);
+      window.removeEventListener('pointercancel', handleUp);
+      window.removeEventListener('blur', handleWindowBlur);
     }
 
-    window.addEventListener('pointermove', handleMove);
+    function handleWindowBlur() {
+      handleUp();
+    }
+
+    window.addEventListener('pointermove', handleMove, { passive: false });
     window.addEventListener('pointerup', handleUp);
+    window.addEventListener('pointercancel', handleUp);
+    window.addEventListener('blur', handleWindowBlur);
   }
 
   function startPriceScaleResize(event: ReactPointerEvent<HTMLDivElement>) {
@@ -4028,17 +4222,22 @@ function CandidateDailyBarChart({
             >
               ‹
             </button>
-            <select
-              aria-label="Candidate ticker"
-              value={ticker}
-              onChange={(event) => onTickerChange(event.target.value)}
-            >
-              {tickerOptions.map((option) => (
-                <option key={option.ticker} value={option.ticker}>
-                  {option.ticker} · {option.strategy}
-                </option>
-              ))}
-            </select>
+            <div className="chart-ticker-selection">
+              <select
+                aria-label="Candidate ticker"
+                value={ticker}
+                onChange={(event) => onTickerChange(event.target.value)}
+              >
+                {tickerOptions.map((option) => (
+                  <option key={option.ticker} value={option.ticker}>
+                    {option.ticker} · {option.strategy}
+                  </option>
+                ))}
+              </select>
+              <strong className="chart-company-name" title={companyName || undefined}>
+                {companyName || 'Company name unavailable'}
+              </strong>
+            </div>
             <button
               type="button"
               aria-label="Next candidate ticker"
@@ -5294,6 +5493,8 @@ type BacktestSubmittedRun = {
 
 type CandidateDetailState = {
   ticker: string;
+  maximized?: boolean;
+  savedWatchlistId?: number | null;
 };
 
 type PlannedTrade = {
@@ -5412,6 +5613,15 @@ function inputNumberOrNull(value: string): number | null {
 function priceFilterNumberOrNull(value: string): number | null {
   const parsed = inputNumberOrNull(value);
   return parsed !== null && parsed >= 0 ? parsed : null;
+}
+
+function normalizeOptionalTicker(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const ticker = value.trim().toUpperCase();
+  return ticker || null;
 }
 
 function emptyNumberToNull(value: number | null | undefined): number | null {
@@ -5588,7 +5798,15 @@ function isCandidateDetailState(value: unknown): value is CandidateDetailState {
   }
 
   const candidate = value as Partial<CandidateDetailState>;
-  return typeof candidate.ticker === 'string' && candidate.ticker.trim() !== '';
+  return (
+    typeof candidate.ticker === 'string' &&
+    candidate.ticker.trim() !== '' &&
+    (candidate.maximized === undefined || typeof candidate.maximized === 'boolean') &&
+    (candidate.savedWatchlistId === undefined ||
+      candidate.savedWatchlistId === null ||
+      (typeof candidate.savedWatchlistId === 'number' &&
+        Number.isInteger(candidate.savedWatchlistId)))
+  );
 }
 
 function strategyKeyForCandidate(

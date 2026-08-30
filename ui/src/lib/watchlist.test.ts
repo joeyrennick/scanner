@@ -216,10 +216,10 @@ describe('watchlist display helpers', () => {
         maxPrice: 150.5
       })
     ).toEqual({
-      validation: 'needs_review',
-      quality: 'weak',
-      dcf: 'undervalued',
-      risk: 'low',
+      validation: ['needs_review'],
+      quality: ['weak'],
+      dcf: ['undervalued'],
+      risk: ['low'],
       minPrice: 25,
       maxPrice: 150.5
     });
@@ -290,14 +290,14 @@ describe('watchlist display helpers', () => {
         expect(
           rowMatchesScannerResultFilters(
             { [columnName]: value },
-            { ...defaultScannerResultFilters, [filterName]: value }
+            { ...defaultScannerResultFilters, [filterName]: [value] }
           )
         ).toBe(true);
       }
       expect(
         rowMatchesScannerResultFilters(
           {},
-          { ...defaultScannerResultFilters, [filterName]: 'not_calculated' }
+          { ...defaultScannerResultFilters, [filterName]: ['not_calculated'] }
         )
       ).toBe(true);
     }
@@ -332,11 +332,11 @@ describe('watchlist display helpers', () => {
     ];
     const filters = {
       ...defaultScannerResultFilters,
-      validation: 'needs_review',
-      quality: 'weak',
-      dcf: 'undervalued',
-      risk: 'low'
-    } as const;
+      validation: ['needs_review'],
+      quality: ['weak'],
+      dcf: ['undervalued'],
+      risk: ['low']
+    };
     const candidates = rows
       .filter((row) => rowMatchesScannerResultFilters(row, filters))
       .map((row, index) => candidateFromWatchlistRow(row, index));
@@ -350,12 +350,37 @@ describe('watchlist display helpers', () => {
       'SFNC'
     ]);
     expect(filters).toEqual({
-      validation: 'needs_review',
-      quality: 'weak',
-      dcf: 'undervalued',
-      risk: 'low',
+      validation: ['needs_review'],
+      quality: ['weak'],
+      dcf: ['undervalued'],
+      risk: ['low'],
       minPrice: null,
       maxPrice: null
     });
+  });
+
+  it('matches any selected value within a filter and combines filter groups with AND', () => {
+    const filters = {
+      ...defaultScannerResultFilters,
+      validation: ['validated', 'needs_review'],
+      risk: ['low', 'moderate']
+    };
+
+    expect(rowMatchesScannerResultFilters(
+      { 'Validation Status': 'validated', 'Risk Level': 'moderate' },
+      filters
+    )).toBe(true);
+    expect(rowMatchesScannerResultFilters(
+      { 'Validation Status': 'needs_review', 'Risk Level': 'low' },
+      filters
+    )).toBe(true);
+    expect(rowMatchesScannerResultFilters(
+      { 'Validation Status': 'rejected', 'Risk Level': 'low' },
+      filters
+    )).toBe(false);
+    expect(rowMatchesScannerResultFilters(
+      { 'Validation Status': 'validated', 'Risk Level': 'high' },
+      filters
+    )).toBe(false);
   });
 });

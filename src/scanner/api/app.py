@@ -32,6 +32,8 @@ from scanner.api.schemas import (
     MarketDataHistoryResponse,
     PortfolioSimulationRequest,
     ScanRequest,
+    SavedWatchlistItemRequest,
+    SavedWatchlistRequest,
     StrategyField,
     StrategyMetadata,
     WatchlistPriceRefreshRequest,
@@ -48,6 +50,7 @@ from scanner.data.providers.cached import period_start_date
 from scanner.data.providers.massive import MASSIVE_API_KEY_SECRET, MassiveMarketDataProvider
 from scanner.data.providers.sec import SECFundamentalsProvider
 from scanner.data.scanner_results import SQLiteScannerResultStore
+from scanner.data.saved_watchlists import SQLiteSavedWatchlistStore
 from scanner.portfolio.execution_model import ExecutionModel
 from scanner.portfolio.portfolio_simulator import PortfolioSimulator
 from scanner.portfolio.trade_csv_loader import load_trades_from_csv
@@ -229,6 +232,84 @@ def analyze_fundamentals(
             status_code=502,
             detail=f"Unable to load fundamentals for {normalized_ticker}: {error}",
         ) from error
+
+
+@app.get("/api/saved-watchlists")
+def list_saved_watchlists() -> dict[str, Any]:
+    return {
+        "watchlists": [
+            _saved_watchlist_payload(watchlist, include_items=False)
+            for watchlist in _saved_watchlist_store().list_watchlists()
+        ]
+    }
+
+
+@app.post("/api/saved-watchlists")
+def create_saved_watchlist(request: SavedWatchlistRequest) -> dict[str, Any]:
+    try:
+        return _saved_watchlist_payload(
+            _saved_watchlist_store().create_watchlist(request.name),
+            include_items=True,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@app.get("/api/saved-watchlists/{watchlist_id}")
+def get_saved_watchlist(watchlist_id: int) -> dict[str, Any]:
+    watchlist = _saved_watchlist_store().get_watchlist(watchlist_id)
+    if watchlist is None:
+        raise HTTPException(status_code=404, detail="Saved watchlist not found")
+    return _saved_watchlist_payload(watchlist, include_items=True)
+
+
+@app.patch("/api/saved-watchlists/{watchlist_id}")
+def rename_saved_watchlist(
+    watchlist_id: int,
+    request: SavedWatchlistRequest,
+) -> dict[str, Any]:
+    try:
+        watchlist = _saved_watchlist_store().rename_watchlist(watchlist_id, request.name)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return _saved_watchlist_payload(watchlist, include_items=True)
+
+
+@app.delete("/api/saved-watchlists/{watchlist_id}")
+def delete_saved_watchlist(watchlist_id: int) -> dict[str, bool]:
+    if not _saved_watchlist_store().delete_watchlist(watchlist_id):
+        raise HTTPException(status_code=404, detail="Saved watchlist not found")
+    return {"deleted": True}
+
+
+@app.post("/api/saved-watchlists/{watchlist_id}/items")
+def add_saved_watchlist_item(
+    watchlist_id: int,
+    request: SavedWatchlistItemRequest,
+) -> dict[str, Any]:
+    try:
+        item = _saved_watchlist_store().add_item(
+            watchlist_id,
+            request.ticker,
+            source=request.source,
+            data=request.data,
+        )
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return _saved_watchlist_item_payload(item)
+
+
+@app.delete("/api/saved-watchlists/{watchlist_id}/items/{ticker}")
+def remove_saved_watchlist_item(watchlist_id: int, ticker: str) -> dict[str, bool]:
+    try:
+        removed = _saved_watchlist_store().remove_item(watchlist_id, ticker)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    return {"deleted": removed}
 
 
 @app.get("/api/cache/overview")
@@ -1146,6 +1227,51 @@ def _records_from_dataframe(dataframe: pd.DataFrame) -> list[dict[str, Any]]:
 
 def _scanner_result_store() -> SQLiteScannerResultStore:
     return SQLiteScannerResultStore(settings.market_data_cache_path)
+
+
+def _saved_watchlist_store() -> SQLiteSavedWatchlistStore:
+    return SQLiteSavedWatchlistStore(settings.market_data_cache_path)
+
+
+def _saved_watchlist_payload(watchlist: Any, *, include_items: bool) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "id": watchlist.id,
+        "name": watchlist.name,
+        "created_at": watchlist.created_at,
+        "updated_at": watchlist.updated_at,
+        "item_count": len(watchlist.items),
+        "tickers": [item.ticker for item in watchlist.items],
+    }
+    if include_items:
+        latest_run = _scanner_result_store().latest_run()
+        latest_by_ticker = {
+            str(row.get("Ticker") or row.get("Symbol") or "").strip().upper(): row
+            for row in (latest_run.rows if latest_run else [])
+        }
+        payload["items"] = [
+            _saved_watchlist_item_payload(
+                item,
+                latest_data=latest_by_ticker.get(item.ticker),
+            )
+            for item in watchlist.items
+        ]
+    return _json_safe(payload)
+
+
+def _saved_watchlist_item_payload(
+    item: Any,
+    *,
+    latest_data: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    data = {**item.data, **(latest_data or {})}
+    data["Ticker"] = item.ticker
+    return {
+        "ticker": item.ticker,
+        "source": item.source,
+        "data": data,
+        "added_at": item.added_at,
+        "updated_at": item.updated_at,
+    }
 
 
 def _persist_candidate_assessment(

@@ -106,6 +106,31 @@ export interface WatchlistResponse {
   rows: WatchlistRow[];
 }
 
+export interface SavedWatchlistItem {
+  ticker: string;
+  source: string | null;
+  data: WatchlistRow;
+  added_at: string;
+  updated_at: string;
+}
+
+export interface SavedWatchlistSummary {
+  id: number;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  item_count: number;
+  tickers: string[];
+}
+
+export interface SavedWatchlist extends SavedWatchlistSummary {
+  items: SavedWatchlistItem[];
+}
+
+export interface SavedWatchlistListResponse {
+  watchlists: SavedWatchlistSummary[];
+}
+
 export interface WatchlistRiskClassificationRequest {
   run_id?: number | null;
   market_data_provider?: string;

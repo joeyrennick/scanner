@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   loadRecentTicker,
+  loadRecentTickerSelection,
   recentTickerStorageKey,
   rememberRecentTicker
 } from './recentTicker';
@@ -28,8 +29,19 @@ describe('recent ticker selection', () => {
   it('uses the most recent selection regardless of its source page', () => {
     rememberRecentTicker('AAPL', 'candidates');
     rememberRecentTicker('NVDA', 'daily-scanner');
+    rememberRecentTicker('TSLA', 'fundamentals');
 
-    expect(loadRecentTicker()).toBe('NVDA');
+    expect(loadRecentTicker()).toBe('TSLA');
+  });
+
+  it('preserves saved-watchlist navigation context', () => {
+    rememberRecentTicker('AAPL', 'watchlists', 14);
+
+    expect(loadRecentTickerSelection()).toMatchObject({
+      ticker: 'AAPL',
+      source: 'watchlists',
+      savedWatchlistId: 14
+    });
   });
 
   it('ignores malformed persisted selections', () => {

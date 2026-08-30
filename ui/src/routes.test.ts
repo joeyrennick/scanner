@@ -22,6 +22,13 @@ describe('app routes', () => {
     });
   });
 
+  it('includes saved watchlists as a routeable screen', () => {
+    expect(getRouteMeta('/watchlists')).toMatchObject({
+      title: 'Watchlists',
+      navLabel: 'Watchlists'
+    });
+  });
+
   it('falls back to the dashboard metadata for unknown paths', () => {
     expect(getRouteMeta('/missing')).toMatchObject({ title: 'Dashboard' });
   });

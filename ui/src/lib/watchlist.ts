@@ -27,46 +27,42 @@ export type RiskResultFilter =
   | 'not_calculated';
 
 export type ScannerResultFilters = {
-  validation: ValidationResultFilter;
-  quality: QualityResultFilter;
-  dcf: DcfResultFilter;
-  risk: RiskResultFilter;
+  validation: Exclude<ValidationResultFilter, 'all'>[];
+  quality: Exclude<QualityResultFilter, 'all'>[];
+  dcf: Exclude<DcfResultFilter, 'all'>[];
+  risk: Exclude<RiskResultFilter, 'all'>[];
   minPrice: number | null;
   maxPrice: number | null;
 };
 
 export const defaultScannerResultFilters: ScannerResultFilters = {
-  validation: 'all',
-  quality: 'all',
-  dcf: 'all',
-  risk: 'all',
+  validation: [],
+  quality: [],
+  dcf: [],
+  risk: [],
   minPrice: null,
   maxPrice: null
 };
 
 const validationResultFilters = [
-  'all',
   'validated',
   'needs_review',
   'rejected',
   'not_calculated'
 ] as const;
 const qualityResultFilters = [
-  'all',
   'strong',
   'acceptable',
   'weak',
   'not_calculated'
 ] as const;
 const dcfResultFilters = [
-  'all',
   'undervalued',
   'fairly_valued',
   'overvalued',
   'not_calculated'
 ] as const;
 const riskResultFilters = [
-  'all',
   'low',
   'moderate',
   'high',
@@ -244,18 +240,10 @@ export function rowMatchesStrategy(row: WatchlistRow, strategy: string): boolean
 export function normalizeScannerResultFilters(value: unknown): ScannerResultFilters {
   const filters = isRecord(value) ? value : {};
   return {
-    validation: allowedValue(
-      filters.validation,
-      validationResultFilters,
-      defaultScannerResultFilters.validation
-    ),
-    quality: allowedValue(
-      filters.quality,
-      qualityResultFilters,
-      defaultScannerResultFilters.quality
-    ),
-    dcf: allowedValue(filters.dcf, dcfResultFilters, defaultScannerResultFilters.dcf),
-    risk: allowedValue(filters.risk, riskResultFilters, defaultScannerResultFilters.risk),
+    validation: allowedValues(filters.validation, validationResultFilters),
+    quality: allowedValues(filters.quality, qualityResultFilters),
+    dcf: allowedValues(filters.dcf, dcfResultFilters),
+    risk: allowedValues(filters.risk, riskResultFilters),
     minPrice: normalizedPriceBound(filters.minPrice),
     maxPrice: normalizedPriceBound(filters.maxPrice)
   };
@@ -335,8 +323,8 @@ function riskCategory(row: WatchlistRow): Exclude<RiskResultFilter, 'all'> {
     : 'not_calculated';
 }
 
-function matchesResultFilter<T extends string>(category: T, filter: T | 'all'): boolean {
-  return filter === 'all' || category === filter;
+function matchesResultFilter<T extends string>(category: T, filters: T[]): boolean {
+  return filters.length === 0 || filters.includes(category);
 }
 
 function categoryValue(value: unknown): string {
@@ -347,14 +335,14 @@ function categoryValue(value: unknown): string {
     .replaceAll(/\s+/g, '_');
 }
 
-function allowedValue<T extends string>(
+function allowedValues<T extends string>(
   value: unknown,
-  allowed: readonly T[],
-  fallback: T
-): T {
-  return typeof value === 'string' && allowed.includes(value as T)
-    ? (value as T)
-    : fallback;
+  allowed: readonly T[]
+): T[] {
+  const values = Array.isArray(value) ? value : typeof value === 'string' ? [value] : [];
+  return [...new Set(values.filter((item): item is T =>
+    typeof item === 'string' && allowed.includes(item as T)
+  ))];
 }
 
 function normalizedPriceBound(value: unknown): number | null {

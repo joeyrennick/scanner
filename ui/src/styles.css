@@ -611,6 +611,89 @@ input:disabled {
   font-size: 0.82rem;
 }
 
+.multi-select-filter-field {
+  position: relative;
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: #52606d;
+  font-size: 0.82rem;
+}
+
+.multi-select-filter {
+  position: relative;
+  min-width: 0;
+}
+
+.multi-select-filter > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 38px;
+  overflow: hidden;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #fff;
+  color: #17212b;
+  font-size: 0.9rem;
+  list-style: none;
+  cursor: pointer;
+}
+
+.multi-select-filter > summary::-webkit-details-marker {
+  display: none;
+}
+
+.multi-select-filter > summary span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multi-select-filter-menu {
+  position: absolute;
+  z-index: 70;
+  top: calc(100% + 5px);
+  left: 0;
+  display: grid;
+  gap: 2px;
+  width: max-content;
+  min-width: 100%;
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  padding: 7px;
+  background: #fff;
+  box-shadow: 0 12px 28px rgb(15 23 42 / 16%);
+}
+
+.scanner-result-filter-grid .multi-select-filter-menu label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 5px 7px;
+  border-radius: 5px;
+  color: #17212b;
+  font-size: 0.88rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.scanner-result-filter-grid .multi-select-filter-menu label:hover {
+  background: #f1f5f9;
+}
+
+.multi-select-all-option {
+  border-bottom: 1px solid #e2e8f0;
+  font-weight: 700;
+}
+
 .inline-actions {
   margin-top: 0;
 }
@@ -849,6 +932,23 @@ input:disabled {
 
 .data-table tbody tr.selected-row {
   background: #eaf2ff;
+}
+
+.data-table tbody tr.selected-row td {
+  background: #eaf2ff;
+}
+
+.data-table tbody tr.selected-row td:first-child {
+  box-shadow: inset 4px 0 #0a64d8;
+}
+
+.data-table tbody tr.selectable-row {
+  cursor: pointer;
+}
+
+.data-table tbody tr.selectable-row:focus-visible {
+  outline: 2px solid #0a64d8;
+  outline-offset: -2px;
 }
 
 .ticker-cell {
@@ -1094,7 +1194,13 @@ input:disabled {
 }
 
 .candidate-chart.zoomable {
-  cursor: move;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.candidate-chart.zoomable.panning {
+  cursor: grabbing;
 }
 
 .chart-maximized-shell {
@@ -1141,6 +1247,19 @@ input:disabled {
   color: #e2e8f0;
 }
 
+.chart-maximized-watchlist-action {
+  position: fixed;
+  top: 82px;
+  right: 34px;
+  z-index: 12;
+}
+
+.chart-maximized-watchlist-action .saved-watchlist-menu > summary {
+  border-color: #475569;
+  background: #202428;
+  color: #e2e8f0;
+}
+
 .chart-dimension-controls {
   position: fixed;
   top: 34px;
@@ -1172,9 +1291,15 @@ input:disabled {
 
 .chart-ticker-navigation {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 4px;
   white-space: nowrap;
+}
+
+.chart-ticker-selection {
+  display: grid;
+  gap: 3px;
+  width: 220px;
 }
 
 .chart-ticker-navigation button {
@@ -1204,7 +1329,7 @@ input:disabled {
 }
 
 .chart-ticker-navigation select {
-  width: 180px;
+  width: 220px;
   min-height: 28px;
   border: 1px solid #4c5865;
   border-radius: 5px;
@@ -1214,6 +1339,163 @@ input:disabled {
   font-size: 12px;
   font-weight: 760;
   cursor: pointer;
+}
+
+.chart-company-name {
+  overflow: hidden;
+  color: #f8fafc;
+  font-size: 12px;
+  font-weight: 720;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.saved-watchlist-menu {
+  position: relative;
+}
+
+.saved-watchlist-menu > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.saved-watchlist-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.saved-watchlist-menu-content {
+  position: absolute;
+  z-index: 80;
+  top: calc(100% + 6px);
+  right: 0;
+  display: grid;
+  gap: 10px;
+  width: 300px;
+  padding: 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 16px 36px rgb(15 23 42 / 18%);
+  color: #0f172a;
+}
+
+.saved-watchlist-memberships {
+  display: grid;
+  gap: 4px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.saved-watchlist-memberships label {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px;
+  border-radius: 5px;
+}
+
+.saved-watchlist-memberships label:hover {
+  background: #f1f5f9;
+}
+
+.saved-watchlist-memberships small {
+  color: #64748b;
+}
+
+.saved-watchlist-create,
+.watchlist-list-controls,
+.watchlist-ticker-controls,
+.watchlist-list-controls form,
+.watchlist-ticker-controls form {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.saved-watchlist-create input {
+  min-width: 0;
+}
+
+.saved-watchlist-create button {
+  display: inline-grid;
+  min-width: 36px;
+  min-height: 36px;
+  place-items: center;
+}
+
+.saved-watchlist-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.saved-watchlist-error {
+  color: #b42318;
+  font-size: 13px;
+}
+
+.watchlists-page {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 14px;
+  min-height: calc(100vh - 126px);
+}
+
+.watchlists-toolbar {
+  display: grid;
+  gap: 12px;
+}
+
+.watchlist-list-controls,
+.watchlist-ticker-controls {
+  flex-wrap: wrap;
+}
+
+.watchlist-list-controls label {
+  display: grid;
+  gap: 5px;
+}
+
+.watchlist-list-controls select {
+  min-width: 220px;
+}
+
+.watchlist-results-panel {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  min-height: 0;
+}
+
+.watchlist-table-wrap {
+  min-height: 300px;
+  max-height: none;
+  overflow: auto;
+}
+
+.watchlist-filter-grid {
+  grid-template-columns: repeat(7, minmax(140px, 1fr));
+}
+
+.sortable-header {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+@media (max-width: 1200px) {
+  .watchlist-filter-grid {
+    grid-template-columns: repeat(3, minmax(150px, 1fr));
+  }
 }
 
 .chart-dimension-group span {

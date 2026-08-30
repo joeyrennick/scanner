@@ -7,11 +7,13 @@ import {
 } from '../../api/fundamentals';
 import { useJob } from '../../api/jobs';
 import { useLatestWatchlist, useWatchlistRun } from '../../api/scans';
+import { useSavedWatchlist } from '../../api/savedWatchlists';
 import type { AnalysisCheck, FundamentalAnalysis, ValidationCheck, WatchlistRow } from '../../api/types';
 import { formatDuration, formatNumber, progressPercent } from '../../lib/progress';
-import { loadRecentTicker } from '../../lib/recentTicker';
+import { loadRecentTickerSelection, rememberRecentTicker } from '../../lib/recentTicker';
 import { useScannerDisplaySettings, type ScannerDisplaySettings } from '../../lib/scannerSettings';
 import { rowMatchesDisplaySettings, rowMatchesStrategy } from '../../lib/watchlist';
+import { SavedWatchlistButton } from '../watchlists/SavedWatchlistButton';
 
 type Tab = 'summary' | 'validation' | 'quality' | 'valuation' | 'risk' | 'financials';
 type RiskFilter = 'all' | 'low' | 'moderate' | 'high' | 'unknown';
@@ -21,6 +23,7 @@ type SavedState = {
   ticker: string;
   tickerDraft: string;
   runId: number | null;
+  watchlistId: number | null;
   strategy: string;
   risk: RiskFilter;
   validation: ValidationFilter;
@@ -37,6 +40,7 @@ const defaultState: SavedState = {
   ticker: '',
   tickerDraft: '',
   runId: null,
+  watchlistId: null,
   strategy: 'all',
   risk: 'all',
   validation: 'all',
@@ -55,7 +59,25 @@ export function FundamentalAnalysisPage() {
   const [displaySettings] = useScannerDisplaySettings();
   const watchlist = useLatestWatchlist();
   const selectedRun = useWatchlistRun(state.runId);
-  const candidateSource = state.runId !== null ? selectedRun.data : watchlist.data;
+  const savedWatchlist = useSavedWatchlist(state.watchlistId);
+  const scannerCandidateSource = state.runId !== null ? selectedRun.data : watchlist.data;
+  const savedWatchlistRows = useMemo(
+    () =>
+      (savedWatchlist.data?.items ?? []).map((item) => ({
+        ...item.data,
+        Ticker: item.ticker
+      })),
+    [savedWatchlist.data?.items]
+  );
+  const candidateSource = state.watchlistId !== null
+    ? {
+        exists: true,
+        path: `Saved watchlist: ${savedWatchlist.data?.name ?? state.watchlistId}`,
+        run_id: null,
+        created_at: savedWatchlist.data?.updated_at ?? null,
+        rows: savedWatchlistRows
+      }
+    : scannerCandidateSource;
   const restoredScroll = useRef(false);
   const reconciledCandidateSource = useRef<string | null>(null);
   const refreshedRiskJob = useRef<string | null>(null);
@@ -100,15 +122,17 @@ export function FundamentalAnalysisPage() {
     const next = new URLSearchParams();
     if (state.ticker) next.set('ticker', state.ticker);
     if (state.runId !== null) next.set('run_id', String(state.runId));
+    if (state.watchlistId !== null) next.set('watchlist_id', String(state.watchlistId));
     if (state.strategy !== 'all') next.set('strategy', state.strategy);
     if (state.risk !== 'all') next.set('risk', state.risk);
     if (state.validation !== 'all') next.set('validation', state.validation);
     if (state.tab !== 'summary') next.set('tab', state.tab);
     if (next.toString() !== searchParams.toString()) setSearchParams(next, { replace: true });
-  }, [searchParams, setSearchParams, state.risk, state.runId, state.strategy, state.tab, state.ticker, state.validation]);
+  }, [searchParams, setSearchParams, state.risk, state.runId, state.strategy, state.tab, state.ticker, state.validation, state.watchlistId]);
 
   useEffect(() => {
     if (!state.ticker) return;
+    rememberRecentTicker(state.ticker, 'fundamentals', state.watchlistId);
     analyze.mutate({
       ticker: state.ticker,
       assumptions,
@@ -117,6 +141,11 @@ export function FundamentalAnalysisPage() {
     // Re-run only when the selected ticker changes; assumptions apply through Recalculate.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.ticker]);
+
+  useEffect(() => {
+    if (!savedWatchlist.isError) return;
+    updateState((current) => ({ ...current, watchlistId: null }));
+  }, [savedWatchlist.isError, updateState]);
 
   useEffect(() => {
     if (!selectedRun.isError) return;
@@ -359,9 +388,16 @@ export function FundamentalAnalysisPage() {
           <span>{candidateIndex >= 0 ? `${candidateIndex + 1} of ${candidates.length}` : `${candidates.length} candidates`}</span>
           <button type="button" onClick={() => moveCandidate(1)} disabled={!candidates.length}>Next →</button>
         </div>
+        {state.ticker && (
+          <SavedWatchlistButton
+            ticker={state.ticker}
+            source="fundamentals"
+            data={analysis ? fundamentalSnapshot(analysis) : { Ticker: state.ticker }}
+          />
+        )}
       </section>
 
-      {(riskCounts.unknown > 0 || validationCounts.not_calculated > 0) && (
+      {state.watchlistId === null && (riskCounts.unknown > 0 || validationCounts.not_calculated > 0) && (
         <section className="panel alert warning">
           <span>
             {riskCounts.unknown} candidates need five-year risk analysis and{' '}
@@ -758,7 +794,8 @@ export function loadFundamentalState(params: URLSearchParams): SavedState {
   const risk = params.get('risk');
   const validation = params.get('validation');
   const linkedTicker = params.get('ticker');
-  const recentTicker = linkedTicker === null ? loadRecentTicker() : null;
+  const recentSelection = linkedTicker === null ? loadRecentTickerSelection() : null;
+  const recentTicker = recentSelection?.ticker ?? null;
   const initialTicker = linkedTicker ?? recentTicker ?? saved.ticker;
   return {
     ...saved,
@@ -767,6 +804,11 @@ export function loadFundamentalState(params: URLSearchParams): SavedState {
       linkedTicker ?? recentTicker ?? saved.tickerDraft ?? saved.ticker
     ).toUpperCase(),
     runId: params.has('run_id') ? numberOrNull(params.get('run_id')) : null,
+    watchlistId: params.has('watchlist_id')
+      ? numberOrNull(params.get('watchlist_id'))
+      : linkedTicker === null
+        ? recentSelection?.savedWatchlistId ?? null
+        : null,
     strategy: params.get('strategy') ?? saved.strategy,
     risk: isRiskFilter(risk) ? risk : saved.risk,
     validation: isValidationFilter(validation) ? validation : saved.validation,
@@ -912,12 +954,35 @@ function validationLabelForRow(row: WatchlistRow) {
   if (status === 'rejected') return 'Rejected';
   return 'Not calculated';
 }
+function fundamentalSnapshot(analysis: FundamentalAnalysis): WatchlistRow {
+  const baseScenario = analysis.valuation.scenarios.find((scenario) => scenario.name === 'base');
+  return {
+    Ticker: analysis.ticker,
+    'Company Name': analysis.company.name,
+    Sector: analysis.company.sector,
+    'Current Price': analysis.current_price,
+    'Fair Value': baseScenario?.fair_value ?? null,
+    'Margin of Safety': percentagePoints(
+      baseScenario?.upside ?? analysis.valuation.margin_of_safety
+    ),
+    'Validation Status': analysis.validation.status,
+    'Validation Label': analysis.validation.label,
+    'Validation Score': analysis.validation.score,
+    'Quality Label': analysis.quality.label,
+    'Quality Score': analysis.quality.score,
+    'Valuation Label': analysis.valuation.label,
+    'Risk Level': analysis.risk.label,
+    'Risk Score': analysis.risk.score,
+    'SEC Data As Of': analysis.data_as_of
+  };
+}
 function isTab(value: string | null): value is Tab { return ['summary', 'validation', 'quality', 'valuation', 'risk', 'financials'].includes(value ?? ''); }
 function isRiskFilter(value: string | null): value is RiskFilter { return ['all', 'low', 'moderate', 'high', 'unknown'].includes(value ?? ''); }
 function isValidationFilter(value: string | null): value is ValidationFilter { return ['all', 'validated', 'needs_review', 'rejected', 'not_calculated'].includes(value ?? ''); }
 function numberOrNull(value: string | null) { const parsed = Number(value); return value && Number.isFinite(parsed) ? parsed : null; }
 function numberValue(value: unknown) { return typeof value === 'number' ? value : null; }
 function absoluteNumber(value: unknown) { return typeof value === 'number' ? Math.abs(value) : null; }
+function percentagePoints(value: number | null | undefined) { return typeof value === 'number' ? value * 100 : null; }
 function money(value: number | null | undefined) { return typeof value !== 'number' ? 'n/a' : `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`; }
 function compactMoney(value: unknown) { return typeof value !== 'number' ? 'n/a' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 1 }).format(value); }
 function compactNumber(value: unknown) { return typeof value !== 'number' ? 'n/a' : new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value); }

@@ -194,6 +194,35 @@ export type ValidationCheck = {
   explanation: string;
 };
 
+export type FcffForecastRow = {
+  year: number;
+  revenue_growth_rate: number;
+  revenue: number;
+  operating_margin: number;
+  operating_income: number;
+  tax_rate: number;
+  nopat: number;
+  depreciation_and_amortization: number;
+  capital_expenditures: number;
+  change_in_working_capital: number;
+  fcff: number;
+  discount_factor: number;
+  present_value_fcff: number;
+};
+
+export type FcffValuationBridge = {
+  present_value_forecast: number | null;
+  terminal_value: number | null;
+  present_value_terminal: number | null;
+  enterprise_value: number | null;
+  cash: number | null;
+  debt: number | null;
+  equity_value: number | null;
+  diluted_shares: number | null;
+  fair_value_per_share: number | null;
+  terminal_value_share: number | null;
+};
+
 export interface FundamentalAnalysis {
   schema_version: number;
   ticker: string;
@@ -213,12 +242,35 @@ export interface FundamentalAnalysis {
   ratios: Record<string, number>;
   quality: { score: number; label: string; checks: AnalysisCheck[]; metrics: Record<string, number | null> };
   valuation: {
+    model?: string;
     label: string;
     confidence: string;
     current_price: number | null;
     margin_of_safety: number | null;
-    assumptions: Record<string, number>;
-    scenarios: Array<{ name: string; growth_rate: number; fair_value: number | null; upside: number | null }>;
+    assumptions: Record<string, number | null>;
+    scenarios: Array<{
+      name: string;
+      growth_rate: number | null;
+      revenue_growth_rate?: number | null;
+      operating_margin?: number | null;
+      discount_rate?: number;
+      terminal_growth_rate?: number;
+      fair_value: number | null;
+      upside: number | null;
+      forecast?: FcffForecastRow[];
+      valuation_bridge?: FcffValuationBridge;
+    }>;
+    sensitivity?: {
+      discount_rates: number[];
+      terminal_growth_rates: number[];
+      values: Array<Array<{ fair_value: number | null; upside: number | null }>>;
+    };
+    input_quality?: {
+      fields: Record<string, boolean>;
+      available: number;
+      required: number;
+      missing: string[];
+    };
     multiples: Record<string, number>;
   };
   risk: { score: number; label: string; complete: boolean; checks: AnalysisCheck[]; metrics: Record<string, number | null> };

@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Activity,
   AlertTriangle,
@@ -83,6 +84,7 @@ import {
   type ScannerResultFilters
 } from './lib/watchlist';
 import { useScannerDisplaySettings } from './lib/scannerSettings';
+import { rememberRecentTicker } from './lib/recentTicker';
 import {
   clampScannerColumnWidth,
   defaultScannerColumnVisibility,
@@ -98,6 +100,8 @@ import { FundamentalAnalysisPage } from './features/fundamentals/FundamentalAnal
 
 const universes = ['all', 'sp500', 'djia', 'nasdaq', 'nyse'];
 const historyPeriods = ['6mo', '1y', '5y'];
+const currentPriceInfoText =
+  'Current Price comes from the selected market-data provider (Massive/Polygon by default). If fresh provider data is unavailable, the scanner may use a cached closing price. Prices may be delayed; confirm the live price in your trading platform before placing a trade.';
 const scannerColumnLabels: Record<ScannerColumnKey, string> = {
   select: 'Row Selection',
   ticker: 'Ticker',
@@ -394,9 +398,7 @@ function DailyScannerPage() {
   );
   const selectedCount = selectedCandidates.length;
   const exportScope = selectedCount > 0 ? `${selectedCount} selected` : `${sortedCandidates.length} filtered`;
-  const activeResultFilterCount = Object.values(resultFilters).filter(
-    (value) => value !== 'all'
-  ).length;
+  const activeResultFilterCount = countActiveScannerResultFilters(resultFilters);
   const allConfigurableColumnsVisible = configurableScannerColumns.every(
     (key) => scannerColumnVisibility[key]
   );
@@ -493,6 +495,9 @@ function DailyScannerPage() {
   }
 
   function toggleTicker(ticker: string) {
+    if (!selectedTickers.has(ticker)) {
+      rememberRecentTicker(ticker, 'daily-scanner');
+    }
     setSelectedTickers((current) => {
       const next = new Set(current);
       if (next.has(ticker)) {
@@ -860,28 +865,6 @@ function DailyScannerPage() {
         )}
       </section>
 
-      <section className="summary-grid" aria-label="Scan summary">
-        <MetricCard
-          icon={<ListChecks />}
-          label="Analyzed"
-          value={formatNumber(job?.progress.symbols_checked ?? rowCountFromJob(job))}
-          tone="neutral"
-        />
-        <MetricCard icon={<CheckCircle2 />} label="Candidates" value={formatNumber(candidates.length)} tone="green" />
-        <MetricCard
-          icon={<Database />}
-          label="Provider Symbols"
-          value={formatNumber(job?.progress.provider_symbols_attempted)}
-          tone="blue"
-        />
-        <MetricCard
-          icon={<Clock3 />}
-          label="Elapsed"
-          value={formatDuration(job?.progress.elapsed_seconds)}
-          tone={job?.progress.rate_limited ? 'amber' : 'neutral'}
-        />
-      </section>
-
       {activeJob && (
         <section className="panel compact-progress" aria-label="Scanner progress">
           <div className="progress-track">
@@ -1098,6 +1081,32 @@ function DailyScannerPage() {
                 <option value="not_calculated">Not Calculated</option>
               </select>
             </label>
+            <label>
+              Minimum Price
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="No minimum"
+                value={resultFilters.minPrice ?? ''}
+                onChange={(event) =>
+                  changeResultFilter('minPrice', priceFilterNumberOrNull(event.target.value))
+                }
+              />
+            </label>
+            <label>
+              Maximum Price
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="No maximum"
+                value={resultFilters.maxPrice ?? ''}
+                onChange={(event) =>
+                  changeResultFilter('maxPrice', priceFilterNumberOrNull(event.target.value))
+                }
+              />
+            </label>
           </div>
           <button
             className="secondary-button"
@@ -1178,10 +1187,7 @@ function DailyScannerPage() {
                     label={
                     <span className="th-with-info">
                       Current Price
-                      <Info
-                        size={14}
-                        aria-label="Current Price comes from Yahoo/latest provider data and may be delayed or stale. Confirm the live price in your trading platform, such as TradingView or thinkorswim, before placing a trade."
-                      />
+                      <CurrentPriceInfo />
                     </span>
                     }
                     sortKey="currentPrice"
@@ -1374,6 +1380,7 @@ function DailyScannerPage() {
                   <td className="ticker-cell">
                     <Link
                       className="ticker-link"
+                      onClick={() => rememberRecentTicker(candidate.ticker, 'daily-scanner')}
                       to={fundamentalsPath(
                         candidate.ticker,
                         currentRunId,
@@ -1450,16 +1457,59 @@ function CandidatesPage() {
   const candidateState = isCandidateDetailState(location.state) ? location.state : null;
   const latestWatchlist = useLatestWatchlist();
   const cacheOverview = useCacheOverview();
+  const candidateResultsTableRef = useRef<HTMLTableElement | null>(null);
   const [displaySettings] = useScannerDisplaySettings();
   const [marketDataSettings] = useLocalStorage<MarketDataSettings>(
     'swing-scanner.market-data-settings.v2',
     defaultMarketDataSettings
   );
+  const [resultFilters, setResultFilters] = useLocalStorage<ScannerResultFilters>(
+    'swing-scanner.candidates.result-filters.v1',
+    defaultScannerResultFilters,
+    normalizeScannerResultFilters
+  );
+  const [candidateSort, setCandidateSort] = useLocalStorage<CandidateSort>(
+    'swing-scanner.candidates.sort.v1',
+    { key: 'score', direction: 'desc' }
+  );
+  const [candidateColumnWidths, setCandidateColumnWidths] =
+    useLocalStorage<ScannerColumnWidths>(
+      'swing-scanner.candidates.column-widths.v1',
+      { ...defaultScannerColumnWidths },
+      normalizeScannerColumnWidths
+    );
+  const [candidateColumnVisibility, setCandidateColumnVisibility] =
+    useLocalStorage<ScannerColumnVisibility>(
+      'swing-scanner.candidates.column-visibility.v1',
+      { ...defaultScannerColumnVisibility },
+      normalizeScannerColumnVisibility
+    );
   const updateTradeLevels = useUpdateCandidateTradeLevels();
   const rows = latestWatchlist.data?.rows ?? [];
+  const valuationMode =
+    rows.length > 0 &&
+    rows.every((row) =>
+      String(row['Triggered Strategies'] ?? '').toLowerCase().includes('undervalued')
+    );
+  const candidateColumns: ScannerColumnKey[] = scannerColumnsForMode(valuationMode).filter(
+    (key) => key !== 'select'
+  );
+  const configurableCandidateColumns = candidateColumns.filter((key) => key !== 'ticker');
+  const visibleCandidateColumns = candidateColumns.filter(
+    (key) => candidateColumnVisibility[key]
+  );
+  const candidateTableWidth = visibleCandidateColumns.reduce(
+    (total, key) => total + candidateColumnWidths[key],
+    0
+  );
   const filteredRows = useMemo(
-    () => rows.filter((row) => rowMatchesDisplaySettings(row, displaySettings)),
-    [displaySettings, rows]
+    () =>
+      rows.filter(
+        (row) =>
+          rowMatchesDisplaySettings(row, displaySettings) &&
+          rowMatchesScannerResultFilters(row, resultFilters)
+      ),
+    [displaySettings, resultFilters, rows]
   );
   const candidates = useMemo(
     () =>
@@ -1468,6 +1518,14 @@ function CandidatesPage() {
       ),
     [cacheOverview.data?.latest_bar_date, filteredRows]
   );
+  const sortedCandidates = useMemo(
+    () => sortCandidates(candidates, candidateSort),
+    [candidateSort, candidates]
+  );
+  const activeResultFilterCount = countActiveScannerResultFilters(resultFilters);
+  const allConfigurableColumnsVisible = configurableCandidateColumns.every(
+    (key) => candidateColumnVisibility[key]
+  );
   const [selectedTicker, setSelectedTicker] = useLocalStorage<string | null>(
     'swing-scanner.candidates.selected-ticker',
     candidateState?.ticker ?? null
@@ -1475,9 +1533,12 @@ function CandidatesPage() {
   useEffect(() => {
     if (candidateState?.ticker) {
       setSelectedTicker(candidateState.ticker);
+      rememberRecentTicker(candidateState.ticker, 'candidates');
     }
   }, [candidateState?.ticker, setSelectedTicker]);
-  const selected = candidates.find((candidate) => candidate.ticker === selectedTicker) ?? candidates[0];
+  const selected =
+    sortedCandidates.find((candidate) => candidate.ticker === selectedTicker) ??
+    sortedCandidates[0];
   const [edits, setEdits] = useLocalStorage<Record<string, CandidateTradeEdits>>(
     'swing-scanner.candidates.chart-state',
     {}
@@ -1509,6 +1570,11 @@ function CandidatesPage() {
   );
   const previousChartHeight = selectedEdits?.previousChartHeight;
   const chartMaximized = Boolean(previousChartHeight);
+
+  function selectCandidateTicker(ticker: string) {
+    setSelectedTicker(ticker);
+    rememberRecentTicker(ticker, 'candidates');
+  }
 
   function updateSelected(changes: Partial<CandidateTradeEdits>) {
     if (!selected) {
@@ -1571,7 +1637,7 @@ function CandidatesPage() {
   }
 
   function selectMaximizedTicker(ticker: string) {
-    const nextCandidate = candidates.find((candidate) => candidate.ticker === ticker);
+    const nextCandidate = sortedCandidates.find((candidate) => candidate.ticker === ticker);
     if (!nextCandidate || nextCandidate.ticker === selected?.ticker) {
       return;
     }
@@ -1596,20 +1662,163 @@ function CandidatesPage() {
         }
       };
     });
-    setSelectedTicker(nextCandidate.ticker);
+    selectCandidateTicker(nextCandidate.ticker);
   }
 
-  function traverseMaximizedCandidates(direction: -1 | 1) {
-    if (!selected || candidates.length < 2) {
+  function openMaximizedTicker(ticker: string) {
+    const nextCandidate = sortedCandidates.find((candidate) => candidate.ticker === ticker);
+    if (!nextCandidate) {
       return;
     }
 
-    const selectedIndex = candidates.findIndex(
+    setEdits((current) => {
+      const existing = current[nextCandidate.ticker];
+      const nextChartHeight = existing?.chartHeight ?? 300;
+
+      return {
+        ...current,
+        [nextCandidate.ticker]: {
+          entry: existing?.entry ?? nextCandidate.entryArea,
+          stop: existing?.stop ?? nextCandidate.stop,
+          target: existing?.target ?? nextCandidate.targetExit,
+          chartHeight: nextChartHeight,
+          chartZoom: existing?.chartZoom ?? 1,
+          chartPanBars: existing?.chartPanBars ?? 0,
+          chartPricePan: existing?.chartPricePan ?? 0,
+          maximizedChartHeight: existing?.maximizedChartHeight ?? viewportChartHeight(),
+          maximizedChartWidth: existing?.maximizedChartWidth ?? viewportChartWidth(),
+          previousChartHeight: existing?.previousChartHeight ?? nextChartHeight
+        }
+      };
+    });
+    selectCandidateTicker(nextCandidate.ticker);
+  }
+
+  function traverseMaximizedCandidates(direction: -1 | 1) {
+    if (!selected || sortedCandidates.length < 2) {
+      return;
+    }
+
+    const selectedIndex = sortedCandidates.findIndex(
       (candidate) => candidate.ticker === selected.ticker
     );
     const nextIndex =
-      (selectedIndex + direction + candidates.length) % candidates.length;
-    selectMaximizedTicker(candidates[nextIndex].ticker);
+      (selectedIndex + direction + sortedCandidates.length) % sortedCandidates.length;
+    selectMaximizedTicker(sortedCandidates[nextIndex].ticker);
+  }
+
+  function changeSort(key: CandidateSortKey) {
+    setCandidateSort((current) => ({
+      key,
+      direction: current.key === key && current.direction === 'asc' ? 'desc' : 'asc'
+    }));
+  }
+
+  function changeResultFilter<K extends keyof ScannerResultFilters>(
+    key: K,
+    value: ScannerResultFilters[K]
+  ) {
+    setResultFilters((current) => ({ ...current, [key]: value }));
+  }
+
+  function clearResultFilters() {
+    setResultFilters(defaultScannerResultFilters);
+  }
+
+  function startColumnResize(
+    key: ScannerColumnKey,
+    event: ReactPointerEvent<HTMLDivElement>
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    const startX = event.clientX;
+    const startWidth = candidateColumnWidths[key];
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    function handleMove(moveEvent: PointerEvent) {
+      const nextWidth = clampScannerColumnWidth(
+        startWidth + moveEvent.clientX - startX
+      );
+      setCandidateColumnWidths((current) => ({ ...current, [key]: nextWidth }));
+    }
+
+    function handleUp() {
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+      window.removeEventListener('pointercancel', handleUp);
+    }
+
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+    window.addEventListener('pointercancel', handleUp);
+  }
+
+  function resizeColumnBy(key: ScannerColumnKey, delta: number) {
+    setCandidateColumnWidths((current) => ({
+      ...current,
+      [key]: clampScannerColumnWidth(current[key] + delta)
+    }));
+  }
+
+  function autoFitColumn(key: ScannerColumnKey) {
+    const table = candidateResultsTableRef.current;
+    const columnIndex = visibleCandidateColumns.indexOf(key);
+    if (!table || columnIndex < 0) return;
+
+    const column = table.querySelectorAll('col')[columnIndex] as
+      | HTMLTableColElement
+      | undefined;
+    if (!column) return;
+
+    const previousTableLayout = table.style.tableLayout;
+    const previousTableWidth = table.style.width;
+    const previousTableMinWidth = table.style.minWidth;
+    const previousColumnWidth = column.style.width;
+    let measuredWidth = candidateColumnWidths[key];
+
+    try {
+      table.style.tableLayout = 'auto';
+      table.style.width = 'max-content';
+      table.style.minWidth = '0';
+      column.style.width = 'auto';
+      void table.offsetWidth;
+      const contentWidths = Array.from(table.rows)
+        .map((row) => row.cells[columnIndex]?.scrollWidth ?? 0)
+        .filter((width) => width > 0);
+      measuredWidth =
+        contentWidths.length > 0
+          ? Math.max(...contentWidths)
+          : defaultScannerColumnWidths[key];
+    } finally {
+      table.style.tableLayout = previousTableLayout;
+      table.style.width = previousTableWidth;
+      table.style.minWidth = previousTableMinWidth;
+      column.style.width = previousColumnWidth;
+    }
+
+    setCandidateColumnWidths((current) => ({
+      ...current,
+      [key]: clampScannerColumnWidth(measuredWidth + 2)
+    }));
+  }
+
+  function toggleCandidateColumn(key: ScannerColumnKey) {
+    setCandidateColumnVisibility((current) => ({
+      ...current,
+      [key]: !current[key]
+    }));
+  }
+
+  function showAllCandidateColumns() {
+    setCandidateColumnVisibility((current) => ({
+      ...current,
+      ...Object.fromEntries(configurableCandidateColumns.map((key) => [key, true]))
+    }));
   }
 
   function startDetailResize(event: ReactPointerEvent<HTMLDivElement>) {
@@ -1703,7 +1912,7 @@ function CandidatesPage() {
       height={chartHeight}
       zoom={chartZoom}
       ticker={selected.ticker}
-      tickerOptions={candidates.map((candidate) => ({
+      tickerOptions={sortedCandidates.map((candidate) => ({
         ticker: candidate.ticker,
         strategy: candidate.strategy
       }))}
@@ -1737,49 +1946,202 @@ function CandidatesPage() {
   return (
     <>
       <div className="content-grid candidate-layout" style={layoutStyle}>
-        <section className="panel" aria-labelledby="candidate-list-title">
+        <section className="panel candidate-list-panel" aria-labelledby="candidate-list-title">
           <div className="panel-header">
             <div>
               <h2 id="candidate-list-title">Candidates</h2>
               <p>
-                {candidates.length} scanner-filtered candidates from {rows.length} saved rows
+                {sortedCandidates.length} displayed candidates from {rows.length} saved rows
               </p>
             </div>
+            <details className="column-chooser">
+              <summary className="secondary-button">Columns</summary>
+              <div className="column-chooser-menu" aria-label="Visible candidate columns">
+                <strong>Show or hide columns</strong>
+                <span className="column-chooser-note">Ticker remains visible.</span>
+                <div className="column-chooser-options">
+                  {configurableCandidateColumns.map((key) => (
+                    <label key={key}>
+                      <input
+                        type="checkbox"
+                        checked={candidateColumnVisibility[key]}
+                        onChange={() => toggleCandidateColumn(key)}
+                      />
+                      {scannerColumnLabels[key]}
+                    </label>
+                  ))}
+                </div>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={showAllCandidateColumns}
+                  disabled={allConfigurableColumnsVisible}
+                >
+                  Show All
+                </button>
+              </div>
+            </details>
           </div>
 
-          <div className="table-wrap compact-table">
-            <table className="data-table candidate-table">
+          <div className="scanner-result-filter-bar" aria-label="Candidate result filters">
+            <div className="scanner-result-filter-grid">
+              <label>
+                Validation
+                <select
+                  value={resultFilters.validation}
+                  onChange={(event) =>
+                    changeResultFilter(
+                      'validation',
+                      event.target.value as ScannerResultFilters['validation']
+                    )
+                  }
+                >
+                  <option value="all">All validation statuses</option>
+                  <option value="validated">Validated</option>
+                  <option value="needs_review">Needs Review</option>
+                  <option value="rejected">Rejected</option>
+                  <option value="not_calculated">Not Calculated</option>
+                </select>
+              </label>
+              <label>
+                Business Quality
+                <select
+                  value={resultFilters.quality}
+                  onChange={(event) =>
+                    changeResultFilter(
+                      'quality',
+                      event.target.value as ScannerResultFilters['quality']
+                    )
+                  }
+                >
+                  <option value="all">All quality levels</option>
+                  <option value="strong">Strong</option>
+                  <option value="acceptable">Acceptable</option>
+                  <option value="weak">Weak</option>
+                  <option value="not_calculated">Not Calculated</option>
+                </select>
+              </label>
+              <label>
+                DCF Estimate
+                <select
+                  value={resultFilters.dcf}
+                  onChange={(event) =>
+                    changeResultFilter(
+                      'dcf',
+                      event.target.value as ScannerResultFilters['dcf']
+                    )
+                  }
+                >
+                  <option value="all">All DCF estimates</option>
+                  <option value="undervalued">Undervalued</option>
+                  <option value="fairly_valued">Fairly Valued</option>
+                  <option value="overvalued">Overvalued</option>
+                  <option value="not_calculated">Not Calculated</option>
+                </select>
+              </label>
+              <label>
+                Risk
+                <select
+                  value={resultFilters.risk}
+                  onChange={(event) =>
+                    changeResultFilter(
+                      'risk',
+                      event.target.value as ScannerResultFilters['risk']
+                    )
+                  }
+                >
+                  <option value="all">All risk levels</option>
+                  <option value="low">Low</option>
+                  <option value="moderate">Moderate</option>
+                  <option value="high">High</option>
+                  <option value="not_calculated">Not Calculated</option>
+                </select>
+              </label>
+              <label>
+                Minimum Price
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="No minimum"
+                  value={resultFilters.minPrice ?? ''}
+                  onChange={(event) =>
+                    changeResultFilter('minPrice', priceFilterNumberOrNull(event.target.value))
+                  }
+                />
+              </label>
+              <label>
+                Maximum Price
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="No maximum"
+                  value={resultFilters.maxPrice ?? ''}
+                  onChange={(event) =>
+                    changeResultFilter('maxPrice', priceFilterNumberOrNull(event.target.value))
+                  }
+                />
+              </label>
+            </div>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={clearResultFilters}
+              disabled={activeResultFilterCount === 0}
+            >
+              Clear Filters{activeResultFilterCount > 0 ? ` (${activeResultFilterCount})` : ''}
+            </button>
+          </div>
+
+          <div className="table-wrap">
+            <table
+              ref={candidateResultsTableRef}
+              className="data-table scanner-results-table candidate-results-table"
+              style={{ width: candidateTableWidth, minWidth: '100%' }}
+            >
+              <colgroup>
+                {visibleCandidateColumns.map((key) => (
+                  <col key={key} style={{ width: candidateColumnWidths[key] }} />
+                ))}
+              </colgroup>
               <thead>
                 <tr>
-                  <th>Ticker</th>
-                  <th>Strategy</th>
-                  <th>Score</th>
-                  <th>Price</th>
-                  <th>Entry</th>
-                  <th>Stop</th>
-                  <th>Target</th>
+                  {visibleCandidateColumns.map((key) => (
+                    <ScannerCandidateHeader
+                      key={key}
+                      columnKey={key}
+                      valuationMode={valuationMode}
+                      sort={candidateSort}
+                      onSort={changeSort}
+                      onResize={startColumnResize}
+                      onResizeBy={resizeColumnBy}
+                      onAutoFit={autoFitColumn}
+                    />
+                  ))}
                 </tr>
               </thead>
               <tbody>
-                {candidates.map((candidate) => (
+                {sortedCandidates.map((candidate) => (
                   <tr
                     key={candidate.ticker}
                     className={candidate.ticker === selected?.ticker ? 'selected-row' : ''}
-                    onClick={() => setSelectedTicker(candidate.ticker)}
+                    onClick={() => selectCandidateTicker(candidate.ticker)}
                   >
-                    <td className="ticker-cell">{candidate.ticker}</td>
-                    <td>{candidate.strategy}</td>
-                    <td>{candidate.score}</td>
-                    <td>{candidate.currentPrice}</td>
-                    <td>{candidate.entryArea}</td>
-                    <td>{candidate.stop}</td>
-                    <td>{candidate.targetExit}</td>
+                    {visibleCandidateColumns.map((key) => (
+                      <ScannerCandidateCell
+                        key={key}
+                        columnKey={key}
+                        candidate={candidate}
+                        onTickerClick={openMaximizedTicker}
+                      />
+                    ))}
                   </tr>
                 ))}
-                {candidates.length === 0 && (
+                {sortedCandidates.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="empty-cell">
-                      No scanner candidates available.
+                    <td colSpan={visibleCandidateColumns.length} className="empty-cell">
+                      No candidates match the current filters.
                     </td>
                   </tr>
                 )}
@@ -1804,6 +2166,7 @@ function CandidatesPage() {
             {selected && (
               <Link
                 className="link-button"
+                onClick={() => rememberRecentTicker(selected.ticker, 'candidates')}
                 to={`/fundamentals?ticker=${encodeURIComponent(selected.ticker)}${latestWatchlist.data?.run_id ? `&run_id=${latestWatchlist.data.run_id}` : ''}`}
               >
                 Fundamental Analysis
@@ -2679,6 +3042,252 @@ function CacheWarmupPage() {
   );
 }
 
+function CurrentPriceInfo() {
+  const anchorRef = useRef<HTMLSpanElement | null>(null);
+  const tooltipId = useId();
+  const [tooltipPosition, setTooltipPosition] = useState<{
+    left: number;
+    top: number;
+    width: number;
+  } | null>(null);
+
+  function hideTooltip() {
+    setTooltipPosition(null);
+  }
+
+  function showTooltip() {
+    const anchor = anchorRef.current;
+    if (!anchor) return;
+
+    const bounds = anchor.getBoundingClientRect();
+    const width = Math.min(360, Math.max(160, window.innerWidth - 24));
+    const centeredLeft = bounds.left + bounds.width / 2 - width / 2;
+    const left = Math.min(
+      Math.max(12, centeredLeft),
+      Math.max(12, window.innerWidth - width - 12)
+    );
+
+    setTooltipPosition({
+      left,
+      top: bounds.bottom + 8,
+      width
+    });
+  }
+
+  return (
+    <>
+      <span
+        ref={anchorRef}
+        className="current-price-info-icon"
+        aria-label={currentPriceInfoText}
+        aria-describedby={tooltipPosition ? tooltipId : undefined}
+        role="img"
+        onMouseEnter={showTooltip}
+        onMouseLeave={hideTooltip}
+      >
+        <Info size={14} aria-hidden="true" />
+      </span>
+      {tooltipPosition &&
+        createPortal(
+          <span
+            id={tooltipId}
+            className="current-price-tooltip"
+            role="tooltip"
+            style={tooltipPosition}
+          >
+            {currentPriceInfoText}
+          </span>,
+          document.body
+        )}
+    </>
+  );
+}
+
+function ScannerCandidateHeader({
+  columnKey,
+  valuationMode,
+  sort,
+  onSort,
+  onResize,
+  onResizeBy,
+  onAutoFit
+}: {
+  columnKey: ScannerColumnKey;
+  valuationMode: boolean;
+  sort: CandidateSort;
+  onSort: (key: CandidateSortKey) => void;
+  onResize: (key: ScannerColumnKey, event: ReactPointerEvent<HTMLDivElement>) => void;
+  onResizeBy: (key: ScannerColumnKey, delta: number) => void;
+  onAutoFit: (key: ScannerColumnKey) => void;
+}) {
+  const label = scannerColumnHeaderLabel(columnKey, valuationMode);
+
+  return (
+    <SortableHeader
+      label={label}
+      sortKey={scannerColumnSortKey(columnKey)}
+      columnKey={columnKey}
+      resizeLabel={scannerColumnLabels[columnKey]}
+      sort={sort}
+      onSort={onSort}
+      onResize={onResize}
+      onResizeBy={onResizeBy}
+      onAutoFit={onAutoFit}
+    />
+  );
+}
+
+function ScannerCandidateCell({
+  columnKey,
+  candidate,
+  onTickerClick
+}: {
+  columnKey: ScannerColumnKey;
+  candidate: DisplayCandidate;
+  onTickerClick: (ticker: string) => void;
+}) {
+  switch (columnKey) {
+    case 'ticker':
+      return (
+        <td className="ticker-cell">
+          <button
+            className="ticker-link ticker-link-button"
+            type="button"
+            aria-label={`Open ${candidate.ticker} maximized chart`}
+            title={`Open ${candidate.ticker} maximized chart`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onTickerClick(candidate.ticker);
+            }}
+          >
+            {candidate.ticker}
+          </button>
+          {candidate.companyName && (
+            <span className="company-name">{candidate.companyName}</span>
+          )}
+        </td>
+      );
+    case 'strategy':
+      return <td>{candidate.strategy}</td>;
+    case 'score':
+      return <td>{candidate.score}</td>;
+    case 'currentPrice':
+      return <td>{candidate.currentPrice}</td>;
+    case 'fairValue':
+      return <td>{candidate.fairValue}</td>;
+    case 'dcfUpside':
+      return <td>{candidate.marginOfSafety}</td>;
+    case 'validation':
+      return (
+        <FundamentalSummaryCell
+          label={candidate.validationLabel}
+          value={scoreOutOf100(candidate.validationScore)}
+        />
+      );
+    case 'quality':
+      return (
+        <FundamentalSummaryCell
+          label={candidate.qualityLabel}
+          value={scoreOutOf100(candidate.qualityScore)}
+        />
+      );
+    case 'dcfEstimate':
+      return (
+        <FundamentalSummaryCell
+          label={candidate.dcfLabel}
+          value={candidate.marginOfSafety}
+        />
+      );
+    case 'risk':
+      return (
+        <FundamentalSummaryCell
+          label={candidate.riskLabel}
+          value={scoreOutOf100(candidate.riskScore)}
+        />
+      );
+    case 'relativeStrength':
+      return <td>{candidate.relativeStrength}</td>;
+    case 'relativeVolume':
+      return <td>{candidate.relativeVolume}</td>;
+    case 'atr':
+      return <td>{candidate.atr}</td>;
+    case 'fiveDayRange':
+      return <td>{candidate.fiveDayRange}</td>;
+    case 'entry':
+      return <td>{candidate.entryArea}</td>;
+    case 'stop':
+      return <td>{candidate.stop}</td>;
+    case 'target':
+      return <td>{candidate.targetExit}</td>;
+    case 'select':
+      return null;
+  }
+}
+
+function scannerColumnSortKey(columnKey: ScannerColumnKey): CandidateSortKey {
+  switch (columnKey) {
+    case 'select':
+    case 'ticker':
+      return 'ticker';
+    case 'strategy':
+      return 'strategy';
+    case 'score':
+      return 'score';
+    case 'currentPrice':
+      return 'currentPrice';
+    case 'fairValue':
+      return 'fairValue';
+    case 'dcfUpside':
+    case 'dcfEstimate':
+      return 'marginOfSafety';
+    case 'validation':
+      return 'validationScore';
+    case 'quality':
+      return 'qualityScore';
+    case 'risk':
+      return 'riskScore';
+    case 'relativeStrength':
+      return 'relativeStrength';
+    case 'relativeVolume':
+      return 'relativeVolume';
+    case 'atr':
+      return 'atr';
+    case 'fiveDayRange':
+      return 'fiveDayRange';
+    case 'entry':
+      return 'entryArea';
+    case 'stop':
+      return 'stop';
+    case 'target':
+      return 'targetExit';
+  }
+}
+
+function scannerColumnHeaderLabel(
+  columnKey: ScannerColumnKey,
+  valuationMode: boolean
+): ReactNode {
+  switch (columnKey) {
+    case 'score':
+      return valuationMode ? 'Strategy Score' : 'Score';
+    case 'currentPrice':
+      return (
+        <span className="th-with-info">
+          Current Price
+          <CurrentPriceInfo />
+        </span>
+      );
+    case 'relativeStrength':
+      return 'RS';
+    case 'relativeVolume':
+      return 'RVOL';
+    case 'select':
+      return '';
+    default:
+      return scannerColumnLabels[columnKey];
+  }
+}
+
 function SortableHeader({
   label,
   sortKey,
@@ -2775,6 +3384,19 @@ function FundamentalSummaryCell({ label, value }: { label: string; value: string
 
 function scoreOutOf100(value: string): string | null {
   return value === 'n/a' ? null : `${value}/100`;
+}
+
+function countActiveScannerResultFilters(filters: ScannerResultFilters): number {
+  const classificationCount = [
+    filters.validation,
+    filters.quality,
+    filters.dcf,
+    filters.risk
+  ].filter((value) => value !== 'all').length;
+
+  return classificationCount +
+    (filters.minPrice === null ? 0 : 1) +
+    (filters.maxPrice === null ? 0 : 1);
 }
 
 function scannerColumnsForMode(valuationMode: boolean): ScannerColumnKey[] {
@@ -4639,11 +5261,6 @@ function scanRunIdFromJob(job?: JobResponse): number | null {
   return typeof runId === 'number' ? runId : null;
 }
 
-function rowCountFromJob(job?: JobResponse): number | undefined {
-  const analyses = job?.result?.analyses;
-  return typeof analyses === 'number' ? analyses : undefined;
-}
-
 type CandidateTradeEdits = {
   entry: string;
   stop: string;
@@ -4790,6 +5407,11 @@ function inputNumberOrNull(value: string): number | null {
 
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function priceFilterNumberOrNull(value: string): number | null {
+  const parsed = inputNumberOrNull(value);
+  return parsed !== null && parsed >= 0 ? parsed : null;
 }
 
 function emptyNumberToNull(value: number | null | undefined): number | null {

@@ -9,6 +9,7 @@ import {
   loadFundamentalState,
   validationSummaryIssues
 } from './FundamentalAnalysisPage';
+import { rememberRecentTicker } from '../../lib/recentTicker';
 
 const displaySettings = { minStopDistancePercent: 1, minFiveDayRange: 10 };
 
@@ -52,6 +53,28 @@ describe('fundamental analysis state', () => {
 
     expect(state.ticker).toBe('');
     expect(localStorage.getItem('swing-scanner.fundamentals.v1')).toBeNull();
+  });
+
+  it('defaults to the most recently selected scanner ticker', () => {
+    localStorage.setItem(
+      'swing-scanner.fundamentals.v1',
+      JSON.stringify({ version: 1, ticker: 'MSFT', tickerDraft: 'MSFT' })
+    );
+    rememberRecentTicker('NVDA', 'daily-scanner');
+
+    const state = loadFundamentalState(new URLSearchParams());
+
+    expect(state.ticker).toBe('NVDA');
+    expect(state.tickerDraft).toBe('NVDA');
+  });
+
+  it('lets an explicit ticker link override the recent scanner ticker', () => {
+    rememberRecentTicker('NVDA', 'candidates');
+
+    const state = loadFundamentalState(new URLSearchParams('ticker=AAPL'));
+
+    expect(state.ticker).toBe('AAPL');
+    expect(state.tickerDraft).toBe('AAPL');
   });
 
   it('filters candidate navigation by triggered strategy', () => {

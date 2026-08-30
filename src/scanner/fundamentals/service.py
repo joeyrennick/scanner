@@ -10,10 +10,14 @@ from scanner.fundamentals.validation import validate_fundamental_analysis
 
 
 DEFAULT_ASSUMPTIONS = {
-    "discount_rate": 0.10,
     "terminal_growth_rate": 0.025,
     "projection_years": 5,
+    "risk_free_rate": 0.0425,
+    "equity_risk_premium": 0.055,
+    "beta": 1.0,
 }
+
+ANALYSIS_SCHEMA_VERSION = 4
 
 
 class FundamentalAnalysisService:
@@ -42,7 +46,7 @@ class FundamentalAnalysisService:
         warnings = _data_warnings(normalized, current_price)
 
         analysis = {
-            "schema_version": 3,
+            "schema_version": ANALYSIS_SCHEMA_VERSION,
             "ticker": ticker,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "source": _source_label(
@@ -86,8 +90,9 @@ class FundamentalAnalysisService:
         )
         quality = _quality_analysis(normalized)
         analysis = {
-            "schema_version": 3,
+            "schema_version": ANALYSIS_SCHEMA_VERSION,
             "ticker": ticker,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
             "source": _source_label(
                 self.fundamentals_provider,
                 self.price_provider,
@@ -100,6 +105,11 @@ class FundamentalAnalysisService:
             "quality": quality,
             "valuation": valuation,
             "risk": risk,
+            "warnings": _data_warnings(normalized, current_price),
+            "confidence": _confidence(
+                normalized,
+                _data_warnings(normalized, current_price),
+            ),
         }
         analysis["validation"] = validate_fundamental_analysis(analysis)
         return analysis
@@ -154,10 +164,35 @@ def _normalize(raw: dict[str, object]) -> dict[str, Any]:
         revenue = _number(income, "revenue")
         gross_profit = _number(income, "gross_profit")
         operating_income = _number(income, "operating_income")
+        pretax_income = _number(income, "pretax_income")
+        income_tax_expense = _number(income, "income_tax_expense")
+        interest_expense = _number(income, "interest_expense")
+        effective_tax_rate = (
+            _clamp(income_tax_expense / pretax_income, 0, 0.50)
+            if income_tax_expense is not None
+            and pretax_income is not None
+            and pretax_income > 0
+            else None
+        )
+        depreciation = _number(cash, "depreciation_and_amortization")
         net_income = _number(
             income,
             "net_income_loss_attributable_common_shareholders",
             "consolidated_net_income_loss",
+        )
+        cash_and_equivalents = _number(balance, "cash_and_equivalents")
+        current_assets = _number(balance, "total_current_assets")
+        current_liabilities = _number(balance, "total_current_liabilities")
+        current_debt = _number(balance, "debt_current")
+        non_cash_working_capital = (
+            current_assets
+            - cash_and_equivalents
+            - current_liabilities
+            + (current_debt or 0)
+            if current_assets is not None
+            and cash_and_equivalents is not None
+            and current_liabilities is not None
+            else None
         )
         history.append(
             {
@@ -166,15 +201,21 @@ def _normalize(raw: dict[str, object]) -> dict[str, Any]:
                 "revenue": revenue,
                 "gross_profit": gross_profit,
                 "operating_income": operating_income,
+                "pretax_income": pretax_income,
+                "income_tax_expense": income_tax_expense,
+                "effective_tax_rate": effective_tax_rate,
+                "interest_expense": interest_expense,
                 "net_income": net_income,
                 "operating_cash_flow": operating_cash,
                 "capital_expenditures": capex,
+                "depreciation_and_amortization": depreciation,
                 "free_cash_flow": free_cash_flow,
                 "gross_margin": _ratio(gross_profit, revenue),
                 "operating_margin": _ratio(operating_income, revenue),
-                "cash_and_equivalents": _number(balance, "cash_and_equivalents"),
-                "current_assets": _number(balance, "total_current_assets"),
-                "current_liabilities": _number(balance, "total_current_liabilities"),
+                "cash_and_equivalents": cash_and_equivalents,
+                "current_assets": current_assets,
+                "current_liabilities": current_liabilities,
+                "non_cash_working_capital": non_cash_working_capital,
                 "debt": _sum_numbers(
                     _number(balance, "debt_current"),
                     _number(balance, "long_term_debt_and_capital_lease_obligations"),
@@ -194,6 +235,41 @@ def _normalize(raw: dict[str, object]) -> dict[str, Any]:
                     "diluted_shares_scale_factor",
                 ),
                 "diluted_eps": _number(income, "diluted_earnings_per_share"),
+            }
+        )
+
+    for index, row in enumerate(history):
+        previous = history[index - 1] if index > 0 else {}
+        current_nwc = row.get("non_cash_working_capital")
+        previous_nwc = previous.get("non_cash_working_capital")
+        change_nwc = (
+            current_nwc - previous_nwc
+            if current_nwc is not None and previous_nwc is not None
+            else None
+        )
+        tax_rate = row.get("effective_tax_rate")
+        operating_income = row.get("operating_income")
+        nopat = (
+            operating_income * (1 - tax_rate)
+            if operating_income is not None and tax_rate is not None
+            else None
+        )
+        depreciation = row.get("depreciation_and_amortization")
+        capex = row.get("capital_expenditures")
+        fcff = (
+            nopat + depreciation + capex - change_nwc
+            if nopat is not None
+            and depreciation is not None
+            and capex is not None
+            and change_nwc is not None
+            else None
+        )
+        row.update(
+            {
+                "change_in_working_capital": change_nwc,
+                "nopat": nopat,
+                "fcff": fcff,
+                "fcff_margin": _ratio(fcff, row.get("revenue")),
             }
         )
 
@@ -256,30 +332,235 @@ def _valuation_analysis(
     history = data["financial_history"]
     latest = history[-1] if history else {}
     revenue_cagr = _cagr([row["revenue"] for row in history])
-    base_growth = _clamp(revenue_cagr if revenue_cagr is not None else 0.05, 0, 0.15)
-    assumptions = {
-        **DEFAULT_ASSUMPTIONS,
-        "base_growth_rate": base_growth,
-        "bear_growth_rate": max(-0.02, base_growth - 0.04),
-        "bull_growth_rate": min(0.25, base_growth + 0.04),
-        **{key: value for key, value in overrides.items() if value is not None},
-    }
-    scenarios = []
+    base_growth = _clamp(
+        revenue_cagr if revenue_cagr is not None else 0.05,
+        0,
+        0.15,
+    )
+    legacy_overrides = dict(overrides)
+    for scenario in ("bear", "base", "bull"):
+        legacy_key = f"{scenario}_growth_rate"
+        driver_key = f"{scenario}_revenue_growth_rate"
+        if legacy_key in legacy_overrides and driver_key not in legacy_overrides:
+            legacy_overrides[driver_key] = legacy_overrides[legacy_key]
 
+    operating_margins = [
+        row.get("operating_margin") for row in history[-3:]
+    ]
+    normalized_margin = _median(operating_margins)
+    latest_margin = _finite(latest.get("operating_margin"))
+    historical_tax_rate = _median(
+        [row.get("effective_tax_rate") for row in history[-3:]]
+    )
+    tax_rate = _clamp(
+        0.21 if historical_tax_rate is None else historical_tax_rate,
+        0,
+        0.50,
+    )
+    historical_depreciation_rate = _median(
+        [
+            _ratio(
+                row.get("depreciation_and_amortization"),
+                row.get("revenue"),
+            )
+            for row in history[-3:]
+        ]
+    )
+    depreciation_rate = _clamp(
+        0.03
+        if historical_depreciation_rate is None
+        else historical_depreciation_rate,
+        0,
+        0.25,
+    )
+    historical_capex_rate = _median(
+        [
+            _ratio(
+                abs(row["capital_expenditures"])
+                if row.get("capital_expenditures") is not None
+                else None,
+                row.get("revenue"),
+            )
+            for row in history[-3:]
+        ]
+    )
+    capex_rate = _clamp(
+        0.04 if historical_capex_rate is None else historical_capex_rate,
+        0,
+        0.40,
+    )
+    historical_working_capital_rate = _median(
+        [
+            _ratio(
+                row.get("non_cash_working_capital"),
+                row.get("revenue"),
+            )
+            for row in history[-3:]
+        ]
+    )
+    working_capital_rate = _clamp(
+        0.05
+        if historical_working_capital_rate is None
+        else historical_working_capital_rate,
+        -0.25,
+        0.50,
+    )
+    shares = _finite(latest.get("diluted_shares"))
+    debt = _finite(latest.get("debt"))
+    cash = _finite(latest.get("cash_and_equivalents"))
+    market_cap = (
+        current_price * shares
+        if current_price is not None and shares is not None
+        else _finite(data.get("company", {}).get("market_cap"))
+    )
+    interest_expense = abs(_finite(latest.get("interest_expense")) or 0)
+    derived_cost_of_debt = (
+        _clamp(interest_expense / debt, 0.02, 0.15)
+        if debt is not None and debt > 0 and interest_expense > 0
+        else 0.06
+    )
+    base_assumptions = {
+        **DEFAULT_ASSUMPTIONS,
+        "base_revenue_growth_rate": base_growth,
+        "bear_revenue_growth_rate": max(-0.02, base_growth - 0.04),
+        "bull_revenue_growth_rate": min(0.25, base_growth + 0.04),
+        "base_operating_margin": normalized_margin,
+        "bear_operating_margin": (
+            normalized_margin - 0.02 if normalized_margin is not None else None
+        ),
+        "bull_operating_margin": (
+            normalized_margin + 0.02 if normalized_margin is not None else None
+        ),
+        "tax_rate": tax_rate,
+        "depreciation_rate": depreciation_rate,
+        "capex_rate": capex_rate,
+        "working_capital_rate": working_capital_rate,
+        "cost_of_debt": derived_cost_of_debt,
+    }
+    assumptions = {
+        **base_assumptions,
+        **{
+            key: value
+            for key, value in legacy_overrides.items()
+            if value is not None
+        },
+    }
+    overridden_base_growth = _finite(
+        legacy_overrides.get("base_revenue_growth_rate")
+    )
+    if overridden_base_growth is not None:
+        if "bear_revenue_growth_rate" not in legacy_overrides:
+            assumptions["bear_revenue_growth_rate"] = max(
+                -0.02,
+                overridden_base_growth - 0.04,
+            )
+        if "bull_revenue_growth_rate" not in legacy_overrides:
+            assumptions["bull_revenue_growth_rate"] = min(
+                0.25,
+                overridden_base_growth + 0.04,
+            )
+    overridden_base_margin = _finite(
+        legacy_overrides.get("base_operating_margin")
+    )
+    if overridden_base_margin is not None:
+        if "bear_operating_margin" not in legacy_overrides:
+            assumptions["bear_operating_margin"] = overridden_base_margin - 0.02
+        if "bull_operating_margin" not in legacy_overrides:
+            assumptions["bull_operating_margin"] = overridden_base_margin + 0.02
+    assumptions["discount_rate"] = _company_wacc(
+        assumptions,
+        market_cap=market_cap,
+        debt=debt,
+    )
+    base_discount_rate = float(assumptions["discount_rate"])
+    base_terminal_growth = float(assumptions["terminal_growth_rate"])
+    assumptions.setdefault(
+        "bear_discount_rate",
+        min(0.20, base_discount_rate + 0.015),
+    )
+    assumptions.setdefault(
+        "bull_discount_rate",
+        max(base_terminal_growth + 0.01, base_discount_rate - 0.01),
+    )
+    assumptions.setdefault(
+        "bear_terminal_growth_rate",
+        max(0, base_terminal_growth - 0.005),
+    )
+    assumptions.setdefault(
+        "bull_terminal_growth_rate",
+        min(0.04, base_terminal_growth + 0.005),
+    )
+
+    scenarios = []
     for name in ("bear", "base", "bull"):
-        growth = _finite(assumptions.get(f"{name}_growth_rate")) or 0
-        value = _dcf_per_share(
-            free_cash_flow=latest.get("free_cash_flow"),
-            growth=growth,
-            discount_rate=float(assumptions["discount_rate"]),
-            terminal_growth=float(assumptions["terminal_growth_rate"]),
-            years=int(assumptions["projection_years"]),
-            cash=latest.get("cash_and_equivalents"),
-            debt=latest.get("debt"),
-            shares=latest.get("diluted_shares"),
+        growth = _finite(
+            assumptions.get(f"{name}_revenue_growth_rate")
         )
-        upside = _ratio(value - current_price, current_price) if value is not None and current_price else None
-        scenarios.append({"name": name, "growth_rate": growth, "fair_value": value, "upside": upside})
+        target_margin = _finite(assumptions.get(f"{name}_operating_margin"))
+        scenario_discount_rate = _finite(
+            assumptions.get(f"{name}_discount_rate")
+        )
+        discount_rate = float(
+            assumptions["discount_rate"]
+            if scenario_discount_rate is None
+            else scenario_discount_rate
+        )
+        scenario_terminal_growth = _finite(
+            assumptions.get(f"{name}_terminal_growth_rate")
+        )
+        terminal_growth = float(
+            assumptions["terminal_growth_rate"]
+            if scenario_terminal_growth is None
+            else scenario_terminal_growth
+        )
+        forecast = _project_fcff(
+            starting_revenue=_finite(latest.get("revenue")),
+            starting_operating_margin=latest_margin,
+            starting_working_capital=_finite(
+                latest.get("non_cash_working_capital")
+            ),
+            initial_growth=growth,
+            target_operating_margin=target_margin,
+            terminal_growth=terminal_growth,
+            years=int(assumptions["projection_years"]),
+            tax_rate=float(assumptions["tax_rate"]),
+            depreciation_rate=float(assumptions["depreciation_rate"]),
+            capex_rate=float(assumptions["capex_rate"]),
+            working_capital_rate=float(assumptions["working_capital_rate"]),
+        )
+        bridge = _fcff_valuation_bridge(
+            forecast,
+            discount_rate=discount_rate,
+            terminal_growth=terminal_growth,
+            cash=cash,
+            debt=debt,
+            shares=shares,
+        )
+        for row in forecast:
+            row["discount_factor"] = (1 + discount_rate) ** row["year"]
+            row["present_value_fcff"] = (
+                row["fcff"] / row["discount_factor"]
+            )
+        value = bridge.get("fair_value_per_share")
+        upside = (
+            _ratio(value - current_price, current_price)
+            if value is not None and current_price
+            else None
+        )
+        scenarios.append(
+            {
+                "name": name,
+                "growth_rate": growth,
+                "revenue_growth_rate": growth,
+                "operating_margin": target_margin,
+                "discount_rate": discount_rate,
+                "terminal_growth_rate": terminal_growth,
+                "fair_value": value,
+                "upside": upside,
+                "forecast": forecast,
+                "valuation_bridge": bridge,
+            }
+        )
 
     base = next(item for item in scenarios if item["name"] == "base")
     upside = base["upside"]
@@ -287,15 +568,280 @@ def _valuation_analysis(
     if upside is not None:
         label = "undervalued" if upside >= 0.15 else "overvalued" if upside <= -0.15 else "fairly valued"
 
+    required_inputs = {
+        "revenue": latest.get("revenue") is not None,
+        "operating_income": latest.get("operating_income") is not None,
+        "income_taxes": any(
+            row.get("effective_tax_rate") is not None for row in history
+        ),
+        "depreciation_and_amortization": any(
+            row.get("depreciation_and_amortization") is not None
+            for row in history
+        ),
+        "capital_expenditures": any(
+            row.get("capital_expenditures") is not None for row in history
+        ),
+        "working_capital": any(
+            row.get("non_cash_working_capital") is not None for row in history
+        ),
+        "cash": cash is not None,
+        "debt": debt is not None,
+        "diluted_shares": shares is not None and shares > 0,
+    }
+    available_inputs = sum(required_inputs.values())
+    confidence = (
+        "high"
+        if base["fair_value"] is not None
+        and available_inputs == len(required_inputs)
+        and len(history) >= 4
+        else "medium" if base["fair_value"] is not None else "low"
+    )
     return {
+        "model": "driver_based_fcff",
         "label": label,
-        "confidence": "medium" if base["fair_value"] is not None else "low",
+        "confidence": confidence,
         "current_price": current_price,
         "margin_of_safety": upside,
         "assumptions": assumptions,
         "scenarios": scenarios,
+        "sensitivity": _fcff_sensitivity(
+            base,
+            current_price=current_price,
+            cash=cash,
+            debt=debt,
+            shares=shares,
+        ),
+        "input_quality": {
+            "fields": required_inputs,
+            "available": available_inputs,
+            "required": len(required_inputs),
+            "missing": [
+                name for name, available in required_inputs.items() if not available
+            ],
+        },
         "multiples": data["ratios"],
     }
+
+
+def _company_wacc(
+    assumptions: dict[str, Any],
+    *,
+    market_cap: float | None,
+    debt: float | None,
+) -> float:
+    override = _finite(assumptions.get("discount_rate"))
+    risk_free_rate = float(assumptions["risk_free_rate"])
+    equity_risk_premium = float(assumptions["equity_risk_premium"])
+    beta = max(0, float(assumptions["beta"]))
+    tax_rate = _clamp(float(assumptions["tax_rate"]), 0, 0.50)
+    cost_of_debt = _clamp(float(assumptions["cost_of_debt"]), 0, 0.25)
+    cost_of_equity = risk_free_rate + beta * equity_risk_premium
+    equity = max(0, market_cap or 0)
+    borrowing = max(0, debt or 0)
+    capital = equity + borrowing
+    assumptions["cost_of_equity"] = cost_of_equity
+    if capital <= 0:
+        assumptions["equity_weight"] = 1.0
+        assumptions["debt_weight"] = 0.0
+        if override is not None:
+            return override
+        return _clamp(cost_of_equity, 0.06, 0.18)
+    assumptions["equity_weight"] = equity / capital
+    assumptions["debt_weight"] = borrowing / capital
+    if override is not None:
+        return override
+    wacc = (
+        equity / capital * cost_of_equity
+        + borrowing / capital * cost_of_debt * (1 - tax_rate)
+    )
+    return _clamp(wacc, 0.06, 0.18)
+
+
+def _project_fcff(
+    *,
+    starting_revenue: float | None,
+    starting_operating_margin: float | None,
+    starting_working_capital: float | None,
+    initial_growth: float | None,
+    target_operating_margin: float | None,
+    terminal_growth: float,
+    years: int,
+    tax_rate: float,
+    depreciation_rate: float,
+    capex_rate: float,
+    working_capital_rate: float,
+) -> list[dict[str, float | int]]:
+    if (
+        starting_revenue is None
+        or starting_revenue <= 0
+        or starting_operating_margin is None
+        or initial_growth is None
+        or target_operating_margin is None
+        or years <= 0
+    ):
+        return []
+    revenue = starting_revenue
+    working_capital = (
+        starting_working_capital
+        if starting_working_capital is not None
+        else starting_revenue * working_capital_rate
+    )
+    forecast: list[dict[str, float | int]] = []
+    for year in range(1, years + 1):
+        growth = _fade(initial_growth, terminal_growth, year, years)
+        operating_margin = _fade(
+            starting_operating_margin,
+            target_operating_margin,
+            year,
+            years,
+        )
+        revenue *= 1 + growth
+        operating_income = revenue * operating_margin
+        nopat = operating_income * (1 - tax_rate)
+        depreciation = revenue * depreciation_rate
+        capital_expenditures = revenue * capex_rate
+        next_working_capital = revenue * working_capital_rate
+        change_in_working_capital = next_working_capital - working_capital
+        fcff = (
+            nopat
+            + depreciation
+            - capital_expenditures
+            - change_in_working_capital
+        )
+        forecast.append(
+            {
+                "year": year,
+                "revenue_growth_rate": growth,
+                "revenue": revenue,
+                "operating_margin": operating_margin,
+                "operating_income": operating_income,
+                "tax_rate": tax_rate,
+                "nopat": nopat,
+                "depreciation_and_amortization": depreciation,
+                "capital_expenditures": capital_expenditures,
+                "change_in_working_capital": change_in_working_capital,
+                "fcff": fcff,
+            }
+        )
+        working_capital = next_working_capital
+    return forecast
+
+
+def _fcff_valuation_bridge(
+    forecast: list[dict[str, Any]],
+    *,
+    discount_rate: float,
+    terminal_growth: float,
+    cash: float | None,
+    debt: float | None,
+    shares: float | None,
+) -> dict[str, float | None]:
+    if (
+        not forecast
+        or cash is None
+        or debt is None
+        or shares is None
+        or shares <= 0
+        or discount_rate <= terminal_growth
+    ):
+        return {
+            "present_value_forecast": None,
+            "terminal_value": None,
+            "present_value_terminal": None,
+            "enterprise_value": None,
+            "cash": cash,
+            "debt": debt,
+            "equity_value": None,
+            "diluted_shares": shares,
+            "fair_value_per_share": None,
+            "terminal_value_share": None,
+        }
+    present_value_forecast = sum(
+        float(row["fcff"]) / ((1 + discount_rate) ** int(row["year"]))
+        for row in forecast
+    )
+    last_fcff = float(forecast[-1]["fcff"])
+    years = int(forecast[-1]["year"])
+    terminal_value = (
+        last_fcff
+        * (1 + terminal_growth)
+        / (discount_rate - terminal_growth)
+    )
+    present_value_terminal = terminal_value / ((1 + discount_rate) ** years)
+    enterprise_value = present_value_forecast + present_value_terminal
+    equity_value = enterprise_value + cash - debt
+    fair_value = max(0, equity_value / shares)
+    return {
+        "present_value_forecast": present_value_forecast,
+        "terminal_value": terminal_value,
+        "present_value_terminal": present_value_terminal,
+        "enterprise_value": enterprise_value,
+        "cash": cash,
+        "debt": debt,
+        "equity_value": equity_value,
+        "diluted_shares": shares,
+        "fair_value_per_share": fair_value,
+        "terminal_value_share": _ratio(
+            present_value_terminal,
+            enterprise_value,
+        ),
+    }
+
+
+def _fcff_sensitivity(
+    base_scenario: dict[str, Any],
+    *,
+    current_price: float | None,
+    cash: float | None,
+    debt: float | None,
+    shares: float | None,
+) -> dict[str, Any]:
+    base_discount = float(base_scenario["discount_rate"])
+    base_terminal = float(base_scenario["terminal_growth_rate"])
+    discount_rates = [
+        round(_clamp(base_discount + change, 0.05, 0.20), 4)
+        for change in (-0.02, -0.01, 0, 0.01, 0.02)
+    ]
+    terminal_growth_rates = [
+        round(_clamp(base_terminal + change, 0, 0.05), 4)
+        for change in (-0.01, -0.005, 0, 0.005, 0.01)
+    ]
+    values = []
+    for terminal_growth in terminal_growth_rates:
+        row = []
+        for discount_rate in discount_rates:
+            bridge = _fcff_valuation_bridge(
+                base_scenario.get("forecast") or [],
+                discount_rate=discount_rate,
+                terminal_growth=terminal_growth,
+                cash=cash,
+                debt=debt,
+                shares=shares,
+            )
+            fair_value = bridge.get("fair_value_per_share")
+            row.append(
+                {
+                    "fair_value": fair_value,
+                    "upside": (
+                        _ratio(fair_value - current_price, current_price)
+                        if fair_value is not None and current_price
+                        else None
+                    ),
+                }
+            )
+        values.append(row)
+    return {
+        "discount_rates": discount_rates,
+        "terminal_growth_rates": terminal_growth_rates,
+        "values": values,
+    }
+
+
+def _fade(start: float, target: float, year: int, years: int) -> float:
+    if years <= 1:
+        return target
+    weight = (year - 1) / (years - 1)
+    return start + (target - start) * weight
 
 
 def _risk_analysis(data: dict[str, Any], history: pd.DataFrame, current_price) -> dict[str, Any]:
@@ -381,22 +927,6 @@ def _source_label(fundamentals_provider, price_provider) -> str:
     return f"{fundamentals_source} (financials); {str(price_source).title()} (prices)"
 
 
-def _dcf_per_share(free_cash_flow, growth, discount_rate, terminal_growth, years, cash, debt, shares):
-    values = [free_cash_flow, cash, debt, shares]
-    if any(value is None for value in values) or free_cash_flow <= 0 or shares <= 0:
-        return None
-    if discount_rate <= terminal_growth or years <= 0:
-        return None
-    projected = free_cash_flow
-    present_value = 0.0
-    for year in range(1, years + 1):
-        projected *= 1 + growth
-        present_value += projected / ((1 + discount_rate) ** year)
-    terminal_value = projected * (1 + terminal_growth) / (discount_rate - terminal_growth)
-    equity_value = present_value + terminal_value / ((1 + discount_rate) ** years) + cash - debt
-    return max(0.0, equity_value / shares)
-
-
 def _annual_rows(value: object) -> list[dict]:
     rows = [dict(row) for row in list(value or []) if isinstance(row, dict)]
     annual = [row for row in rows if row.get("timeframe") in {None, "annual"}]
@@ -445,6 +975,16 @@ def _cagr(values: list) -> float | None:
     if len(present) < 2 or present[0] <= 0 or present[-1] <= 0:
         return None
     return (present[-1] / present[0]) ** (1 / (len(present) - 1)) - 1
+
+
+def _median(values: list) -> float | None:
+    present = sorted(value for value in values if value is not None)
+    if not present:
+        return None
+    middle = len(present) // 2
+    if len(present) % 2:
+        return float(present[middle])
+    return float((present[middle - 1] + present[middle]) / 2)
 
 
 def _range(values: list) -> float | None:

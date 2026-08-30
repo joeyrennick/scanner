@@ -45,7 +45,7 @@ def test_validation_accepts_candidate_that_passes_all_automated_gates():
     assert result["status"] == "validated"
     assert result["label"] == "Validated candidate"
     assert result["score"] == 100
-    assert result["policy_version"] == 3
+    assert result["policy_version"] == 4
     assert result["manual_filing_review_required"] is True
 
 

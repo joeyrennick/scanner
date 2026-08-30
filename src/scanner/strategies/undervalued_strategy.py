@@ -10,7 +10,7 @@ from scanner.strategies.strategy_category import StrategyCategory
 @dataclass(frozen=True)
 class UndervaluedStrategyConfig(StrategyConfig):
     minimum_margin_of_safety: float = 0.15
-    discount_rate: float = 0.10
+    discount_rate: float | None = None
     terminal_growth_rate: float = 0.025
     projection_years: int = 5
     triggered_score: int = 20
@@ -68,11 +68,13 @@ class UndervaluedStrategy(BaseStrategy):
         )
 
     def assumptions(self) -> dict[str, float | int]:
-        return {
-            "discount_rate": self.config.discount_rate,
+        assumptions: dict[str, float | int] = {
             "terminal_growth_rate": self.config.terminal_growth_rate,
             "projection_years": self.config.projection_years,
         }
+        if self.config.discount_rate is not None:
+            assumptions["discount_rate"] = self.config.discount_rate
+        return assumptions
 
 
 def _number(

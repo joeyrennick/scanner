@@ -511,7 +511,7 @@ def generate_fundamental_analysis_report(
     analysis_ticker = str(request.analysis.get("ticker") or "").upper()
     if not ticker or analysis_ticker != ticker:
         raise HTTPException(status_code=422, detail="Report ticker does not match analysis")
-    if request.analysis.get("schema_version") not in {1, 3}:
+    if request.analysis.get("schema_version") not in {1, 3, 4}:
         raise HTTPException(status_code=422, detail="Unsupported analysis schema version")
 
     output_dir = Path("output/fundamental_reports")

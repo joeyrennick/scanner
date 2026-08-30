@@ -211,13 +211,17 @@ describe('watchlist display helpers', () => {
         validation: 'needs_review',
         quality: 'weak',
         dcf: 'undervalued',
-        risk: 'low'
+        risk: 'low',
+        minPrice: 25,
+        maxPrice: 150.5
       })
     ).toEqual({
       validation: 'needs_review',
       quality: 'weak',
       dcf: 'undervalued',
-      risk: 'low'
+      risk: 'low',
+      minPrice: 25,
+      maxPrice: 150.5
     });
 
     expect(
@@ -225,7 +229,9 @@ describe('watchlist display helpers', () => {
         validation: 'obsolete',
         quality: 12,
         dcf: null,
-        risk: 'medium'
+        risk: 'medium',
+        minPrice: -1,
+        maxPrice: '100'
       })
     ).toEqual(defaultScannerResultFilters);
     expect(
@@ -237,6 +243,36 @@ describe('watchlist display helpers', () => {
           'Risk Level': 'high'
         },
         defaultScannerResultFilters
+      )
+    ).toBe(true);
+  });
+
+  it('filters inclusively by current price with a saved-price fallback', () => {
+    const filters = {
+      ...defaultScannerResultFilters,
+      minPrice: 25,
+      maxPrice: 100
+    };
+
+    expect(
+      rowMatchesScannerResultFilters(
+        { Price: 10, 'Current Price': 25 },
+        filters
+      )
+    ).toBe(true);
+    expect(rowMatchesScannerResultFilters({ Price: 100 }, filters)).toBe(true);
+    expect(rowMatchesScannerResultFilters({ Price: 24.99 }, filters)).toBe(false);
+    expect(
+      rowMatchesScannerResultFilters(
+        { Price: 50, 'Current Price': 100.01 },
+        filters
+      )
+    ).toBe(false);
+    expect(rowMatchesScannerResultFilters({}, filters)).toBe(false);
+    expect(
+      rowMatchesScannerResultFilters(
+        {},
+        { ...defaultScannerResultFilters, minPrice: null, maxPrice: null }
       )
     ).toBe(true);
   });
@@ -295,6 +331,7 @@ describe('watchlist display helpers', () => {
       }
     ];
     const filters = {
+      ...defaultScannerResultFilters,
       validation: 'needs_review',
       quality: 'weak',
       dcf: 'undervalued',
@@ -316,7 +353,9 @@ describe('watchlist display helpers', () => {
       validation: 'needs_review',
       quality: 'weak',
       dcf: 'undervalued',
-      risk: 'low'
+      risk: 'low',
+      minPrice: null,
+      maxPrice: null
     });
   });
 });

@@ -5,6 +5,7 @@ import pytest
 
 from scanner.config.settings import ScannerSettings
 from scanner.context import ScannerContext
+from scanner.fundamentals.cache import FundamentalAnalysisCache
 from scanner.services.undervalued_scan import (
     IncompleteCandidateAssessment,
     UndervaluedScanConfig,
@@ -72,6 +73,10 @@ class FakeSECFundamentalsProvider:
                     "period_end": f"{year}-12-31",
                     "fiscal_year": year,
                     "revenue": 10_000_000_000 + (year - 2021) * 1_000_000_000,
+                    "operating_income": 2_000_000_000 + (year - 2021) * 200_000_000,
+                    "pretax_income": 1_800_000_000,
+                    "income_tax_expense": 300_000_000,
+                    "interest_expense": 50_000_000,
                     "consolidated_net_income_loss": 1_500_000_000,
                     "diluted_shares_outstanding": 100_000_000,
                     "diluted_earnings_per_share": 15,
@@ -84,6 +89,8 @@ class FakeSECFundamentalsProvider:
                     "period_end": f"{year}-12-31",
                     "fiscal_year": year,
                     "cash_and_equivalents": 3_000_000_000,
+                    "total_current_assets": 5_000_000_000,
+                    "total_current_liabilities": 2_000_000_000,
                     "debt_current": 100_000_000,
                     "long_term_debt_and_capital_lease_obligations": 1_000_000_000,
                     "total_equity": 8_000_000_000,
@@ -96,11 +103,44 @@ class FakeSECFundamentalsProvider:
                     "period_end": f"{year}-12-31",
                     "net_cash_from_operating_activities": 2_500_000_000,
                     "purchase_of_property_plant_and_equipment": -500_000_000,
+                    "depreciation_and_amortization": 400_000_000,
                 }
                 for year in years
             ],
             "ratios": [],
         }
+
+
+class MixedRiskUniverseProvider:
+    def get_universe_tickers(self, universe):
+        assert universe == "all"
+        return ["BROKEN", "VALID"]
+
+    def get_company_name(self, ticker):
+        return f"{ticker} Common Stock"
+
+    def is_fundamental_common_equity(self, ticker):
+        return True
+
+
+class MixedRiskPriceProvider:
+    name = "test prices"
+
+    def download_price_data(self, ticker, period="5d"):
+        if period == "5y" and ticker == "BROKEN":
+            return pd.DataFrame(
+                {"Close": [1.0]},
+                index=pd.to_datetime(["2026-08-28"]),
+            )
+        if period == "5y":
+            return pd.DataFrame(
+                {"Close": [0.8 + (0.2 * index / 259) for index in range(260)]},
+                index=pd.date_range("2025-01-01", periods=260),
+            )
+        return pd.DataFrame(
+            {"Close": [1.0]},
+            index=pd.to_datetime(["2026-08-28"]),
+        )
 
 
 def test_undervalued_scan_ignores_price_and_technical_rules(tmp_path):
@@ -148,7 +188,14 @@ def test_undervalued_scan_ignores_price_and_technical_rules(tmp_path):
         "validated",
         "needs_review",
     }
-    assert result.dataframe.iloc[0]["Validation Policy Version"] == 3
+    assert result.dataframe.iloc[0]["Validation Policy Version"] == 4
+    assert result.dataframe.iloc[0]["DCF Discount Rate"] > 0
+    cached_analysis = FundamentalAnalysisCache(context.settings.market_data_cache_path).get(
+        "PENNY",
+        {},
+    )
+    assert cached_analysis is not None
+    assert cached_analysis["valuation"]["model"] == "driver_based_fcff"
     assert sec_provider.prepared == ["PENNY"]
     assert sec_provider.calls == ["PENNY", "EXPENSIVE"]
     assert price_provider.calls == [
@@ -180,3 +227,45 @@ def test_scanner_refuses_to_save_a_candidate_without_completed_validation():
         match="fundamental validation is incomplete",
     ):
         _require_complete_candidate_assessment(analysis)
+
+
+def test_undervalued_scan_skips_incomplete_risk_without_stopping_other_tickers(
+    tmp_path,
+):
+    context = ScannerContext(
+        settings=ScannerSettings(
+            market_data_provider="test prices",
+            market_data_cache_enabled=False,
+            market_data_cache_path=str(tmp_path / "cache.sqlite"),
+        ),
+        market_data_provider=MixedRiskPriceProvider(),
+    )
+    progress = []
+    service = UndervaluedScanService(
+        context=context,
+        universe_provider=MixedRiskUniverseProvider(),
+        fundamentals_provider=FakeSECFundamentalsProvider(),
+        progress_callback=lambda **changes: progress.append(changes),
+    )
+
+    result = service.run(
+        UndervaluedScanConfig(
+            universe="all",
+            market_data_provider="test prices",
+            output_file=str(tmp_path / "undervalued.csv"),
+            max_workers=2,
+        )
+    )
+
+    assert result.dataframe["Ticker"].tolist() == ["VALID"]
+    assert result.skipped == [
+        ("BROKEN", "Scanner cannot save BROKEN: risk assessment is incomplete")
+    ]
+    assert FundamentalAnalysisCache(
+        context.settings.market_data_cache_path
+    ).get("BROKEN", {}) is None
+    assert FundamentalAnalysisCache(
+        context.settings.market_data_cache_path
+    ).get("VALID", {}) is not None
+    assert progress[-1]["symbols_checked"] == 2
+    assert progress[-1]["symbols_skipped"] == 1

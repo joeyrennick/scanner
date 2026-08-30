@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 
-VALIDATION_POLICY_VERSION = 3
+VALIDATION_POLICY_VERSION = 4
 MINIMUM_DCF_MARGIN = 0.15
 LOW_RISK_MARGIN = 0.20
 MODERATE_RISK_MARGIN = 0.30
@@ -143,6 +143,66 @@ def validate_fundamental_analysis(
         "valuation methods.",
     )
 
+    valuation_model = str(valuation.get("model") or "dcf")
+    if valuation_model == "driver_based_fcff":
+        input_quality = valuation.get("input_quality") or {}
+        missing_inputs = list(input_quality.get("missing") or [])
+        _append_check(
+            checks,
+            "FCFF driver completeness",
+            not missing_inputs,
+            "review",
+            ", ".join(missing_inputs) if missing_inputs else "complete",
+            "Revenue, operating profit, taxes, D&A, CapEx, working capital, "
+            "cash, debt, and diluted shares should come from SEC history; "
+            "missing non-critical drivers use conservative model defaults.",
+        )
+        assumptions = valuation.get("assumptions") or {}
+        discount_rate = _number(assumptions.get("discount_rate"))
+        terminal_growth = _number(assumptions.get("terminal_growth_rate"))
+        spread = (
+            discount_rate - terminal_growth
+            if discount_rate is not None and terminal_growth is not None
+            else None
+        )
+        _append_check(
+            checks,
+            "WACC and terminal-growth spread",
+            spread is not None and spread >= 0.02,
+            "fail",
+            spread,
+            "WACC must exceed terminal growth by at least two percentage points.",
+        )
+        base_bridge = (scenarios.get("base") or {}).get("valuation_bridge") or {}
+        terminal_share = _number(base_bridge.get("terminal_value_share"))
+        _append_check(
+            checks,
+            "Terminal-value concentration",
+            terminal_share is not None and 0 <= terminal_share <= 0.85,
+            "review",
+            terminal_share,
+            "No more than 85% of enterprise value should come from the terminal value.",
+        )
+        operating_margins = [
+            _number(row.get("operating_margin"))
+            for row in history
+            if _number(row.get("operating_margin")) is not None
+        ]
+        margin_range = (
+            max(operating_margins) - min(operating_margins)
+            if operating_margins
+            else None
+        )
+        _append_check(
+            checks,
+            "Operating-margin stability for forecast",
+            margin_range is not None and margin_range <= 0.10,
+            "review",
+            margin_range,
+            "An operating-margin range above ten percentage points makes the "
+            "normalized forecast less reliable.",
+        )
+
     quality_score = _number(quality.get("score"))
     _append_check(
         checks,
@@ -243,7 +303,13 @@ def validate_fundamental_analysis(
         "score": score,
         "checks": checks,
         "reasons": [check["explanation"] for check in hard_failures + reviews],
-        "model": "sector_specific" if sector_specific else "dcf",
+        "model": (
+            "sector_specific"
+            if sector_specific
+            else "driver_based_fcff"
+            if valuation_model == "driver_based_fcff"
+            else "dcf"
+        ),
         "manual_filing_review_required": True,
         "manual_review_items": [
             "Read the latest 10-K Item 1A risk factors and Item 7 MD&A.",

@@ -14,6 +14,7 @@ from scanner.context import ScannerContext
 from scanner.data.providers.sec import SECFundamentalsProvider
 from scanner.data.scanner_results import SQLiteScannerResultStore
 from scanner.fundamentals import FundamentalAnalysisService
+from scanner.fundamentals.cache import FundamentalAnalysisCache
 from scanner.services.scan_service import ScanCancelled
 from scanner.strategies.undervalued_strategy import (
     UndervaluedStrategy,
@@ -38,7 +39,7 @@ class UndervaluedScanConfig:
     price_period: str = "5d"
     risk_price_period: str = "5y"
     minimum_margin_of_safety: float = 0.15
-    discount_rate: float = 0.10
+    discount_rate: float | None = None
     terminal_growth_rate: float = 0.025
     projection_years: int = 5
     max_workers: int = settings.fundamental_scan_workers
@@ -132,12 +133,17 @@ class UndervaluedScanService:
             self.fundamentals_provider,
             self.context.get_market_data_provider(),
         )
+        analysis_cache = FundamentalAnalysisCache(
+            self.context.settings.market_data_cache_path
+        )
         rows: list[dict[str, Any]] = []
         skipped: list[tuple[str, str]] = []
         analyzed_count = 0
         stopped_for_rate_limit = False
 
-        def analyze_one(ticker: str) -> dict[str, Any] | None:
+        def analyze_one(
+            ticker: str,
+        ) -> tuple[dict[str, Any], dict[str, Any]] | None:
             self._raise_if_cancelled()
             price_history = self.context.download_price_data(
                 ticker,
@@ -161,12 +167,15 @@ class UndervaluedScanService:
             )
             analysis = valuation_service.add_screen_risk(analysis, risk_history)
             _require_complete_candidate_assessment(analysis)
-            return _candidate_row(
+            return (
+                _candidate_row(
+                    analysis,
+                    result.checks,
+                    result.score,
+                    price_as_of,
+                    config.minimum_margin_of_safety,
+                ),
                 analysis,
-                result.checks,
-                result.score,
-                price_as_of,
-                config.minimum_margin_of_safety,
             )
 
         max_workers = max(1, min(config.max_workers, len(tickers) or 1))
@@ -184,18 +193,22 @@ class UndervaluedScanService:
                 ticker = futures[future]
                 completed += 1
                 try:
-                    row = future.result()
+                    candidate = future.result()
                     analyzed_count += 1
-                    if row is not None:
+                    if candidate is not None:
+                        row, analysis = candidate
+                        analysis_cache.set(ticker, {}, analysis)
                         rows.append(row)
                 except ScanCancelled:
                     for pending in futures:
                         pending.cancel()
                     raise
-                except IncompleteCandidateAssessment:
-                    for pending in futures:
-                        pending.cancel()
-                    raise
+                except IncompleteCandidateAssessment as error:
+                    message = str(error)
+                    skipped.append((ticker, message))
+                    self.logger.warning(
+                        f"[{completed}/{len(tickers)}] Skipping {ticker}: {message}"
+                    )
                 except Exception as error:
                     message = str(error)
                     if "rate-limit" in message.lower():
@@ -313,6 +326,7 @@ def _candidate_row(
         "Margin of Safety": round(margin * 100, 2),
         "Valuation Label": valuation.get("label") or "unknown",
         "Valuation Confidence": valuation.get("confidence") or "low",
+        "Valuation Model": valuation.get("model") or "driver_based_fcff",
         "Quality Label": quality.get("label") or "unknown",
         "Quality Score": quality.get("score"),
         "Risk Level": analysis.get("risk", {}).get("label") or "unknown",
@@ -326,6 +340,7 @@ def _candidate_row(
         "Validation Policy Version": validation.get("policy_version"),
         "SEC Data As Of": analysis.get("data_as_of"),
         "Free Cash Flow": latest.get("free_cash_flow"),
+        "FCFF": latest.get("fcff"),
         "Revenue": latest.get("revenue"),
         "Diluted EPS": latest.get("diluted_eps"),
         "Diluted Shares": latest.get("diluted_shares"),
@@ -342,6 +357,11 @@ def _candidate_row(
             "terminal_growth_rate"
         ),
         "DCF Projection Years": valuation["assumptions"].get("projection_years"),
+        "DCF Terminal Value Share": (
+            (scenarios.get("base") or {})
+            .get("valuation_bridge", {})
+            .get("terminal_value_share")
+        ),
         "Minimum Margin of Safety": minimum_margin_of_safety,
         "Hold Time": "Long term",
         "Fundamental Source": analysis.get("source") or "SEC EDGAR",

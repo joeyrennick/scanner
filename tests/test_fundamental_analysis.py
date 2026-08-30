@@ -27,6 +27,9 @@ class FakeFundamentalProvider:
                     "revenue": 10_000_000_000 + (year - 2021) * 1_000_000_000,
                     "gross_profit": 6_000_000_000 + (year - 2021) * 600_000_000,
                     "operating_income": 2_000_000_000 + (year - 2021) * 200_000_000,
+                    "pretax_income": 1_800_000_000,
+                    "income_tax_expense": 300_000_000,
+                    "interest_expense": 50_000_000,
                     "consolidated_net_income_loss": 1_500_000_000,
                     "diluted_shares_outstanding": 100_000_000,
                     "diluted_earnings_per_share": 15,
@@ -53,6 +56,7 @@ class FakeFundamentalProvider:
                     "period_end": f"{year}-12-31",
                     "net_cash_from_operating_activities": 2_500_000_000,
                     "purchase_of_property_plant_and_equipment": -500_000_000,
+                    "depreciation_and_amortization": 400_000_000,
                 }
                 for year in years
             ],
@@ -73,9 +77,19 @@ def test_fundamental_analysis_calculates_explainable_sections():
     assert len(result["financial_history"]) == 5
     assert result["quality"]["label"] == "strong"
     assert result["valuation"]["scenarios"][1]["fair_value"] is not None
+    assert result["valuation"]["model"] == "driver_based_fcff"
+    assert len(result["valuation"]["scenarios"][1]["forecast"]) == 5
+    assert result["valuation"]["scenarios"][1]["valuation_bridge"]["enterprise_value"] > 0
+    assert len(result["valuation"]["sensitivity"]["values"]) == 5
     assert result["risk"]["label"] == "low"
     assert result["risk"]["complete"] is True
     assert result["validation"]["status"] in {"validated", "needs_review"}
+    assert result["validation"]["model"] == "driver_based_fcff"
+    assert {
+        "FCFF driver completeness",
+        "WACC and terminal-growth spread",
+        "Terminal-value concentration",
+    }.issubset({check["name"] for check in result["validation"]["checks"]})
     assert result["confidence"] == "high"
 
 
@@ -96,11 +110,34 @@ def test_fundamental_analysis_uses_separate_price_provider_and_derives_ratios():
         FakePriceProvider(),
     ).analyze("EXM")
 
-    assert result["schema_version"] == 3
+    assert result["schema_version"] == 4
     assert result["source"] == "SEC EDGAR (financials); Test Prices (prices)"
     assert result["current_price"] == 305.0
     assert result["ratios"]["price_to_sales"] == 20_000_000_000 / 14_000_000_000
     assert result["ratios"]["free_cash_flow_yield"] == 0.1
+    assert 0.06 <= result["valuation"]["assumptions"]["discount_rate"] <= 0.18
+
+
+def test_driver_based_fcff_honors_user_forecast_overrides():
+    result = FundamentalAnalysisService(FakeFundamentalProvider()).analyze(
+        "EXM",
+        assumptions={
+            "base_revenue_growth_rate": 0.03,
+            "base_operating_margin": 0.18,
+            "discount_rate": 0.12,
+            "projection_years": 7,
+        },
+    )
+
+    base = next(
+        scenario
+        for scenario in result["valuation"]["scenarios"]
+        if scenario["name"] == "base"
+    )
+    assert base["revenue_growth_rate"] == 0.03
+    assert base["operating_margin"] == 0.18
+    assert base["discount_rate"] == 0.12
+    assert len(base["forecast"]) == 7
 
 
 def test_screen_valuation_includes_risk_from_supplied_price_history():

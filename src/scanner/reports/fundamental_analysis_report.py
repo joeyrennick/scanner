@@ -34,6 +34,7 @@ class FundamentalAnalysisReport:
         )
         with PdfPages(pdf_path) as pdf:
             self._summary_page(pdf)
+            self._valuation_page(pdf)
             self._validation_page(pdf)
             self._history_page(pdf)
 
@@ -64,7 +65,12 @@ class FundamentalAnalysisReport:
         cards = [
             ("Validation", validation.get("label"), validation.get("score")),
             ("Business Quality", quality.get("label"), quality.get("score")),
-            ("DCF Estimate", valuation.get("label"), None),
+            (
+                "DCF Estimate",
+                f"{valuation.get('label') or 'unknown'} "
+                f"({_percent(valuation.get('margin_of_safety'))} upside)",
+                None,
+            ),
             ("Risk", risk.get("label"), risk.get("score")),
         ]
         for index, (title, label, score) in enumerate(cards):
@@ -109,6 +115,155 @@ class FundamentalAnalysisReport:
             fontsize=7.5,
             color="#68737d",
         )
+        pdf.savefig(fig, bbox_inches="tight")
+        plt.close(fig)
+
+    def _valuation_page(self, pdf: PdfPages) -> None:
+        valuation = self.analysis.get("valuation") or {}
+        assumptions = valuation.get("assumptions") or {}
+        scenarios = valuation.get("scenarios") or []
+        base = next(
+            (scenario for scenario in scenarios if scenario.get("name") == "base"),
+            {},
+        )
+        forecast = base.get("forecast") or []
+        bridge = base.get("valuation_bridge") or {}
+        sensitivity = valuation.get("sensitivity") or {}
+        fig = plt.figure(figsize=(11, 8.5))
+        fig.text(0.05, 0.94, "Driver-Based FCFF Valuation", fontsize=20, weight="bold")
+        fig.text(
+            0.05,
+            0.905,
+            f"Base fair value {_money(base.get('fair_value'))}  •  "
+            f"DCF upside {_percent(base.get('upside'))}  •  "
+            f"WACC {_percent(assumptions.get('discount_rate'))}  •  "
+            f"Terminal growth {_percent(assumptions.get('terminal_growth_rate'))}",
+            fontsize=10,
+            color="#52606d",
+        )
+
+        scenario_rows = [
+            [
+                str(scenario.get("name") or "").title(),
+                _percent(scenario.get("revenue_growth_rate")),
+                _percent(scenario.get("operating_margin")),
+                _percent(scenario.get("discount_rate")),
+                _money(scenario.get("fair_value")),
+                _percent(scenario.get("upside")),
+            ]
+            for scenario in scenarios
+        ]
+        scenario_axes = fig.add_axes([0.05, 0.72, 0.90, 0.15])
+        scenario_axes.axis("off")
+        if scenario_rows:
+            scenario_table = scenario_axes.table(
+                cellText=scenario_rows,
+                colLabels=["Scenario", "Revenue growth", "Target margin", "WACC", "Fair value", "Upside"],
+                loc="center",
+                cellLoc="center",
+            )
+            scenario_table.auto_set_font_size(False)
+            scenario_table.set_fontsize(8)
+            scenario_table.scale(1, 1.35)
+        else:
+            scenario_axes.text(
+                0.5,
+                0.5,
+                "Driver-based scenario detail is unavailable for this legacy analysis.",
+                ha="center",
+                va="center",
+                fontsize=9,
+                color="#52606d",
+            )
+
+        forecast_rows = [
+            [
+                row.get("year"),
+                _compact_money(row.get("revenue")),
+                _percent(row.get("revenue_growth_rate")),
+                _percent(row.get("operating_margin")),
+                _compact_money(row.get("nopat")),
+                _compact_money(row.get("depreciation_and_amortization")),
+                _compact_money(row.get("capital_expenditures")),
+                _compact_money(row.get("change_in_working_capital")),
+                _compact_money(row.get("fcff")),
+                _compact_money(row.get("present_value_fcff")),
+            ]
+            for row in forecast
+        ]
+        forecast_axes = fig.add_axes([0.035, 0.37, 0.93, 0.28])
+        forecast_axes.axis("off")
+        forecast_axes.set_title("Base-case forecast", fontsize=12, weight="bold", pad=8)
+        if forecast_rows:
+            forecast_table = forecast_axes.table(
+                cellText=forecast_rows,
+                colLabels=["Year", "Revenue", "Growth", "Op margin", "NOPAT", "D&A", "CapEx", "Δ NWC", "FCFF", "PV FCFF"],
+                loc="center",
+                cellLoc="center",
+            )
+            forecast_table.auto_set_font_size(False)
+            forecast_table.set_fontsize(6.8)
+            forecast_table.scale(1, 1.25)
+        else:
+            forecast_axes.text(
+                0.5,
+                0.5,
+                "FCFF forecast detail is unavailable.",
+                ha="center",
+                va="center",
+                fontsize=9,
+                color="#52606d",
+            )
+
+        bridge_items = [
+            ("PV forecast", bridge.get("present_value_forecast")),
+            ("PV terminal", bridge.get("present_value_terminal")),
+            ("Enterprise value", bridge.get("enterprise_value")),
+            ("Cash", bridge.get("cash")),
+            ("Debt", bridge.get("debt")),
+            ("Equity value", bridge.get("equity_value")),
+        ]
+        fig.text(0.05, 0.31, "Valuation bridge", fontsize=12, weight="bold")
+        for index, (label, value) in enumerate(bridge_items):
+            x = 0.05 + (index % 3) * 0.22
+            y = 0.275 - (index // 3) * 0.045
+            fig.text(x, y, f"{label}: {_compact_money(value)}", fontsize=8.5)
+        fig.text(
+            0.72,
+            0.275,
+            f"Fair value/share: {_money(bridge.get('fair_value_per_share'))}\n"
+            f"Terminal value share: {_percent(bridge.get('terminal_value_share'))}",
+            fontsize=9,
+            weight="bold",
+        )
+
+        rates = sensitivity.get("discount_rates") or []
+        terminal_rates = sensitivity.get("terminal_growth_rates") or []
+        values = sensitivity.get("values") or []
+        sensitivity_rows = []
+        for row_index, terminal_rate in enumerate(terminal_rates):
+            row_values = values[row_index] if row_index < len(values) else []
+            sensitivity_rows.append(
+                [_percent(terminal_rate)]
+                + [
+                    _money(cell.get("fair_value"))
+                    for cell in row_values
+                ]
+            )
+        sensitivity_axes = fig.add_axes([0.05, 0.035, 0.70, 0.15])
+        sensitivity_axes.axis("off")
+        sensitivity_axes.set_title("Fair-value sensitivity: terminal growth / WACC", fontsize=10, weight="bold")
+        if rates and sensitivity_rows:
+            sensitivity_table = sensitivity_axes.table(
+                cellText=sensitivity_rows,
+                colLabels=["Terminal / WACC"] + [_percent(rate) for rate in rates],
+                loc="center",
+                cellLoc="center",
+            )
+            sensitivity_table.auto_set_font_size(False)
+            sensitivity_table.set_fontsize(7)
+            sensitivity_table.scale(1, 1.15)
+
         pdf.savefig(fig, bbox_inches="tight")
         plt.close(fig)
 
@@ -170,6 +325,7 @@ class FundamentalAnalysisReport:
         periods = [str(row.get("fiscal_year") or row.get("period_end") or "") for row in history]
         axes[0].plot(periods, [_billions(row.get("revenue")) for row in history], marker="o", label="Revenue")
         axes[0].plot(periods, [_billions(row.get("free_cash_flow")) for row in history], marker="o", label="Free cash flow")
+        axes[0].plot(periods, [_billions(row.get("fcff")) for row in history], marker="o", label="FCFF")
         axes[0].set_ylabel("USD billions")
         axes[0].grid(alpha=0.25)
         axes[0].legend()
@@ -188,6 +344,18 @@ def _money(value) -> str:
 
 def _percent(value) -> str:
     return "n/a" if value is None else f"{float(value) * 100:.1f}%"
+
+
+def _compact_money(value) -> str:
+    if value is None:
+        return "n/a"
+    number = float(value)
+    magnitude = abs(number)
+    if magnitude >= 1_000_000_000:
+        return f"${number / 1_000_000_000:,.1f}B"
+    if magnitude >= 1_000_000:
+        return f"${number / 1_000_000:,.1f}M"
+    return f"${number:,.0f}"
 
 
 def _billions(value) -> float:

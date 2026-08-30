@@ -9,6 +9,7 @@ import { useJob } from '../../api/jobs';
 import { useLatestWatchlist, useWatchlistRun } from '../../api/scans';
 import type { AnalysisCheck, FundamentalAnalysis, ValidationCheck, WatchlistRow } from '../../api/types';
 import { formatDuration, formatNumber, progressPercent } from '../../lib/progress';
+import { loadRecentTicker } from '../../lib/recentTicker';
 import { useScannerDisplaySettings, type ScannerDisplaySettings } from '../../lib/scannerSettings';
 import { rowMatchesDisplaySettings, rowMatchesStrategy } from '../../lib/watchlist';
 
@@ -173,17 +174,6 @@ export function FundamentalAnalysisPage() {
     state.validation,
     updateState
   ]);
-
-  useEffect(() => {
-    if (!analysis || Object.keys(assumptions).length > 0) return;
-    updateState((current) => ({
-      ...current,
-      assumptionsByTicker: {
-        ...current.assumptionsByTicker,
-        [state.ticker]: analysis.valuation.assumptions
-      }
-    }));
-  }, [analysis, assumptions, state.ticker, updateState]);
 
   useEffect(() => {
     if (restoredScroll.current) return;
@@ -468,6 +458,7 @@ export function FundamentalAnalysisPage() {
 }
 
 function Summary({ analysis }: { analysis: FundamentalAnalysis }) {
+  const baseScenario = analysis.valuation.scenarios.find((scenario) => scenario.name === 'base');
   return (
     <div className="summary-section">
       <div className="analysis-card-grid">
@@ -476,7 +467,23 @@ function Summary({ analysis }: { analysis: FundamentalAnalysis }) {
         <ScoreCard title="DCF Estimate" value={percent(analysis.valuation.margin_of_safety)} label={dcfLabel(analysis.valuation.label)} />
         <ScoreCard title="Risk" value={`${analysis.risk.score}/100`} label={analysis.risk.label} />
       </div>
-      <ValidationSummary validation={analysis.validation} />
+      <div className="summary-detail-grid">
+        <section className="panel valuation-model-summary">
+          <h3>Driver-based FCFF valuation</h3>
+          <div className="valuation-model-metrics">
+            <div><span>Fair value</span><strong>{money(baseScenario?.fair_value)}</strong></div>
+            <div><span>DCF upside</span><strong>{percent(baseScenario?.upside)}</strong></div>
+            <div><span>WACC</span><strong>{percent(analysis.valuation.assumptions.discount_rate)}</strong></div>
+            <div><span>Confidence</span><strong>{analysis.valuation.confidence}</strong></div>
+          </div>
+          <p>
+            Forecasts operating cash generation from revenue, margins, taxes,
+            reinvestment, and non-cash working capital. The saved scanner result is
+            the baseline; assumption changes below are previews until the scanner is rerun.
+          </p>
+        </section>
+        <ValidationSummary validation={analysis.validation} />
+      </div>
     </div>
   );
 }
@@ -573,12 +580,17 @@ function ChecksPanel({ title, score, label, checks }: { title: string; score: nu
 
 function ValidationPanel({ analysis }: { analysis: FundamentalAnalysis }) {
   const validation = analysis.validation;
+  const modelLabel = validation.model === 'driver_based_fcff'
+    ? 'Driver-based FCFF model'
+    : validation.model === 'dcf'
+      ? 'Standard DCF model'
+      : 'Sector-specific model needed';
   return (
     <section className="panel">
       <div className="panel-header">
         <div>
           <h2>Automated Validation</h2>
-          <p>{validation.label} · {validation.score}/100 · {validation.model === 'dcf' ? 'Standard DCF model' : 'Sector-specific model needed'}</p>
+          <p>{validation.label} · {validation.score}/100 · {modelLabel}</p>
         </div>
       </div>
       <p className="muted-text">
@@ -606,39 +618,130 @@ function ValidationPanel({ analysis }: { analysis: FundamentalAnalysis }) {
 
 function ValuationPanel({ analysis, assumptions, onChange, onRecalculate }: { analysis: FundamentalAnalysis; assumptions: Record<string, number>; onChange: (name: string, value: number) => void; onRecalculate: () => void }) {
   const fields = [
-    ['bear_growth_rate', 'Bear growth', true],
-    ['base_growth_rate', 'Base growth', true],
-    ['bull_growth_rate', 'Bull growth', true],
-    ['discount_rate', 'Discount rate', true],
+    ['bear_revenue_growth_rate', 'Bear revenue growth', true],
+    ['base_revenue_growth_rate', 'Base revenue growth', true],
+    ['bull_revenue_growth_rate', 'Bull revenue growth', true],
+    ['bear_operating_margin', 'Bear operating margin', true],
+    ['base_operating_margin', 'Base operating margin', true],
+    ['bull_operating_margin', 'Bull operating margin', true],
+    ['tax_rate', 'Effective tax rate', true],
+    ['depreciation_rate', 'D&A / revenue', true],
+    ['capex_rate', 'CapEx / revenue', true],
+    ['working_capital_rate', 'Non-cash working capital / revenue', true],
+    ['discount_rate', 'WACC', true],
     ['terminal_growth_rate', 'Terminal growth', true],
     ['projection_years', 'Projection years', false]
   ] as const;
+  const baseScenario = analysis.valuation.scenarios.find((scenario) => scenario.name === 'base');
+  const forecast = baseScenario?.forecast ?? [];
+  const bridge = baseScenario?.valuation_bridge;
+  const sensitivity = analysis.valuation.sensitivity;
+  const inputQuality = analysis.valuation.input_quality;
   return (
-    <div className="valuation-layout">
+    <div className="valuation-detail-stack">
+      <div className="valuation-layout">
+        <section className="panel">
+          <div className="panel-header"><div><h2>Valuation assumptions</h2><p>Saved automatically for {analysis.ticker}; Recalculate previews your overrides</p></div></div>
+          <div className="assumption-grid">
+            {fields.map(([name, label, isPercent]) => {
+              const configured = assumptions[name] ?? analysis.valuation.assumptions[name];
+              const value = typeof configured === 'number' ? configured : 0;
+              return (
+                <label key={name}>{label}<input type="number" step={isPercent ? '0.1' : '1'} value={isPercent ? value * 100 : value} onChange={(event) => onChange(name, Number(event.target.value) / (isPercent ? 100 : 1))} /></label>
+              );
+            })}
+          </div>
+          <div className="wacc-breakdown" aria-label="WACC construction">
+            <BridgeValue label="Risk-free rate" value={percent(analysis.valuation.assumptions.risk_free_rate)} />
+            <BridgeValue label="Equity risk premium" value={percent(analysis.valuation.assumptions.equity_risk_premium)} />
+            <BridgeValue label="Beta" value={typeof analysis.valuation.assumptions.beta === 'number' ? analysis.valuation.assumptions.beta.toFixed(2) : 'n/a'} />
+            <BridgeValue label="Cost of equity" value={percent(analysis.valuation.assumptions.cost_of_equity)} />
+            <BridgeValue label="Cost of debt" value={percent(analysis.valuation.assumptions.cost_of_debt)} />
+            <BridgeValue label="Debt weight" value={percent(analysis.valuation.assumptions.debt_weight)} />
+          </div>
+          <button className="primary-button" onClick={onRecalculate}>Recalculate preview</button>
+          {inputQuality && (
+            <p className={inputQuality.missing.length > 0 ? 'input-quality warning-text' : 'input-quality'}>
+              SEC driver coverage: {inputQuality.available}/{inputQuality.required}.
+              {inputQuality.missing.length > 0
+                ? ` Defaults used for ${inputQuality.missing.map(prettyKey).join(', ')}.`
+                : ' All required historical drivers were available.'}
+            </p>
+          )}
+        </section>
+        <section className="panel">
+          <h2>Scenario values</h2>
+          <div className="scenario-grid detailed">
+            {analysis.valuation.scenarios.map((scenario) => (
+              <div key={scenario.name}>
+                <span>{scenario.name}</span>
+                <small>{percent(scenario.revenue_growth_rate)} growth · {percent(scenario.operating_margin)} margin · {percent(scenario.discount_rate)} WACC</small>
+                <strong>{money(scenario.fair_value)}</strong>
+                <em>{percent(scenario.upside)}</em>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+
       <section className="panel">
-        <div className="panel-header"><div><h2>Valuation assumptions</h2><p>Saved automatically for {analysis.ticker}</p></div></div>
-        <div className="assumption-grid">
-          {fields.map(([name, label, isPercent]) => (
-            <label key={name}>{label}<input type="number" step={isPercent ? '0.005' : '1'} value={isPercent ? ((assumptions[name] ?? analysis.valuation.assumptions[name]) * 100) : (assumptions[name] ?? analysis.valuation.assumptions[name])} onChange={(event) => onChange(name, Number(event.target.value) / (isPercent ? 100 : 1))} /></label>
-          ))}
+        <div className="panel-header"><div><h2>Base-case FCFF forecast</h2><p>Growth fades toward the terminal rate and margins revert toward the normalized target</p></div></div>
+        <div className="table-wrap valuation-table-wrap">
+          <table className="data-table valuation-forecast-table">
+            <thead><tr><th>Year</th><th>Revenue</th><th>Growth</th><th>Operating Margin</th><th>NOPAT</th><th>D&amp;A</th><th>CapEx Outflow</th><th>Δ Working Capital</th><th>FCFF</th><th>PV of FCFF</th></tr></thead>
+            <tbody>
+              {forecast.map((row) => (
+                <tr key={row.year}><td>{row.year}</td><td>{compactMoney(row.revenue)}</td><td>{percent(row.revenue_growth_rate)}</td><td>{percent(row.operating_margin)}</td><td>{compactMoney(row.nopat)}</td><td>{compactMoney(row.depreciation_and_amortization)}</td><td>{compactMoney(row.capital_expenditures)}</td><td>{compactMoney(row.change_in_working_capital)}</td><td>{compactMoney(row.fcff)}</td><td>{compactMoney(row.present_value_fcff)}</td></tr>
+              ))}
+              {forecast.length === 0 && <tr><td colSpan={10} className="empty-cell">The SEC data is insufficient to build an FCFF forecast.</td></tr>}
+            </tbody>
+          </table>
         </div>
-        <button className="primary-button" onClick={onRecalculate}>Recalculate</button>
       </section>
-      <section className="panel">
-        <h2>Scenario values</h2>
-        <div className="scenario-grid">
-          {analysis.valuation.scenarios.map((scenario) => <div key={scenario.name}><span>{scenario.name}</span><strong>{money(scenario.fair_value)}</strong><em>{percent(scenario.upside)}</em></div>)}
-        </div>
-      </section>
+
+      {bridge && (
+        <section className="panel">
+          <h2>Base-case valuation bridge</h2>
+          <div className="valuation-bridge-grid">
+            <BridgeValue label="PV of forecast FCFF" value={compactMoney(bridge.present_value_forecast)} />
+            <BridgeValue label="PV of terminal value" value={compactMoney(bridge.present_value_terminal)} />
+            <BridgeValue label="Enterprise value" value={compactMoney(bridge.enterprise_value)} />
+            <BridgeValue label="Cash added" value={compactMoney(bridge.cash)} />
+            <BridgeValue label="Debt subtracted" value={compactMoney(bridge.debt)} />
+            <BridgeValue label="Equity value" value={compactMoney(bridge.equity_value)} />
+            <BridgeValue label="Diluted shares" value={compactNumber(bridge.diluted_shares)} />
+            <BridgeValue label="Fair value / share" value={money(bridge.fair_value_per_share)} />
+            <BridgeValue label="Current price" value={money(analysis.current_price)} />
+            <BridgeValue label="DCF upside" value={percent(baseScenario?.upside)} />
+            <BridgeValue label="Terminal value share" value={percent(bridge.terminal_value_share)} />
+          </div>
+        </section>
+      )}
+
+      {sensitivity && (
+        <section className="panel">
+          <div className="panel-header"><div><h2>Fair-value sensitivity</h2><p>Rows vary terminal growth; columns vary WACC</p></div></div>
+          <div className="table-wrap sensitivity-table-wrap">
+            <table className="data-table sensitivity-table">
+              <thead><tr><th>Terminal growth / WACC</th>{sensitivity.discount_rates.map((rate) => <th key={rate}>{percent(rate)}</th>)}</tr></thead>
+              <tbody>{sensitivity.terminal_growth_rates.map((growth, rowIndex) => <tr key={growth}><th>{percent(growth)}</th>{sensitivity.values[rowIndex].map((cell, columnIndex) => <td key={`${growth}-${sensitivity.discount_rates[columnIndex]}`}><strong>{money(cell.fair_value)}</strong><span>{percent(cell.upside)}</span></td>)}</tr>)}</tbody>
+            </table>
+          </div>
+        </section>
+      )}
     </div>
   );
+}
+
+function BridgeValue({ label, value }: { label: string; value: string }) {
+  return <div><span>{label}</span><strong>{value}</strong></div>;
 }
 
 function FinancialHistory({ analysis }: { analysis: FundamentalAnalysis }) {
   return (
     <section className="panel">
       <h2>Annual financial history</h2>
-      <div className="table-wrap"><table className="data-table"><thead><tr><th>Year</th><th>Revenue</th><th>Operating income</th><th>Free cash flow</th><th>Debt</th><th>Operating margin</th></tr></thead><tbody>{analysis.financial_history.map((row) => <tr key={String(row.period_end)}><td>{row.fiscal_year ?? row.period_end}</td><td>{compactMoney(row.revenue)}</td><td>{compactMoney(row.operating_income)}</td><td>{compactMoney(row.free_cash_flow)}</td><td>{compactMoney(row.debt)}</td><td>{percent(numberValue(row.operating_margin))}</td></tr>)}</tbody></table></div>
+      <div className="table-wrap financial-history-wrap"><table className="data-table financial-history-table"><thead><tr><th>Year</th><th>Revenue</th><th>Operating Income</th><th>Operating Margin</th><th>Tax Rate</th><th>D&amp;A</th><th>CapEx Outflow</th><th>Δ Working Capital</th><th>FCFF</th><th>FCFF Margin</th><th>Operating FCF</th><th>Debt</th></tr></thead><tbody>{analysis.financial_history.map((row) => <tr key={String(row.period_end)}><td>{row.fiscal_year ?? row.period_end}</td><td>{compactMoney(row.revenue)}</td><td>{compactMoney(row.operating_income)}</td><td>{percent(numberValue(row.operating_margin))}</td><td>{percent(numberValue(row.effective_tax_rate))}</td><td>{compactMoney(row.depreciation_and_amortization)}</td><td>{compactMoney(absoluteNumber(row.capital_expenditures))}</td><td>{compactMoney(row.change_in_working_capital)}</td><td>{compactMoney(row.fcff)}</td><td>{percent(numberValue(row.fcff_margin))}</td><td>{compactMoney(row.free_cash_flow)}</td><td>{compactMoney(row.debt)}</td></tr>)}</tbody></table></div>
     </section>
   );
 }
@@ -654,10 +757,15 @@ export function loadFundamentalState(params: URLSearchParams): SavedState {
   const tab = params.get('tab');
   const risk = params.get('risk');
   const validation = params.get('validation');
+  const linkedTicker = params.get('ticker');
+  const recentTicker = linkedTicker === null ? loadRecentTicker() : null;
+  const initialTicker = linkedTicker ?? recentTicker ?? saved.ticker;
   return {
     ...saved,
-    ticker: (params.get('ticker') ?? saved.ticker).toUpperCase(),
-    tickerDraft: (params.get('ticker') ?? saved.tickerDraft ?? saved.ticker).toUpperCase(),
+    ticker: initialTicker.toUpperCase(),
+    tickerDraft: (
+      linkedTicker ?? recentTicker ?? saved.tickerDraft ?? saved.ticker
+    ).toUpperCase(),
     runId: params.has('run_id') ? numberOrNull(params.get('run_id')) : null,
     strategy: params.get('strategy') ?? saved.strategy,
     risk: isRiskFilter(risk) ? risk : saved.risk,
@@ -809,14 +917,22 @@ function isRiskFilter(value: string | null): value is RiskFilter { return ['all'
 function isValidationFilter(value: string | null): value is ValidationFilter { return ['all', 'validated', 'needs_review', 'rejected', 'not_calculated'].includes(value ?? ''); }
 function numberOrNull(value: string | null) { const parsed = Number(value); return value && Number.isFinite(parsed) ? parsed : null; }
 function numberValue(value: unknown) { return typeof value === 'number' ? value : null; }
-function money(value: number | null) { return value === null ? 'n/a' : `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`; }
+function absoluteNumber(value: unknown) { return typeof value === 'number' ? Math.abs(value) : null; }
+function money(value: number | null | undefined) { return typeof value !== 'number' ? 'n/a' : `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`; }
 function compactMoney(value: unknown) { return typeof value !== 'number' ? 'n/a' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 1 }).format(value); }
-function percent(value: number | null) { return value === null ? 'n/a' : `${(value * 100).toFixed(1)}%`; }
+function compactNumber(value: unknown) { return typeof value !== 'number' ? 'n/a' : new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value); }
+function percent(value: number | null | undefined) { return typeof value !== 'number' ? 'n/a' : `${(value * 100).toFixed(1)}%`; }
+function prettyKey(value: string) { return value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()); }
 function formatCheckValue(check: AnalysisCheck) { if (check.value === null) return 'n/a'; if (check.unit === 'percent' && typeof check.value === 'number') return percent(check.value); if (check.unit === 'multiple' && typeof check.value === 'number') return `${check.value.toFixed(2)}×`; return String(check.value); }
-function dcfLabel(label: string) { return `${label} by DCF only`; }
+function dcfLabel(label: string) { return `${label} by FCFF DCF`; }
 function formatValidationValue(check: ValidationCheck) {
   if (check.value === null || check.value === undefined) return 'n/a';
-  if (check.name.includes('margin') || check.name === 'Bear-case resilience') {
+  if (
+    check.name.toLowerCase().includes('margin') ||
+    check.name.includes('WACC') ||
+    check.name.includes('Terminal-value') ||
+    check.name === 'Bear-case resilience'
+  ) {
     return typeof check.value === 'number' ? percent(check.value) : String(check.value);
   }
   if (check.name === 'Financial period recency' && typeof check.value === 'number') return `${check.value} days`;

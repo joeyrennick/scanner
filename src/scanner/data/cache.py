@@ -100,6 +100,8 @@ class SQLiteMarketDataCache:
         )
         history["Date"] = pd.to_datetime(history["Date"])
         history = history.set_index("Date")
+        if history["Close"].dropna().empty:
+            return pd.DataFrame()
         return history
 
     def load_latest_close(
@@ -139,6 +141,10 @@ class SQLiteMarketDataCache:
 
         if normalized.empty:
             return 0
+        if normalized["Close"].dropna().empty:
+            raise ValueError(
+                f"Price history contains {len(normalized)} rows but no usable closing prices"
+            )
 
         fetched_at = datetime.now(UTC).isoformat(timespec="seconds")
         rows = []
@@ -208,6 +214,44 @@ class SQLiteMarketDataCache:
             )
 
         return int(cursor.rowcount or 0)
+
+    def remove_unusable_price_histories(
+        self,
+        provider: str | None = None,
+    ) -> list[tuple[str, str, str, int]]:
+        where = "WHERE provider = ?" if provider is not None else ""
+        params: tuple[object, ...] = (provider,) if provider is not None else ()
+        query = f"""
+            SELECT provider, ticker, interval, COUNT(*)
+            FROM price_bars
+            {where}
+            GROUP BY provider, ticker, interval
+            HAVING COUNT(close) = 0
+            ORDER BY provider, ticker, interval
+        """
+
+        with self._connect() as connection:
+            unusable = connection.execute(query, params).fetchall()
+            for row_provider, ticker, interval, _row_count in unusable:
+                connection.execute(
+                    """
+                    DELETE FROM price_bars
+                    WHERE provider = ? AND ticker = ? AND interval = ?
+                    """,
+                    (row_provider, ticker, interval),
+                )
+                connection.execute(
+                    """
+                    DELETE FROM cache_fetches
+                    WHERE provider = ? AND ticker = ? AND interval = ?
+                    """,
+                    (row_provider, ticker, interval),
+                )
+
+        return [
+            (str(row_provider), str(ticker), str(interval), int(row_count))
+            for row_provider, ticker, interval, row_count in unusable
+        ]
 
     def record_fetch(
         self,
@@ -410,10 +454,15 @@ def normalize_price_history(history: pd.DataFrame) -> pd.DataFrame:
     if history.empty:
         return pd.DataFrame()
 
-    normalized = pd.DataFrame(index=pd.to_datetime(history.index).tz_localize(None))
+    normalized_index = pd.to_datetime(history.index)
+    if getattr(normalized_index, "tz", None) is not None:
+        normalized_index = normalized_index.tz_localize(None)
+    indexed_history = history.copy()
+    indexed_history.index = normalized_index
+    normalized = pd.DataFrame(index=normalized_index)
 
     for output_column in PRICE_COLUMNS:
-        series = _extract_column(history, output_column)
+        series = _extract_column(indexed_history, output_column)
 
         if series is None:
             normalized[output_column] = pd.NA

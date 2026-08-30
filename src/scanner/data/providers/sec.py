@@ -32,6 +32,16 @@ US_GAAP_TAGS = {
     ),
     "gross_profit": ("GrossProfit",),
     "operating_income": ("OperatingIncomeLoss",),
+    "pretax_income": (
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxes",
+    ),
+    "income_tax_expense": ("IncomeTaxExpenseBenefit",),
+    "interest_expense": (
+        "InterestExpenseNonOperating",
+        "InterestAndDebtExpense",
+    ),
     "net_income": (
         "NetIncomeLossAvailableToCommonStockholdersBasic",
         "NetIncomeLoss",
@@ -77,12 +87,20 @@ US_GAAP_TAGS = {
         "PaymentsForAdditionsToPropertyPlantAndEquipment",
         "PaymentsToAcquireProductiveAssets",
     ),
+    "depreciation_and_amortization": (
+        "DepreciationDepletionAndAmortization",
+        "DepreciationDepletionAndAmortizationPropertyPlantAndEquipment",
+        "Depreciation",
+    ),
 }
 
 IFRS_TAGS = {
     "revenue": ("Revenue",),
     "gross_profit": ("GrossProfit",),
     "operating_income": ("ProfitLossFromOperatingActivities", "OperatingProfitLoss"),
+    "pretax_income": ("ProfitLossBeforeTax",),
+    "income_tax_expense": ("IncomeTaxExpenseContinuingOperations", "IncomeTaxExpense"),
+    "interest_expense": ("FinanceCosts",),
     "net_income": ("ProfitLoss",),
     "diluted_shares": ("WeightedAverageNumberOfSharesOutstandingDiluted",),
     "basic_shares": ("WeightedAverageNumberOfSharesOutstandingBasic",),
@@ -101,6 +119,10 @@ IFRS_TAGS = {
     "capital_expenditures": (
         "PurchaseOfPropertyPlantAndEquipment",
         "PaymentsToAcquirePropertyPlantAndEquipment",
+    ),
+    "depreciation_and_amortization": (
+        "DepreciationAndAmortisationExpense",
+        "DepreciationExpense",
     ),
 }
 
@@ -312,6 +334,15 @@ class SECFundamentalsProvider:
             "operating_income": _concept_series(
                 facts, tags["operating_income"], ("USD",), duration=True
             ),
+            "pretax_income": _concept_series(
+                facts, tags["pretax_income"], ("USD",), duration=True
+            ),
+            "income_tax_expense": _concept_series(
+                facts, tags["income_tax_expense"], ("USD",), duration=True
+            ),
+            "interest_expense": _concept_series(
+                facts, tags["interest_expense"], ("USD",), duration=True
+            ),
             "consolidated_net_income_loss": _concept_series(
                 facts, tags["net_income"], ("USD",), duration=True
             ),
@@ -365,11 +396,16 @@ class SECFundamentalsProvider:
             facts, tags["capital_expenditures"], ("USD",), duration=True
         )
         capex = {period: -abs(value) for period, value in capex.items()}
+        depreciation = _concept_series(
+            facts, tags["depreciation_and_amortization"], ("USD",), duration=True
+        )
+        depreciation = {period: abs(value) for period, value in depreciation.items()}
         fields = {
             "net_cash_from_operating_activities": _concept_series(
                 facts, tags["operating_cash_flow"], ("USD",), duration=True
             ),
             "purchase_of_property_plant_and_equipment": capex,
+            "depreciation_and_amortization": depreciation,
         }
         return _rows_from_series(fields)
 

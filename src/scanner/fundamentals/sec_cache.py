@@ -7,7 +7,7 @@ import sqlite3
 from typing import Any
 
 
-SEC_CACHE_SCHEMA_VERSION = 1
+SEC_CACHE_SCHEMA_VERSION = 2
 
 
 class SECFundamentalsCache:

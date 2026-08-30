@@ -31,13 +31,17 @@ export type ScannerResultFilters = {
   quality: QualityResultFilter;
   dcf: DcfResultFilter;
   risk: RiskResultFilter;
+  minPrice: number | null;
+  maxPrice: number | null;
 };
 
 export const defaultScannerResultFilters: ScannerResultFilters = {
   validation: 'all',
   quality: 'all',
   dcf: 'all',
-  risk: 'all'
+  risk: 'all',
+  minPrice: null,
+  maxPrice: null
 };
 
 const validationResultFilters = [
@@ -251,7 +255,9 @@ export function normalizeScannerResultFilters(value: unknown): ScannerResultFilt
       defaultScannerResultFilters.quality
     ),
     dcf: allowedValue(filters.dcf, dcfResultFilters, defaultScannerResultFilters.dcf),
-    risk: allowedValue(filters.risk, riskResultFilters, defaultScannerResultFilters.risk)
+    risk: allowedValue(filters.risk, riskResultFilters, defaultScannerResultFilters.risk),
+    minPrice: normalizedPriceBound(filters.minPrice),
+    maxPrice: normalizedPriceBound(filters.maxPrice)
   };
 }
 
@@ -263,8 +269,27 @@ export function rowMatchesScannerResultFilters(
     matchesResultFilter(validationCategory(row), filters.validation) &&
     matchesResultFilter(qualityCategory(row), filters.quality) &&
     matchesResultFilter(dcfCategory(row), filters.dcf) &&
-    matchesResultFilter(riskCategory(row), filters.risk)
+    matchesResultFilter(riskCategory(row), filters.risk) &&
+    matchesPriceRange(row, filters.minPrice, filters.maxPrice)
   );
+}
+
+function matchesPriceRange(
+  row: WatchlistRow,
+  minPrice: number | null,
+  maxPrice: number | null
+): boolean {
+  if (minPrice === null && maxPrice === null) {
+    return true;
+  }
+
+  const price = numericValue(row['Current Price']) ?? numericValue(row.Price);
+  if (price === undefined) {
+    return false;
+  }
+
+  return (minPrice === null || price >= minPrice) &&
+    (maxPrice === null || price <= maxPrice);
 }
 
 function targetFromPriceAndStop(price?: number, stop?: number): number | undefined {
@@ -330,6 +355,12 @@ function allowedValue<T extends string>(
   return typeof value === 'string' && allowed.includes(value as T)
     ? (value as T)
     : fallback;
+}
+
+function normalizedPriceBound(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -116,12 +116,20 @@ class CachedMarketDataProvider(MarketDataProvider):
             )
             raise
 
-        rows_stored = self.cache.store_history(
-            provider=self.name,
-            ticker=ticker,
-            interval=interval,
-            history=fetched_history,
-        )
+        try:
+            rows_stored = self.cache.store_history(
+                provider=self.name,
+                ticker=ticker,
+                interval=interval,
+                history=fetched_history,
+            )
+        except Exception as error:
+            self.cache.record_fetch(
+                request=request,
+                status="error",
+                error_message=str(error),
+            )
+            raise
         self._prune_retained_history(ticker=ticker, interval=interval)
         self.cache.record_fetch(
             request=request,
@@ -209,12 +217,21 @@ class CachedMarketDataProvider(MarketDataProvider):
 
             for ticker, request in misses:
                 fetched_history = fetched_histories.get(ticker, pd.DataFrame())
-                rows_stored = self.cache.store_history(
-                    provider=self.name,
-                    ticker=ticker,
-                    interval=interval,
-                    history=fetched_history,
-                )
+                try:
+                    rows_stored = self.cache.store_history(
+                        provider=self.name,
+                        ticker=ticker,
+                        interval=interval,
+                        history=fetched_history,
+                    )
+                except Exception as error:
+                    self.cache.record_fetch(
+                        request=request,
+                        status="error",
+                        error_message=str(error),
+                    )
+                    results[ticker] = pd.DataFrame()
+                    continue
                 self._prune_retained_history(ticker=ticker, interval=interval)
                 self.cache.record_fetch(
                     request=request,

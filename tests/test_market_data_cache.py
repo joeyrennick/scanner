@@ -1,6 +1,8 @@
 from datetime import date, datetime
+import sqlite3
 
 import pandas as pd
+import pytest
 
 from scanner.data.cache import CacheFetchRequest, SQLiteMarketDataCache
 from scanner.data.providers.cached import CachedMarketDataProvider, period_start_date
@@ -82,6 +84,79 @@ def test_sqlite_cache_round_trips_price_history(tmp_path):
     assert list(loaded["Volume"]) == [1_000_000.0, 1_000_000.0, 1_000_000.0]
 
 
+def test_sqlite_cache_preserves_timezone_aware_price_history(tmp_path):
+    cache = SQLiteMarketDataCache(tmp_path / "market_data.sqlite")
+    history = create_history(days=3)
+    history.index = history.index.tz_localize("UTC")
+
+    rows_stored = cache.store_history(
+        provider="massive",
+        ticker="AAPL",
+        interval="1d",
+        history=history,
+    )
+    loaded = cache.load_history(
+        provider="massive",
+        ticker="AAPL",
+        interval="1d",
+    )
+
+    assert rows_stored == 3
+    assert list(loaded["Close"]) == [100.0, 101.0, 102.0]
+    assert list(loaded["Volume"]) == [1_000_000.0, 1_000_000.0, 1_000_000.0]
+
+
+def test_sqlite_cache_rejects_history_without_usable_closing_prices(tmp_path):
+    cache = SQLiteMarketDataCache(tmp_path / "market_data.sqlite")
+    history = create_history(days=3)
+    history["Close"] = pd.NA
+
+    with pytest.raises(ValueError, match="no usable closing prices"):
+        cache.store_history(
+            provider="massive",
+            ticker="AAPL",
+            interval="1d",
+            history=history,
+        )
+
+    assert cache.load_history("massive", "AAPL").empty
+
+
+def test_sqlite_cache_removes_only_all_null_price_histories(tmp_path):
+    db_path = tmp_path / "market_data.sqlite"
+    cache = SQLiteMarketDataCache(db_path)
+    cache.store_history(
+        provider="massive",
+        ticker="VALID",
+        interval="1d",
+        history=create_history(days=3),
+    )
+    request = CacheFetchRequest(
+        provider="massive",
+        ticker="BROKEN",
+        interval="1d",
+        period="5y",
+        start_date=date(2021, 8, 29),
+    )
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO price_bars (
+                provider, ticker, interval, bar_date, fetched_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            ("massive", "BROKEN", "1d", "2026-08-28", "2026-08-29T00:00:00+00:00"),
+        )
+    cache.record_fetch(request=request, status="success", rows_returned=1)
+
+    removed = cache.remove_unusable_price_histories(provider="massive")
+
+    assert removed == [("massive", "BROKEN", "1d", 1)]
+    assert cache.load_history("massive", "BROKEN").empty
+    assert cache.load_history("massive", "VALID").empty is False
+    assert cache.successful_fetch_rows_today(request, today=date.today()) is None
+
+
 def test_sqlite_cache_overview_reports_refresh_staleness(tmp_path):
     cache = SQLiteMarketDataCache(tmp_path / "market_data.sqlite")
     history = create_history(start="2026-07-01", days=3)
@@ -140,6 +215,34 @@ def test_cached_provider_fetches_and_stores_on_cache_miss(tmp_path):
     assert result.empty is False
     assert cached_provider.stats.misses == 1
     assert cached_provider.stats.provider_calls == 1
+
+
+def test_cached_provider_records_invalid_price_history_as_an_error(tmp_path):
+    db_path = tmp_path / "market_data.sqlite"
+    cache = SQLiteMarketDataCache(db_path)
+    history = create_history(start="2026-06-01", days=40)
+    history["Close"] = pd.NA
+    provider = FakeProvider(history)
+    cached_provider = CachedMarketDataProvider(
+        provider=provider,
+        cache=cache,
+        now=lambda: datetime(2026, 7, 4, 10, 0),
+    )
+
+    with pytest.raises(ValueError, match="no usable closing prices"):
+        cached_provider.download_price_data("AAPL", period="1mo")
+
+    with sqlite3.connect(db_path) as connection:
+        status, error_message = connection.execute(
+            """
+            SELECT status, error_message
+            FROM cache_fetches
+            WHERE provider = 'fake' AND ticker = 'AAPL' AND period = '1mo'
+            """
+        ).fetchone()
+    assert status == "error"
+    assert "no usable closing prices" in error_message
+    assert cache.load_history("fake", "AAPL").empty
 
 
 def test_sqlite_cache_prunes_price_bars_before_cutoff(tmp_path):

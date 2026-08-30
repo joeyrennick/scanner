@@ -4,7 +4,8 @@ import { queryKeys } from './queryKeys';
 import type {
   DailyScannerReportRequest,
   DailyScannerReportResponse,
-  ReportMetadata
+  ReportMetadata,
+  SavedWatchlistReportResponse
 } from './types';
 
 export function useReports() {
@@ -23,6 +24,21 @@ export function useGenerateDailyScannerReport() {
         method: 'POST',
         body: JSON.stringify(request)
       }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.reports });
+    }
+  });
+}
+
+export function useGenerateSavedWatchlistReport() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (watchlistId: number) =>
+      apiClient.request<SavedWatchlistReportResponse>(
+        `/api/reports/saved-watchlist/${watchlistId}`,
+        { method: 'POST' }
+      ),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.reports });
     }

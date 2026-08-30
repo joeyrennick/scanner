@@ -58,6 +58,7 @@ from scanner.fundamentals import FundamentalAnalysisService
 from scanner.fundamentals.cache import FundamentalAnalysisCache
 from scanner.reports.daily_scanner_report import DailyScannerReport
 from scanner.reports.fundamental_analysis_report import FundamentalAnalysisReport
+from scanner.reports.saved_watchlist_report import SavedWatchlistReport
 from scanner.services.cache_warmup import CacheWarmupConfig, CacheWarmupService
 from scanner.security.secret_store import SQLiteSecretStore
 from scanner.services.scan_service import ScanCancelled, ScanConfig, ScanService
@@ -608,6 +609,20 @@ def generate_fundamental_analysis_report(
         "report": _report_metadata(pdf_path),
         "snapshot_path": str(snapshot_path),
     }
+
+
+@app.post("/api/reports/saved-watchlist/{watchlist_id}")
+def generate_saved_watchlist_report(watchlist_id: int) -> dict[str, Any]:
+    watchlist = _saved_watchlist_store().get_watchlist(watchlist_id)
+    if watchlist is None:
+        raise HTTPException(status_code=404, detail="Saved watchlist not found")
+
+    payload = _saved_watchlist_payload(watchlist, include_items=True)
+    output_dir = Path("output/watchlist_reports")
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")
+    pdf_path = output_dir / f"saved_watchlist_{watchlist.id}_{timestamp}.pdf"
+    SavedWatchlistReport(payload).generate(pdf_path)
+    return {"report": _report_metadata(pdf_path)}
 
 
 @app.get("/api/reports/{report_id}")
@@ -1566,6 +1581,8 @@ def _report_type(path: Path) -> str:
         return "daily_scanner"
     if "_fundamental_analysis_" in name and path.suffix == ".pdf":
         return "fundamental_analysis"
+    if name.startswith("saved_watchlist_") and path.suffix == ".pdf":
+        return "saved_watchlist"
     if "backtest" in name and path.suffix == ".html":
         return "backtest"
     if "portfolio" in name and path.suffix == ".html":

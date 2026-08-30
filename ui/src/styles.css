@@ -2050,6 +2050,20 @@ input:disabled {
 .candidate-add-list {
   display: grid;
   gap: 10px;
+  max-height: 560px;
+  overflow: auto;
+}
+
+.journal-watchlist-select {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 14px;
+  color: #52606d;
+  font-size: 0.82rem;
+}
+
+.journal-watchlist-select select {
+  width: 100%;
 }
 
 .candidate-add-row {
@@ -2073,6 +2087,14 @@ input:disabled {
 
 .candidate-add-row small {
   color: #64748b;
+}
+
+.candidate-add-row:disabled {
+  border-color: #b7dfc2;
+  background: #f0faf3;
+  color: #16723a;
+  cursor: default;
+  opacity: 1;
 }
 
 .danger-link {

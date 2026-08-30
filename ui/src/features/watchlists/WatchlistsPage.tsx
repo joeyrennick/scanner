@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
-import { BookmarkPlus, BriefcaseBusiness, LineChart, Plus, Trash2 } from 'lucide-react';
+import { BookmarkPlus, BriefcaseBusiness, Download, LineChart, Plus, Trash2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
   useAddSavedWatchlistItem,
@@ -23,6 +23,7 @@ import {
 import { clampScannerColumnWidth } from '../../lib/scannerColumns';
 import { rememberRecentTicker } from '../../lib/recentTicker';
 import { MultiSelectFilter } from '../../components/MultiSelectFilter';
+import { useGenerateSavedWatchlistReport } from '../../api/reports';
 
 type WatchlistColumnKey =
   | 'select'
@@ -151,6 +152,7 @@ export function WatchlistsPage() {
   const deleteList = useDeleteSavedWatchlist();
   const addItem = useAddSavedWatchlistItem();
   const removeItem = useRemoveSavedWatchlistItem();
+  const exportPdf = useGenerateSavedWatchlistReport();
   const [state, setState] = useState(loadWatchlistPageState);
   const [newListName, setNewListName] = useState('');
   const [tickerDraft, setTickerDraft] = useState('');
@@ -206,13 +208,19 @@ export function WatchlistsPage() {
   const selectedSet = new Set(state.selectedTickers);
   const activeRow = displayRows.find((row) => row.candidate.ticker === state.activeTicker) ?? null;
   const mutationError =
-    createList.error ?? renameList.error ?? deleteList.error ?? addItem.error ?? removeItem.error;
+    createList.error ?? renameList.error ?? deleteList.error ?? addItem.error ?? removeItem.error ?? exportPdf.error;
   const busy =
     createList.isPending ||
     renameList.isPending ||
     deleteList.isPending ||
     addItem.isPending ||
     removeItem.isPending;
+
+  async function exportCurrentWatchlist() {
+    if (activeWatchlistId === null) return;
+    const response = await exportPdf.mutateAsync(activeWatchlistId);
+    window.location.assign(`/api/reports/${response.report.id}/download`);
+  }
 
   function updateState(changes: Partial<WatchlistPageState>) {
     setState((current) => {
@@ -394,6 +402,15 @@ export function WatchlistsPage() {
           </form>
           <button className="secondary-button" type="button" disabled={!activeList || busy} onClick={() => void renameWatchlist()}>
             Rename
+          </button>
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={!activeList || busy || exportPdf.isPending}
+            onClick={() => void exportCurrentWatchlist()}
+          >
+            <Download size={16} />
+            {exportPdf.isPending ? 'Creating PDF…' : 'Export PDF'}
           </button>
           <button className="danger-button" type="button" disabled={!activeList || busy} onClick={() => void deleteWatchlist()}>
             <Trash2 size={16} /> Delete List

@@ -116,3 +116,43 @@ def test_saved_watchlist_api_rejects_duplicate_names(tmp_path, monkeypatch):
     assert client.post("/api/saved-watchlists", json={"name": "Ideas"}).status_code == 200
     duplicate = client.post("/api/saved-watchlists", json={"name": "ideas"})
     assert duplicate.status_code == 409
+
+
+def test_saved_watchlist_report_is_downloadable_and_listed(tmp_path, monkeypatch):
+    from scanner.api import app as api_app
+
+    db_path = tmp_path / "market_data.sqlite"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        api_app,
+        "settings",
+        replace(api_app.settings, market_data_cache_path=str(db_path)),
+    )
+    store = SQLiteSavedWatchlistStore(db_path)
+    watchlist = store.create_watchlist("Long Term Ideas")
+    store.add_item(
+        watchlist.id,
+        "AAPL",
+        source="fundamentals",
+        data={
+            "Company Name": "Apple Inc.",
+            "Current Price": 210.5,
+            "Fair Value": 240,
+            "Margin of Safety": 14.0,
+            "Validation Label": "Validated",
+            "Quality Label": "Strong",
+            "Valuation Label": "Undervalued",
+            "Risk Level": "Low",
+        },
+    )
+
+    created = client.post(f"/api/reports/saved-watchlist/{watchlist.id}")
+
+    assert created.status_code == 200
+    report = created.json()["report"]
+    assert report["type"] == "saved_watchlist"
+    downloaded = client.get(f"/api/reports/{report['id']}/download")
+    assert downloaded.status_code == 200
+    assert downloaded.headers["content-type"] == "application/pdf"
+    assert downloaded.content.startswith(b"%PDF")
+    assert report["id"] in {item["id"] for item in client.get("/api/reports").json()}

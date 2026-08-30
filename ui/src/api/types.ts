@@ -319,6 +319,10 @@ export interface FundamentalReportResponse {
   snapshot_path: string;
 }
 
+export interface SavedWatchlistReportResponse {
+  report: ReportMetadata;
+}
+
 export interface DailyScannerReportRequest {
   rows?: WatchlistRow[] | null;
   report_date?: string | null;

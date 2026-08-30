@@ -46,7 +46,7 @@ import {
   useStartScan,
   useUpdateCandidateTradeLevels
 } from './api/scans';
-import { useSavedWatchlist } from './api/savedWatchlists';
+import { useSavedWatchlist, useSavedWatchlists } from './api/savedWatchlists';
 import {
   useDeleteMassiveCredential,
   useMassiveCredentialStatus,
@@ -2856,15 +2856,43 @@ function PortfolioPage() {
 }
 
 function JournalPage() {
-  const latestWatchlist = useLatestWatchlist();
+  const savedWatchlists = useSavedWatchlists();
+  const [selectedWatchlistId, setSelectedWatchlistId] = useLocalStorage<number | null>(
+    'swing-scanner.journal.selected-watchlist.v1',
+    null,
+    normalizePositiveIntegerOrNull
+  );
+  const watchlistOptions = savedWatchlists.data?.watchlists ?? [];
+  const activeWatchlistId = watchlistOptions.some(
+    (watchlist) => watchlist.id === selectedWatchlistId
+  )
+    ? selectedWatchlistId
+    : watchlistOptions[0]?.id ?? null;
+  const selectedWatchlist = useSavedWatchlist(activeWatchlistId);
+  useEffect(() => {
+    if (activeWatchlistId !== selectedWatchlistId) {
+      setSelectedWatchlistId(activeWatchlistId);
+    }
+  }, [activeWatchlistId, selectedWatchlistId, setSelectedWatchlistId]);
   const candidates = useMemo(
     () =>
-      (latestWatchlist.data?.rows ?? []).map((row, index) =>
-        candidateFromWatchlistRow(row, index)
+      (selectedWatchlist.data?.items ?? []).map((item, index) =>
+        candidateFromWatchlistRow(
+          { ...item.data, Ticker: item.ticker },
+          index
+        )
       ),
-    [latestWatchlist.data?.rows]
+    [selectedWatchlist.data?.items]
   );
   const [plannedTrades, setPlannedTrades] = useLocalStorage<PlannedTrade[]>('planned-trades', []);
+  const [selectedPlannedTradeIds, setSelectedPlannedTradeIds] = useLocalStorage<string[]>(
+    'swing-scanner.journal.selected-planned-trades.v1',
+    [],
+    normalizeStringArray
+  );
+  const selectedPlannedTradeSet = new Set(
+    selectedPlannedTradeIds.filter((id) => plannedTrades.some((trade) => trade.id === id))
+  );
 
   function addCandidate(candidate: DisplayCandidate) {
     setPlannedTrades((current) => {
@@ -2878,6 +2906,40 @@ function JournalPage() {
 
   function deleteTrade(id: string) {
     setPlannedTrades((current) => current.filter((trade) => trade.id !== id));
+    setSelectedPlannedTradeIds((current) => current.filter((tradeId) => tradeId !== id));
+  }
+
+  function togglePlannedTrade(id: string) {
+    setSelectedPlannedTradeIds((current) =>
+      current.includes(id)
+        ? current.filter((tradeId) => tradeId !== id)
+        : [...current, id]
+    );
+  }
+
+  function toggleAllPlannedTrades() {
+    const allSelected = plannedTrades.length > 0 && plannedTrades.every(
+      (trade) => selectedPlannedTradeSet.has(trade.id)
+    );
+    setSelectedPlannedTradeIds(allSelected ? [] : plannedTrades.map((trade) => trade.id));
+  }
+
+  function removeSelectedTrades() {
+    if (selectedPlannedTradeSet.size === 0) return;
+    setPlannedTrades((current) =>
+      current.filter((trade) => !selectedPlannedTradeSet.has(trade.id))
+    );
+    setSelectedPlannedTradeIds([]);
+  }
+
+  function addAllCandidates() {
+    setPlannedTrades((current) => {
+      const existingTickers = new Set(current.map((trade) => trade.ticker));
+      const additions = candidates
+        .filter((candidate) => !existingTickers.has(candidate.ticker))
+        .map(plannedTradeFromCandidate);
+      return [...additions, ...current];
+    });
   }
 
   return (
@@ -2894,13 +2956,34 @@ function JournalPage() {
           <div className="panel-header">
             <div>
               <h2 id="planned-trades-title">Planned Trades</h2>
-              <p>Editable trades created from scanner candidates</p>
+              <p>Editable trades created from saved watchlists</p>
             </div>
+            <button
+              className="danger-button"
+              type="button"
+              disabled={selectedPlannedTradeSet.size === 0}
+              onClick={removeSelectedTrades}
+            >
+              <Trash2 size={16} />
+              Remove Selected{selectedPlannedTradeSet.size > 0
+                ? ` (${selectedPlannedTradeSet.size})`
+                : ''}
+            </button>
           </div>
           <div className="table-wrap compact-table">
             <table className="data-table">
               <thead>
                 <tr>
+                  <th>
+                    <input
+                      type="checkbox"
+                      aria-label="Select all planned trades"
+                      checked={plannedTrades.length > 0 && plannedTrades.every(
+                        (trade) => selectedPlannedTradeSet.has(trade.id)
+                      )}
+                      onChange={toggleAllPlannedTrades}
+                    />
+                  </th>
                   <th>Ticker</th>
                   <th>Strategy</th>
                   <th>Planned</th>
@@ -2913,6 +2996,14 @@ function JournalPage() {
               <tbody>
                 {plannedTrades.map((trade) => (
                   <tr key={trade.id}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${trade.ticker}`}
+                        checked={selectedPlannedTradeSet.has(trade.id)}
+                        onChange={() => togglePlannedTrade(trade.id)}
+                      />
+                    </td>
                     <td className="ticker-cell">{trade.ticker}</td>
                     <td>{trade.strategy}</td>
                     <td>{trade.plannedAt}</td>
@@ -2922,14 +3013,14 @@ function JournalPage() {
                     <td>
                       <button className="link-button danger-link" onClick={() => deleteTrade(trade.id)}>
                         <Trash2 size={15} />
-                        Delete
+                        Remove
                       </button>
                     </td>
                   </tr>
                 ))}
                 {plannedTrades.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="empty-cell">No planned trades yet.</td>
+                    <td colSpan={8} className="empty-cell">No planned trades yet.</td>
                   </tr>
                 )}
               </tbody>
@@ -2937,24 +3028,69 @@ function JournalPage() {
           </div>
         </section>
 
-        <section className="panel" aria-labelledby="add-from-scanner-title">
+        <section className="panel" aria-labelledby="add-from-watchlist-title">
           <div className="panel-header">
             <div>
-              <h2 id="add-from-scanner-title">Add From Scanner</h2>
+              <h2 id="add-from-watchlist-title">Add From Watchlist</h2>
               <p>Creates planned trades that can later be reconciled with broker fills</p>
             </div>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={addAllCandidates}
+              disabled={candidates.length === 0 || candidates.every((candidate) =>
+                plannedTrades.some((trade) => trade.ticker === candidate.ticker)
+              )}
+            >
+              <Save size={16} />
+              Add All
+            </button>
           </div>
+          <label className="journal-watchlist-select">
+            Watchlist
+            <select
+              value={activeWatchlistId ?? ''}
+              onChange={(event) => setSelectedWatchlistId(Number(event.target.value) || null)}
+            >
+              {watchlistOptions.length === 0 && <option value="">No saved watchlists</option>}
+              {watchlistOptions.map((watchlist) => (
+                <option key={watchlist.id} value={watchlist.id}>
+                  {watchlist.name} ({watchlist.item_count})
+                </option>
+              ))}
+            </select>
+          </label>
+          {savedWatchlists.isError && (
+            <AlertMessage tone="danger" message={savedWatchlists.error.message} />
+          )}
+          {selectedWatchlist.isError && (
+            <AlertMessage tone="danger" message={selectedWatchlist.error.message} />
+          )}
           <div className="candidate-add-list">
-            {candidates.slice(0, 12).map((candidate) => (
-              <button key={candidate.ticker} className="candidate-add-row" onClick={() => addCandidate(candidate)}>
+            {candidates.map((candidate) => (
+              <button
+                key={candidate.ticker}
+                className="candidate-add-row"
+                onClick={() => addCandidate(candidate)}
+                disabled={plannedTrades.some((trade) => trade.ticker === candidate.ticker)}
+              >
                 <span>
                   <strong>{candidate.ticker}</strong>
                   <small>{candidate.strategy}</small>
                 </span>
-                <Save size={16} />
+                {plannedTrades.some((trade) => trade.ticker === candidate.ticker)
+                  ? <CheckCircle2 size={16} />
+                  : <Save size={16} />}
               </button>
             ))}
-            {candidates.length === 0 && <p className="muted-text">Run the scanner to add planned trades.</p>}
+            {selectedWatchlist.isLoading && <p className="muted-text">Loading watchlist…</p>}
+            {!selectedWatchlist.isLoading && candidates.length === 0 && (
+              <p className="muted-text">
+                {watchlistOptions.length === 0
+                  ? <>Create a <Link to="/watchlists">saved watchlist</Link> to add planned trades.</>
+                  : 'This watchlist does not contain any tickers.'}
+              </p>
+            )}
           </div>
         </section>
       </div>
@@ -4687,7 +4823,7 @@ function ReportsTable({ reports }: { reports: ReportMetadata[] }) {
               <td>{formatFileSize(report.size_bytes)}</td>
               <td>{report.path}</td>
               <td>
-                {report.type === 'fundamental_analysis' && (
+                {(report.type === 'fundamental_analysis' || report.type === 'saved_watchlist') && (
                   <a className="link-button" href={`/api/reports/${report.id}/view`} target="_blank" rel="noreferrer">
                     View
                   </a>
@@ -5622,6 +5758,18 @@ function normalizeOptionalTicker(value: unknown): string | null {
 
   const ticker = value.trim().toUpperCase();
   return ticker || null;
+}
+
+function normalizePositiveIntegerOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0
+    ? value
+    : null;
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? [...new Set(value.filter((item): item is string => typeof item === 'string'))]
+    : [];
 }
 
 function emptyNumberToNull(value: number | null | undefined): number | null {

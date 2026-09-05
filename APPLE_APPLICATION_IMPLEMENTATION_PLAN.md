@@ -423,6 +423,10 @@ This phase requires a separate approval before implementation:
 
 - Decide whether to retain Mac-hosted companion access or deploy a cloud
   backend for access away from home.
+- If a cloud backend is approved, execute the hosted PostgreSQL setup and
+  migration runbook in Section 16. PostgreSQL is not a prerequisite for Phases
+  0 through 6 and must not replace SQLite in the local Mac application merely
+  to prepare for a possible public release.
 - Confirm Massive permits the intended bring-your-own-account integration and
   data displays in a commercial third-party application.
 - Complete financial-services legal review of screening, ranking, and AI
@@ -520,12 +524,184 @@ Mac application is made by the packaged backend. The later iPhone companion
 will display and initiate those analyses through the paired Mac; it will not
 store the OpenAI API key or call OpenAI directly.
 
-If a future public release adopts a hosted multi-user backend, create a separate
-migration plan for accounts, server-held credentials, PostgreSQL, durable cloud
-jobs, synchronized history, subscription entitlements, and deletion. Do not
-silently reinterpret the local-first decisions in either plan.
+If a future public release adopts a hosted multi-user backend, use the runbook
+in Section 16 and add a provider-specific infrastructure checklist. That work
+must cover accounts, server-held credentials, PostgreSQL, durable cloud jobs,
+synchronized history, subscription entitlements, and deletion. Do not silently
+reinterpret the local-first decisions in either plan.
 
-## 16. Definition of done
+## 16. Deferred hosted PostgreSQL setup and migration runbook
+
+### 16.1 When PostgreSQL is required
+
+PostgreSQL is required only after approving a hosted, multi-user backend. That
+decision would support one or more of the following:
+
+- using the iPhone application when the Mac is unavailable or on another
+  network;
+- synchronizing accounts, watchlists, reports, scans, and AI history across
+  devices;
+- running scans and AI jobs after every client application has closed; or
+- distributing the product publicly as a managed service.
+
+PostgreSQL is not required for the local Mac desktop application or the first
+same-network iPhone companion. Do not create a hosted database, migrate current
+data, or pay for database service before the cloud-backend decision is approved.
+The local application will continue using SQLite even if a later hosted service
+uses PostgreSQL.
+
+### 16.2 Decisions required before creating the database
+
+Finalize these items at the beginning of the hosted-backend phase:
+
+1. Select the cloud application host and managed PostgreSQL provider.
+2. Choose a region near the expected users and in the same region as the API
+   and worker services.
+3. Estimate development, staging, and production storage, connections, worker
+   concurrency, backup retention, and monthly budget.
+4. Define which data synchronizes to the service and which device-local data
+   remains private.
+5. Define account ownership, authentication, deletion, export, and retention
+   behavior.
+6. Decide whether existing personal Mac data will remain local, be imported
+   once, or participate in ongoing synchronization.
+7. Complete the Massive, legal, and privacy gates before uploading licensed
+   market data or inviting public users.
+
+The selected provider will receive a separate provider-specific setup checklist
+with exact console fields. This runbook intentionally avoids steps that could
+become incorrect if a different provider is selected.
+
+### 16.3 User-owned infrastructure steps
+
+When the hosted phase is approved, the product owner will:
+
+1. Create the cloud-provider organization under a product-owned email address,
+   not a developer's personal account.
+2. Enable multi-factor authentication, save recovery information securely, and
+   add a second trusted administrator if appropriate.
+3. Configure billing, a monthly budget, and usage alerts before provisioning
+   resources.
+4. Create separate development, staging, and production projects. Production
+   data must never be used casually for development or automated tests.
+5. Select the approved region and provision managed PostgreSQL using a currently
+   supported version.
+6. Enable encryption in transit, encryption at rest, automated backups, and
+   point-in-time recovery where the provider supports it.
+7. Configure the maintenance window, backup retention, storage-growth alerts,
+   connection alerts, and database health notifications.
+8. Create or approve a product domain and DNS records for the hosted API.
+9. Grant deployment automation and maintainers only the minimum roles they need.
+   Do not share an all-powerful provider login.
+10. Place connection credentials in the hosting provider's secret manager or
+    protected environment settings. Never commit them, place them in the app,
+    paste them into a plan, or send them through ordinary chat.
+11. Approve the staging cutover after reviewing reconciliation and restore-test
+    evidence.
+12. Approve the production cutover and the documented rollback window.
+
+The user does not need to create tables, write SQL, run schema migrations, or
+manually copy SQLite data. Those are application implementation tasks.
+
+### 16.4 Application implementation steps
+
+The application work will:
+
+1. Inventory all current SQLite databases and classify each table as canonical
+   user data, job state, provider cache, rebuildable cache, or secret data.
+2. Define a multi-user relational model. Canonical records will include stable
+   identifiers, `user_id` ownership, timestamps, constraints, and deletion
+   behavior.
+3. Keep PDFs and large immutable report artifacts in encrypted object storage;
+   PostgreSQL will store their metadata and storage identifiers rather than
+   large filesystem blobs.
+4. Introduce repository interfaces so local SQLite and hosted PostgreSQL modes
+   remain explicit. The desktop build must not accidentally connect to the
+   production database.
+5. Replace database-specific application SQL with tested SQLAlchemy 2 models and
+   repositories, using synchronous PostgreSQL access unless measurements show a
+   need for an asynchronous conversion.
+6. Add Alembic migrations as the only supported way to modify the hosted schema.
+   Application startup must not create or alter production tables ad hoc.
+7. Add a PostgreSQL driver, bounded connection pooling, transaction boundaries,
+   retry rules for transient failures, and database health checks.
+8. Add tenant-isolation tests proving one account cannot read, update, export,
+   or delete another account's records.
+9. Replace the in-memory job registry with a durable queue and persist job
+   ownership, progress, cancellation, recovery, and results.
+10. Move server-held provider credentials into a managed secret system with
+    per-user encryption where bring-your-own credentials are approved.
+11. Implement account data export and deletion, including associated reports,
+    AI history, credentials, and queued work.
+12. Build a versioned SQLite export/import tool with dry-run mode, validation,
+    repeat-safe identifiers, and a manifest of record counts and checksums.
+13. Add the indexes and query limits required by measured staging workloads.
+14. Add metrics for connection usage, slow queries, errors, storage growth,
+    queue delay, and migration status without logging sensitive values.
+
+### 16.5 Environment creation order
+
+Create and validate the hosted environments in this order:
+
+1. **Local integration:** Run an expendable PostgreSQL instance for automated
+   compatibility and migration tests. It contains generated test data only.
+2. **Hosted development:** Verify deployment, secrets, migrations, job workers,
+   and database connectivity without personal production data.
+3. **Hosted staging:** Exercise realistic volumes, account isolation, SQLite
+   import, backup restoration, failure recovery, and application upgrades.
+4. **Hosted production:** Provision only after staging acceptance, legal and
+   licensing approval, operational ownership, and a tested rollback procedure.
+
+Never point local automated tests at staging or production. Never use a
+production connection string as a development default.
+
+### 16.6 Migration and cutover procedure
+
+For each environment:
+
+1. Provision the empty database and application roles.
+2. Run migrations using a dedicated migration role.
+3. Start the API with its restricted runtime role.
+4. Run health, authorization, transaction, and job-queue smoke tests.
+5. Import a sanitized SQLite fixture and reconcile every table's counts,
+   identifiers, ownership, totals, and report references.
+6. Run representative scanner, fundamentals, watchlist, journal, report, and AI
+   workflows.
+7. Take a managed backup and restore it into a separate verification database.
+8. Measure queries, indexes, pool saturation, worker concurrency, and storage.
+9. Record the deployed application version and Alembic revision.
+
+For production cutover:
+
+1. Announce a maintenance window if existing data will be uploaded.
+2. Stop mutations in the source being migrated while retaining read access.
+3. Create an immutable source backup and migration manifest.
+4. Run the repeat-safe import and reconciliation report.
+5. Complete an owner-approved smoke test using non-destructive operations.
+6. Enable production traffic gradually and monitor errors and resource usage.
+7. Retain the source backup and the previous application version for the agreed
+   rollback period.
+8. Roll back if reconciliation, tenant isolation, or critical workflows fail.
+
+### 16.7 PostgreSQL acceptance criteria
+
+The hosted database setup is complete only when:
+
+- development, staging, and production have separate databases, secrets, and
+  access controls;
+- all schema changes are versioned, reviewed, repeatable migrations;
+- TLS is required and production is not unnecessarily open to the public
+  internet;
+- runtime roles cannot perform administrative schema operations;
+- account isolation has automated positive and negative tests;
+- backups are enabled and an actual restore has succeeded;
+- SQLite migration produces an auditable reconciliation report;
+- deployed services survive database restart and transient-connection tests;
+- monitoring and budget alerts reach an accountable owner;
+- credentials are absent from Git, client bundles, logs, and diagnostics; and
+- the rollback procedure has been exercised in staging.
+
+## 17. Definition of done
 
 ### Mac application
 

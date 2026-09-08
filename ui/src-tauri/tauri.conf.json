@@ -1,0 +1,40 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Swing Scanner",
+  "version": "0.1.0",
+  "identifier": "com.swing-scanner.desktop",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://127.0.0.1:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Swing Scanner",
+        "width": 1180,
+        "height": 760,
+        "minWidth": 900,
+        "minHeight": 620,
+        "center": true,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "category": "Finance",
+    "shortDescription": "Local-first stock scanner and research workspace",
+    "icon": ["icons/icon.icns", "icons/icon.png"],
+    "resources": {
+      "resources/swing-scanner-sidecar/": "sidecar/"
+    }
+  }
+}

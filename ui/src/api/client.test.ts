@@ -35,4 +35,33 @@ describe('api client', () => {
       message: 'Job not found'
     });
   });
+
+  it('adds a desktop bearer token without dropping request headers', async () => {
+    const fetcher = vi.fn(async () =>
+      new Response(JSON.stringify({ status: 'ok' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      })
+    );
+    const client = createApiClient({
+      baseUrl: 'http://127.0.0.1:49152',
+      bearerToken: 'desktop-secret',
+      fetcher
+    });
+
+    await client.request('/api/desktop/health', {
+      headers: { 'X-Test-Request': 'phase-zero' }
+    });
+
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://127.0.0.1:49152/api/desktop/health',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer desktop-secret',
+          'Content-Type': 'application/json',
+          'X-Test-Request': 'phase-zero'
+        })
+      })
+    );
+  });
 });

@@ -7,16 +7,21 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
-    "preview": "vite preview --host 127.0.0.1"
+    "preview": "vite preview --host 127.0.0.1",
+    "desktop:build-sidecar": "../packaging/build_desktop_sidecar.sh",
+    "desktop:dev": "npm run desktop:build-sidecar && tauri dev",
+    "desktop:build": "npm run desktop:build-sidecar && tauri build"
   },
   "dependencies": {
     "@tanstack/react-query": "5.59.16",
+    "@tauri-apps/api": "^2.11.1",
     "lucide-react": "0.468.0",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "react-router-dom": "^6.30.4"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
     "@testing-library/jest-dom": "6.6.3",
     "@testing-library/react": "16.1.0",
     "@testing-library/user-event": "14.5.2",

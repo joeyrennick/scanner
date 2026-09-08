@@ -21,6 +21,12 @@ output/
 ui/node_modules/
 ui/dist/
 ui/coverage/
+ui/src-tauri/target/
+ui/src-tauri/gen/schemas/
+ui/src-tauri/resources/swing-scanner-sidecar/
+
+# Packaging
+packaging/build/
 
 # Testing
 .pytest_cache/

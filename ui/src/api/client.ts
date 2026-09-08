@@ -9,20 +9,23 @@ export class ApiError extends Error {
 
 export interface ApiClientOptions {
   baseUrl?: string;
+  bearerToken?: string;
   fetcher?: typeof fetch;
 }
 
 export function createApiClient(options: ApiClientOptions = {}) {
   const baseUrl = options.baseUrl ?? '';
+  const bearerToken = options.bearerToken;
   const fetcher = options.fetcher ?? fetch;
 
   async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetcher(`${baseUrl}${path}`, {
+      ...init,
       headers: {
         'Content-Type': 'application/json',
+        ...(bearerToken ? { Authorization: `Bearer ${bearerToken}` } : {}),
         ...(init?.headers ?? {})
-      },
-      ...init
+      }
     });
 
     if (!response.ok) {

@@ -13,6 +13,7 @@ from scanner.security.secret_store import SQLiteSecretStore
 class FakeSettings:
     def __init__(self, cache_path):
         self.market_data_cache_path = str(cache_path)
+        self.credential_database_path = str(cache_path)
 
 
 class FakeResponse:

@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiClient } from './client';
+import { useApplicationApi } from '../platform/PlatformProvider';
 import { queryKeys } from './queryKeys';
 import type { CacheOverview, CacheWarmupRequest, JobResponse } from './types';
 
 export function useCacheOverview() {
+  const apiClient = useApplicationApi();
   return useQuery({
     queryKey: queryKeys.cacheOverview,
     queryFn: () => apiClient.request<CacheOverview>('/api/cache/overview')
@@ -11,6 +12,7 @@ export function useCacheOverview() {
 }
 
 export function useStartCacheWarmup() {
+  const apiClient = useApplicationApi();
   const queryClient = useQueryClient();
 
   return useMutation({

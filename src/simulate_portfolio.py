@@ -4,6 +4,7 @@ from math import isinf
 from scanner.portfolio.execution_model import ExecutionModel
 from scanner.portfolio.portfolio_simulator import PortfolioSimulator
 from scanner.portfolio.trade_csv_loader import load_trades_from_csv
+from scanner.data.ownership import owned_application
 
 
 def format_value(value):
@@ -24,6 +25,7 @@ def print_summary(summary: dict):
         print(f"{label}: {format_value(value)}{suffix}")
 
 
+@owned_application
 def main():
     parser = argparse.ArgumentParser(
         description="Simulate portfolio performance from exported backtest trades.",

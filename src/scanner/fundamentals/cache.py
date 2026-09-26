@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 import hashlib
 import json
 from pathlib import Path
+from scanner.data.ownership import acquire_database, connect
 import sqlite3
 from typing import Any
 
@@ -13,6 +14,7 @@ CACHE_SCHEMA_VERSION = 6
 class FundamentalAnalysisCache:
     def __init__(self, db_path: str | Path, ttl_hours: int = 6):
         self.db_path = Path(db_path)
+        self._ownership = acquire_database(self.db_path)
         self.ttl = timedelta(hours=ttl_hours)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
@@ -151,7 +153,7 @@ class FundamentalAnalysisCache:
         return validations
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.db_path)
+        return connect(self.db_path, kind="cache")
 
 
 def _key(ticker: str, assumptions: dict[str, Any]) -> str:

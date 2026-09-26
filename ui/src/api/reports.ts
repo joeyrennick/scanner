@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiClient } from './client';
+import { useApplicationApi } from '../platform/PlatformProvider';
 import { queryKeys } from './queryKeys';
 import type {
   DailyScannerReportRequest,
@@ -9,6 +9,7 @@ import type {
 } from './types';
 
 export function useReports() {
+  const apiClient = useApplicationApi();
   return useQuery({
     queryKey: queryKeys.reports,
     queryFn: () => apiClient.request<ReportMetadata[]>('/api/reports')
@@ -16,6 +17,7 @@ export function useReports() {
 }
 
 export function useGenerateDailyScannerReport() {
+  const apiClient = useApplicationApi();
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -31,6 +33,7 @@ export function useGenerateDailyScannerReport() {
 }
 
 export function useGenerateSavedWatchlistReport() {
+  const apiClient = useApplicationApi();
   const queryClient = useQueryClient();
 
   return useMutation({

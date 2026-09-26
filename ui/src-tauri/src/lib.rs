@@ -97,11 +97,28 @@ fn start_backend(app: &AppHandle) -> Result<BackendRuntime, String> {
     let port = available_loopback_port()?;
     let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     let executable = resolve_sidecar_path(app)?;
-    let cache_dir = app
-        .path()
-        .app_cache_dir()
-        .map_err(|error| format!("Unable to resolve desktop cache directory: {error}"))?
-        .join("phase-zero");
+    let data_root = configured_path(
+        "SCANNER_DATA_ROOT",
+        app.path()
+            .data_dir()
+            .map_err(|error| error.to_string())?
+            .join("Swing Scanner"),
+    )?;
+    let cache_dir = configured_path(
+        "SCANNER_CACHE_ROOT",
+        app.path()
+            .cache_dir()
+            .map_err(|error| error.to_string())?
+            .join("Swing Scanner"),
+    )?;
+    let report_dir = configured_path("SCANNER_REPORT_ROOT", data_root.join("reports"))?;
+    let log_dir = configured_path(
+        "SCANNER_LOG_ROOT",
+        app.path()
+            .home_dir()
+            .map_err(|error| error.to_string())?
+            .join("Library/Logs/Swing Scanner"),
+    )?;
     let matplotlib_dir = cache_dir.join("matplotlib");
     std::fs::create_dir_all(&matplotlib_dir)
         .map_err(|error| format!("Unable to create desktop cache directory: {error}"))?;
@@ -110,6 +127,10 @@ fn start_backend(app: &AppHandle) -> Result<BackendRuntime, String> {
         .current_dir(&cache_dir)
         .env("SCANNER_DESKTOP_PORT", port.to_string())
         .env("SCANNER_DESKTOP_TOKEN", &token)
+        .env("SCANNER_DATA_ROOT", &data_root)
+        .env("SCANNER_CACHE_ROOT", &cache_dir)
+        .env("SCANNER_REPORT_ROOT", &report_dir)
+        .env("SCANNER_LOG_ROOT", &log_dir)
         .env("MPLCONFIGDIR", matplotlib_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -138,6 +159,14 @@ fn start_backend(app: &AppHandle) -> Result<BackendRuntime, String> {
         },
         port,
     })
+}
+
+fn configured_path(name: &str, default: PathBuf) -> Result<PathBuf, String> {
+    let path = std::env::var_os(name).map(PathBuf::from).unwrap_or(default);
+    if !path.is_absolute() {
+        return Err(format!("{name} must be an absolute path"));
+    }
+    Ok(path)
 }
 
 fn resolve_sidecar_path(app: &AppHandle) -> Result<PathBuf, String> {

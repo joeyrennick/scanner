@@ -3,17 +3,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from scanner.data.ownership import acquire_database, connect
 import base64
 import hmac
 import hashlib
 import os
 import sqlite3
+import threading
 
 
 PAYLOAD_PREFIX = b"SS1"
 NONCE_BYTES = 16
 TAG_BYTES = 32
 MASTER_KEY_BYTES = 32
+_KEY_LOCK = threading.RLock()
 
 
 @dataclass(frozen=True)
@@ -27,6 +30,7 @@ class SecretMetadata:
 class SQLiteSecretStore:
     def __init__(self, db_path: str | Path, key_path: str | Path | None = None):
         self.db_path = Path(db_path)
+        self._ownership = acquire_database(self.db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.key_path = Path(key_path) if key_path else self.db_path.with_suffix(".key")
         self._ensure_schema()
@@ -49,7 +53,7 @@ class SQLiteSecretStore:
 
     def set_secret(self, name: str, value: str) -> None:
         now = datetime.now(UTC).isoformat(timespec="seconds")
-        encrypted_value = _encrypt(value, self._master_key())
+        encrypted_value = _encrypt(value, self._master_key(allow_create=True))
 
         with self._connect() as connection:
             connection.execute(
@@ -110,18 +114,32 @@ class SQLiteSecretStore:
                 """
             )
 
-    def _master_key(self) -> bytes:
-        if self.key_path.exists():
-            return base64.urlsafe_b64decode(self.key_path.read_bytes())
+    def _master_key(self, *, allow_create: bool = False) -> bytes:
+        with _KEY_LOCK:
+            if self.key_path.is_symlink():
+                raise ValueError("Credential key must not be a symlink")
+            if self.key_path.exists():
+                key = base64.b64decode(self.key_path.read_bytes(), altchars=b"-_", validate=True)
+                if len(key) != MASTER_KEY_BYTES:
+                    raise ValueError("Invalid credential key; restore the matching original key")
+                return key
 
-        self.key_path.parent.mkdir(parents=True, exist_ok=True)
-        key = os.urandom(MASTER_KEY_BYTES)
-        self.key_path.write_bytes(base64.urlsafe_b64encode(key))
-        os.chmod(self.key_path, 0o600)
-        return key
+            with self._connect() as connection:
+                has_secrets = connection.execute("SELECT 1 FROM secrets LIMIT 1").fetchone() is not None
+            if not allow_create or has_secrets:
+                raise ValueError("Missing credential key; restore the matching original key before continuing")
+
+            self.key_path.parent.mkdir(parents=True, exist_ok=True)
+            key = os.urandom(MASTER_KEY_BYTES)
+            fd = os.open(self.key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(base64.urlsafe_b64encode(key))
+                stream.flush()
+                os.fsync(stream.fileno())
+            return key
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.db_path, timeout=30)
+        return connect(self.db_path, timeout=30, kind="credential")
 
 
 def _encrypt(value: str, key: bytes) -> str:

@@ -137,6 +137,8 @@ def test_market_data_history_endpoint_returns_intraday_timestamps(monkeypatch):
     from scanner.api import app as api_app
 
     factory_calls = []
+    # This is a timestamp-format test, not a test of today's rolling window.
+    monkeypatch.setattr(api_app, "period_start_date", lambda **_kwargs: date(2026, 8, 28))
 
     class FakeProvider:
         def download_price_data(self, ticker, period="1y", interval="1d"):
@@ -441,7 +443,8 @@ def test_scan_job_lifecycle(monkeypatch, tmp_path):
     assert payload["status"] == "complete"
     assert payload["progress"]["current_step"] == "Scan complete"
     assert payload["output_paths"]["watchlist_csv"] == str(tmp_path / "watchlist.csv")
-    assert payload["output_paths"]["scan_log"].startswith("output/logs/scanner_run_")
+    assert Path(payload["output_paths"]["scan_log"]).parent == api_app.settings.application_paths.logs
+    assert Path(payload["output_paths"]["scan_log"]).name.startswith("scanner_run_")
     assert Path(payload["output_paths"]["scan_log"]).exists()
     assert payload["result"]["scanner_run_id"] == 1
     assert payload["result"]["rows"] == [{"Ticker": "AAPL", "Composite Score": 88}]
@@ -967,7 +970,8 @@ def test_update_candidate_trade_levels_persists_to_sqlite(monkeypatch, tmp_path)
 
 def test_reports_endpoint_lists_output_files(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    output_dir = Path("output")
+    output_dir = tmp_path / "selected-reports"
+    monkeypatch.setenv("SCANNER_REPORT_ROOT", str(output_dir))
     output_dir.mkdir()
     (output_dir / "daily_scanner_report_2026-07-05.html").write_text(
         "<html></html>"

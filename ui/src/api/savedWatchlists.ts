@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiClient } from './client';
+import { useApplicationApi } from '../platform/PlatformProvider';
 import { queryKeys } from './queryKeys';
 import type {
   SavedWatchlist,
@@ -9,6 +9,7 @@ import type {
 } from './types';
 
 export function useSavedWatchlists() {
+  const apiClient = useApplicationApi();
   return useQuery({
     queryKey: queryKeys.savedWatchlists,
     queryFn: () =>
@@ -18,6 +19,7 @@ export function useSavedWatchlists() {
 }
 
 export function useSavedWatchlist(watchlistId: number | null) {
+  const apiClient = useApplicationApi();
   return useQuery({
     queryKey: queryKeys.savedWatchlist(watchlistId),
     queryFn: () =>
@@ -39,6 +41,7 @@ function useInvalidateSavedWatchlists() {
 }
 
 export function useCreateSavedWatchlist() {
+  const apiClient = useApplicationApi();
   const invalidate = useInvalidateSavedWatchlists();
   return useMutation({
     mutationFn: (name: string) =>
@@ -51,6 +54,7 @@ export function useCreateSavedWatchlist() {
 }
 
 export function useRenameSavedWatchlist() {
+  const apiClient = useApplicationApi();
   const invalidate = useInvalidateSavedWatchlists();
   return useMutation({
     mutationFn: ({ watchlistId, name }: { watchlistId: number; name: string }) =>
@@ -63,6 +67,7 @@ export function useRenameSavedWatchlist() {
 }
 
 export function useDeleteSavedWatchlist() {
+  const apiClient = useApplicationApi();
   const invalidate = useInvalidateSavedWatchlists();
   return useMutation({
     mutationFn: (watchlistId: number) =>
@@ -74,6 +79,7 @@ export function useDeleteSavedWatchlist() {
 }
 
 export function useAddSavedWatchlistItem() {
+  const apiClient = useApplicationApi();
   const invalidate = useInvalidateSavedWatchlists();
   return useMutation({
     mutationFn: ({
@@ -99,6 +105,7 @@ export function useAddSavedWatchlistItem() {
 }
 
 export function useRemoveSavedWatchlistItem() {
+  const apiClient = useApplicationApi();
   const invalidate = useInvalidateSavedWatchlists();
   return useMutation({
     mutationFn: ({ watchlistId, ticker }: { watchlistId: number; ticker: string }) =>

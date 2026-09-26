@@ -93,8 +93,9 @@ class PortfolioSimulationResult:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        matplotlib_cache = output_path.parent / ".matplotlib-cache"
-        font_cache = output_path.parent / ".cache"
+        from scanner.config.paths import ApplicationPaths
+        matplotlib_cache = ApplicationPaths.resolve().cache / "matplotlib"
+        font_cache = ApplicationPaths.resolve().cache / "fonts"
         matplotlib_cache.mkdir(parents=True, exist_ok=True)
         font_cache.mkdir(parents=True, exist_ok=True)
 

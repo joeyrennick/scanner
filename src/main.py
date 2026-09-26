@@ -2,6 +2,7 @@ import argparse
 from dataclasses import replace
 
 from scanner.config.settings import settings
+from scanner.data.ownership import owned_application
 from scanner.context import ScannerContext
 from scanner.data.market_data import (
     check_market_data_connectivity,
@@ -14,6 +15,7 @@ from scanner.universe.universe_provider import UniverseProvider
 from scanner.utils.logger import setup_logging
 
 
+@owned_application
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(

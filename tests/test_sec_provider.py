@@ -1,9 +1,19 @@
 from datetime import date, timedelta
 
 import requests
+import pytest
 
 from scanner.data.providers.sec import SECFundamentalsProvider
 from scanner.fundamentals.sec_cache import SECFundamentalsCache
+
+
+def test_sec_provider_requires_user_identity_before_network(monkeypatch):
+    monkeypatch.delenv("SEC_USER_AGENT", raising=False)
+    def unexpected_request(*_args, **_kwargs):
+        raise AssertionError("No request should be made without a configured SEC identity")
+    monkeypatch.setattr("scanner.data.providers.sec.requests.get", unexpected_request)
+    with pytest.raises(RuntimeError, match="Set SEC_USER_AGENT"):
+        SECFundamentalsProvider()._get_json("https://www.sec.gov/files/company_tickers.json")
 
 
 def _duration(value, end, filed, days=364):
@@ -144,7 +154,7 @@ def test_sec_provider_reports_missing_ticker(monkeypatch):
         ),
     )
 
-    provider = SECFundamentalsProvider()
+    provider = SECFundamentalsProvider(user_agent="Scanner Tests test@example.com")
 
     try:
         provider.download_fundamental_data("MISSING")

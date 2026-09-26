@@ -15,7 +15,7 @@ describe('api client', () => {
     expect(fetcher).toHaveBeenCalledWith(
       'http://localhost/api/health',
       expect.objectContaining({
-        headers: expect.objectContaining({ 'Content-Type': 'application/json' })
+        headers: expect.objectContaining({ 'content-type': 'application/json' })
       })
     );
   });
@@ -57,9 +57,9 @@ describe('api client', () => {
       'http://127.0.0.1:49152/api/desktop/health',
       expect.objectContaining({
         headers: expect.objectContaining({
-          Authorization: 'Bearer desktop-secret',
-          'Content-Type': 'application/json',
-          'X-Test-Request': 'phase-zero'
+          authorization: 'Bearer desktop-secret',
+          'content-type': 'application/json',
+          'x-test-request': 'phase-zero'
         })
       })
     );

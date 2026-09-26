@@ -11,11 +11,15 @@ from uuid import uuid4
 from typing import Any, Literal, get_args, get_origin
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 import pandas as pd
 from pandas.errors import EmptyDataError
 
 from scanner.api.jobs import jobs
+from scanner.api.business_records import router as business_records_router
+from scanner.api.runtime import router as runtime_router
+from scanner.api.setup import router as setup_router
+from scanner.api.files import router as files_router, managed_file_response, report_relative
 from scanner.api.schemas import (
     BacktestRequest,
     CacheWarmupRequest,
@@ -43,8 +47,10 @@ from scanner.api.schemas import (
 from scanner.backtesting.backtest_config import BacktestConfig
 from scanner.backtesting.backtest_service import BacktestService
 from scanner.config.settings import settings
+from scanner.config.application import ConfigurationUnavailable, effective_sec_identity
 from scanner.context import ScannerContext
 from scanner.data.cache import SQLiteMarketDataCache
+from scanner.data.ownership import application_lifespan
 from scanner.data.market_data import clear_market_data_provider_cache, create_market_data_provider
 from scanner.data.providers.cached import period_start_date
 from scanner.data.providers.massive import MASSIVE_API_KEY_SECRET, MassiveMarketDataProvider
@@ -73,7 +79,11 @@ from scanner.utils.cache_summary import format_cache_summary
 from scanner.utils.logger import add_file_handler, remove_handler, setup_logging
 
 
-app = FastAPI(title="Swing Scanner API")
+app = FastAPI(title="Swing Scanner API", lifespan=application_lifespan)
+app.include_router(business_records_router)
+app.include_router(runtime_router)
+app.include_router(setup_router)
+app.include_router(files_router)
 
 
 @app.get("/api/health", response_model=HealthResponse)
@@ -83,7 +93,10 @@ def health() -> HealthResponse:
 
 @app.get("/api/settings")
 def get_settings() -> dict[str, Any]:
-    return _json_safe(asdict(settings))
+    try:
+        return _json_safe({**asdict(settings), "sec_user_agent": effective_sec_identity(settings.sec_user_agent).user_agent})
+    except ConfigurationUnavailable as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @app.get(
@@ -535,7 +548,7 @@ def start_portfolio_simulation(request: PortfolioSimulationRequest) -> dict[str,
 
 @app.get("/api/reports")
 def list_reports() -> list[dict[str, Any]]:
-    output_dir = Path("output")
+    output_dir = settings.application_paths.reports
 
     if not output_dir.exists():
         return []
@@ -543,7 +556,7 @@ def list_reports() -> list[dict[str, Any]]:
     reports = []
 
     for path in sorted(output_dir.rglob("*")):
-        if not path.is_file() or path.suffix.lower() not in {".html", ".csv", ".log", ".pdf"}:
+        if path.is_symlink() or not path.is_file() or path.suffix.lower() not in {".html", ".csv", ".log", ".pdf"}:
             continue
 
         reports.append(_report_metadata(path))
@@ -556,7 +569,7 @@ def generate_daily_scanner_report(
     request: DailyScannerReportRequest,
 ) -> dict[str, Any]:
     report_date = _parse_report_date(request.report_date)
-    output_dir = Path("output/daily_reports")
+    output_dir = settings.application_paths.reports / "daily_reports"
     output_dir.mkdir(parents=True, exist_ok=True)
     watchlist_path = _daily_report_watchlist_path(request, output_dir, report_date)
     report_path = output_dir / f"daily_scanner_report_{report_date.isoformat()}.html"
@@ -596,7 +609,7 @@ def generate_fundamental_analysis_report(
     if request.analysis.get("schema_version") not in {1, 3, 4}:
         raise HTTPException(status_code=422, detail="Unsupported analysis schema version")
 
-    output_dir = Path("output/fundamental_reports")
+    output_dir = settings.application_paths.reports / "fundamental_reports"
     timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")
     stem = f"{ticker}_fundamental_analysis_{timestamp}"
     pdf_path = output_dir / f"{stem}.pdf"
@@ -618,7 +631,7 @@ def generate_saved_watchlist_report(watchlist_id: int) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Saved watchlist not found")
 
     payload = _saved_watchlist_payload(watchlist, include_items=True)
-    output_dir = Path("output/watchlist_reports")
+    output_dir = settings.application_paths.reports / "watchlist_reports"
     timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")
     pdf_path = output_dir / f"saved_watchlist_{watchlist.id}_{timestamp}.pdf"
     SavedWatchlistReport(payload).generate(pdf_path)
@@ -636,26 +649,15 @@ def get_report(report_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/reports/{report_id}/download")
-def download_report(report_id: str) -> FileResponse:
-    path = _report_path(report_id)
-
-    if not path.exists() or not path.is_file():
-        raise HTTPException(status_code=404, detail="Report not found")
-
-    return FileResponse(path, filename=path.name)
+def download_report(report_id: str) -> StreamingResponse:
+    root = settings.application_paths.reports
+    return managed_file_response(root, report_relative(report_id, root, legacy_absolute=True))
 
 
 @app.get("/api/reports/{report_id}/view")
-def view_report(report_id: str) -> FileResponse:
-    path = _report_path(report_id)
-    if not path.exists() or not path.is_file():
-        raise HTTPException(status_code=404, detail="Report not found")
-    media_type = "application/pdf" if path.suffix.lower() == ".pdf" else None
-    return FileResponse(
-        path,
-        media_type=media_type,
-        content_disposition_type="inline",
-    )
+def view_report(report_id: str) -> StreamingResponse:
+    root = settings.application_paths.reports
+    return managed_file_response(root, report_relative(report_id, root, legacy_absolute=True), inline=True)
 
 
 def _refresh_watchlist_prices(
@@ -1241,11 +1243,11 @@ def _records_from_dataframe(dataframe: pd.DataFrame) -> list[dict[str, Any]]:
 
 
 def _scanner_result_store() -> SQLiteScannerResultStore:
-    return SQLiteScannerResultStore(settings.market_data_cache_path)
+    return SQLiteScannerResultStore(settings.business_database_path)
 
 
 def _saved_watchlist_store() -> SQLiteSavedWatchlistStore:
-    return SQLiteSavedWatchlistStore(settings.market_data_cache_path)
+    return SQLiteSavedWatchlistStore(settings.business_database_path)
 
 
 def _saved_watchlist_payload(watchlist: Any, *, include_items: bool) -> dict[str, Any]:
@@ -1379,7 +1381,7 @@ def _parse_report_date(value: str | None) -> date:
 
 def _scan_log_path() -> Path:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return Path("output/logs") / f"scanner_run_{timestamp}_{uuid4().hex[:8]}.log"
+    return settings.application_paths.logs / f"scanner_run_{timestamp}_{uuid4().hex[:8]}.log"
 
 
 def _daily_report_watchlist_path(
@@ -1501,7 +1503,7 @@ def _json_safe(value: Any) -> Any:
 
 
 def _secret_store() -> SQLiteSecretStore:
-    return SQLiteSecretStore(settings.market_data_cache_path)
+    return SQLiteSecretStore(settings.credential_database_path)
 
 
 def _massive_credential_status() -> MarketDataCredentialStatus:
@@ -1554,7 +1556,7 @@ def _report_metadata(path: Path) -> dict[str, Any]:
 
 
 def _report_id(path: Path) -> str:
-    relative = path.relative_to(Path("output"))
+    relative = path.resolve().relative_to(settings.application_paths.reports)
     return base64.urlsafe_b64encode(str(relative).encode()).decode()
 
 
@@ -1564,8 +1566,8 @@ def _report_path(report_id: str) -> Path:
     except Exception as error:
         raise HTTPException(status_code=404, detail="Report not found") from error
 
-    path = Path("output") / relative
-    resolved_output = Path("output").resolve()
+    resolved_output = settings.application_paths.reports
+    path = resolved_output / relative
     resolved_path = path.resolve()
 
     if resolved_output not in resolved_path.parents and resolved_path != resolved_output:

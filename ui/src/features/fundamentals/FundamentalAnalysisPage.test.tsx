@@ -43,7 +43,8 @@ describe('fundamental analysis state', () => {
     expect(state.classificationJobId).toBe('classification-123');
     expect(state.runId).toBeNull();
     expect(state.scrollY).toBe(240);
-    expect(state.assumptionsByTicker.MSFT.discount_rate).toBe(0.11);
+    expect(state).not.toHaveProperty('assumptionsByTicker');
+    expect(JSON.parse(localStorage.getItem('swing-scanner.fundamentals.v1')!).assumptionsByTicker.MSFT.discount_rate).toBe(0.11);
   });
 
   it('ignores malformed saved state', () => {
@@ -52,7 +53,7 @@ describe('fundamental analysis state', () => {
     const state = loadFundamentalState(new URLSearchParams());
 
     expect(state.ticker).toBe('');
-    expect(localStorage.getItem('swing-scanner.fundamentals.v1')).toBeNull();
+    expect(localStorage.getItem('swing-scanner.fundamentals.v1')).toBe('{broken');
   });
 
   it('defaults to the most recently selected scanner ticker', () => {

@@ -21,9 +21,14 @@ def format_value(value):
     return value
 
 
+from scanner.config.paths import ApplicationPaths
+from scanner.data.ownership import owned_application
+
+
+@owned_application
 def main():
     parser = argparse.ArgumentParser(description="Track manually executed trades.")
-    parser.add_argument("--journal", default="output/trade_journal.csv")
+    parser.add_argument("--journal", default=str(ApplicationPaths.resolve().journal))
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -47,7 +52,7 @@ def main():
     subparsers.add_parser("summary")
 
     report_parser = subparsers.add_parser("html-report")
-    report_parser.add_argument("--output", default="output/trade_journal_report.html")
+    report_parser.add_argument("--output", default=str(ApplicationPaths.resolve().reports / "trade_journal_report.html"))
 
     args = parser.parse_args()
     journal = TradeJournal(args.journal)

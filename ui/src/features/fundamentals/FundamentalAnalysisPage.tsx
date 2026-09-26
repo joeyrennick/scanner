@@ -14,6 +14,8 @@ import { loadRecentTickerSelection, rememberRecentTicker } from '../../lib/recen
 import { useScannerDisplaySettings, type ScannerDisplaySettings } from '../../lib/scannerSettings';
 import { rowMatchesDisplaySettings, rowMatchesStrategy } from '../../lib/watchlist';
 import { SavedWatchlistButton } from '../watchlists/SavedWatchlistButton';
+import { useBusinessCollection } from '../business/BusinessRecordsProvider';
+import { FileActionButton } from '../../components/FileActionButton';
 
 type Tab = 'summary' | 'validation' | 'quality' | 'valuation' | 'risk' | 'financials';
 type RiskFilter = 'all' | 'low' | 'moderate' | 'high' | 'unknown';
@@ -30,10 +32,9 @@ type SavedState = {
   classificationJobId: string | null;
   tab: Tab;
   scrollY: number;
-  assumptionsByTicker: Record<string, Record<string, number>>;
 };
 
-const storageKey = 'swing-scanner.fundamentals.v1';
+const storageKey = 'swing-scanner.fundamentals.preferences.v1';
 const candidateStrategies = ['pullback', 'breakout', 'bounce', 'undervalued'] as const;
 const defaultState: SavedState = {
   version: 1,
@@ -46,13 +47,13 @@ const defaultState: SavedState = {
   validation: 'all',
   classificationJobId: null,
   tab: 'summary',
-  scrollY: 0,
-  assumptionsByTicker: {}
+  scrollY: 0
 };
 
 export function FundamentalAnalysisPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [state, setStateBase] = useState<SavedState>(() => loadFundamentalState(searchParams));
+  const [assumptionRecords, setAssumptionRecords] = useBusinessCollection('valuationAssumptions');
   const analyze = useAnalyzeFundamentals();
   const classifyRisk = useClassifyWatchlistRisk();
   const report = useGenerateFundamentalReport();
@@ -115,7 +116,7 @@ export function FundamentalAnalysisPage() {
     () => candidateValidationCounts(candidateSource?.rows ?? [], state.strategy, displaySettings, state.risk),
     [candidateSource?.rows, displaySettings, state.risk, state.strategy]
   );
-  const assumptions = state.assumptionsByTicker[state.ticker] ?? {};
+  const assumptions = assumptionRecords.find((record) => record.id === state.ticker)?.assumptions ?? {};
   const analysis = analyze.data?.ticker === state.ticker ? analyze.data : null;
 
   useEffect(() => {
@@ -304,16 +305,12 @@ export function FundamentalAnalysisPage() {
   }
 
   function updateAssumption(name: string, value: number) {
-    updateState((current) => ({
-      ...current,
-      assumptionsByTicker: {
-        ...current.assumptionsByTicker,
-        [state.ticker]: {
-          ...(current.assumptionsByTicker[state.ticker] ?? {}),
-          [name]: value
-        }
-      }
-    }));
+    setAssumptionRecords((current) => {
+      const previous = current.find((record) => record.id === state.ticker);
+      return [...current.filter((record) => record.id !== state.ticker), {
+        id: state.ticker, assumptions: { ...previous?.assumptions, [name]: value }
+      }];
+    });
   }
 
   return (
@@ -452,7 +449,7 @@ export function FundamentalAnalysisPage() {
 
           {report.data && (
             <section className="panel success-message">
-              Report created. <a href={`/api/reports/${report.data.report.id}/download`}>Download PDF</a>
+              Report created. <FileActionButton reportId={report.data.report.id}>Download PDF</FileActionButton>
             </section>
           )}
           {report.isError && <section className="panel alert danger">{report.error.message}</section>}
@@ -785,10 +782,17 @@ function FinancialHistory({ analysis }: { analysis: FundamentalAnalysis }) {
 export function loadFundamentalState(params: URLSearchParams): SavedState {
   let saved = defaultState;
   try {
-    const parsed = JSON.parse(localStorage.getItem(storageKey) ?? 'null');
-    if (parsed?.version === 1) saved = { ...defaultState, ...parsed };
+    const parsed = JSON.parse(localStorage.getItem(storageKey)
+      ?? localStorage.getItem('swing-scanner.fundamentals.v1') ?? 'null');
+    if (parsed?.version === 1) {
+      // Copy preference fields only. Original assumptions stay in the legacy key;
+      // active assumptions are read exclusively from the database provider.
+      saved = Object.fromEntries(Object.entries(defaultState).map(([key, fallback]) =>
+        [key, parsed[key] ?? fallback]
+      )) as SavedState;
+    }
   } catch {
-    localStorage.removeItem(storageKey);
+    // Retain malformed legacy data for recovery; never rewrite or delete it.
   }
   const tab = params.get('tab');
   const risk = params.get('risk');

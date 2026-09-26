@@ -5,17 +5,22 @@ from pathlib import Path
 from scanner.reports.daily_scanner_report import DailyScannerReport
 
 
+from scanner.config.settings import settings
+from scanner.data.ownership import owned_application
+
+
+@owned_application
 def main():
     parser = argparse.ArgumentParser(
         description="Generate a dated daily scanner report from a watchlist CSV.",
     )
-    parser.add_argument("--watchlist", default="output/watchlist.csv")
+    parser.add_argument("--watchlist", default=settings.output_file)
     parser.add_argument(
         "--date",
         default=date.today().isoformat(),
         help="Report date in YYYY-MM-DD format.",
     )
-    parser.add_argument("--output-dir", default="output/daily_reports")
+    parser.add_argument("--output-dir", default=str(settings.application_paths.reports / "daily_reports"))
     parser.add_argument(
         "--report",
         help="Optional explicit HTML report path.",

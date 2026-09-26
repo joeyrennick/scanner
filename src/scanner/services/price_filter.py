@@ -61,7 +61,7 @@ def filter_tickers_by_price(
     min_price: float | None = None,
     max_price: float | None = None,
     provider_name: str = "yahoo",
-    cache_path: str = "output/market_data_cache.sqlite",
+    cache_path: str | None = None,
     sample_period: str = "5d",
     max_cached_price_age_days: int = 7,
     max_workers: int | None = None,
@@ -72,6 +72,7 @@ def filter_tickers_by_price(
     logger: logging.Logger | None = None,
     cancel_checker: Callable[[], bool] | None = None,
 ) -> PriceFilterResult:
+    cache_path = cache_path or settings.market_data_cache_path
     if min_price is None and max_price is None:
         return PriceFilterResult(
             tickers=tickers,

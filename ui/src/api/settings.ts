@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiClient } from './client';
+import { useApplicationApi } from '../platform/PlatformProvider';
 import { queryKeys } from './queryKeys';
 import type { MarketDataCredentialRequest, MarketDataCredentialStatus } from './types';
 
 export function useMassiveCredentialStatus() {
+  const apiClient = useApplicationApi();
   return useQuery({
     queryKey: queryKeys.massiveCredential,
     queryFn: () =>
@@ -12,6 +13,7 @@ export function useMassiveCredentialStatus() {
 }
 
 export function useSaveMassiveCredential() {
+  const apiClient = useApplicationApi();
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -27,6 +29,7 @@ export function useSaveMassiveCredential() {
 }
 
 export function useDeleteMassiveCredential() {
+  const apiClient = useApplicationApi();
   const queryClient = useQueryClient();
 
   return useMutation({

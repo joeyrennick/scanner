@@ -2,6 +2,7 @@ import argparse
 from dataclasses import replace
 
 from scanner.config.settings import settings
+from scanner.data.ownership import owned_application
 from scanner.context import ScannerContext
 from scanner.data.market_data import configure_market_data_provider
 from scanner.services.cache_warmup import CacheWarmupConfig, CacheWarmupService
@@ -10,6 +11,7 @@ from scanner.utils.cache_summary import format_cache_summary
 from scanner.utils.logger import setup_logging
 
 
+@owned_application
 def main():
     parser = argparse.ArgumentParser(
         description="Safely warm the local market data cache in provider batches.",

@@ -11,6 +11,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uvicorn
 
+from scanner.data.ownership import application_lifespan
+from scanner.api.runtime import router as runtime_router
+
 
 DESKTOP_HOST = "127.0.0.1"
 DESKTOP_PORT_ENV = "SCANNER_DESKTOP_PORT"
@@ -57,7 +60,10 @@ def create_desktop_app(
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+        lifespan=application_lifespan,
     )
+    app.state.scanner_runtime_mode = "desktop-proof-of-concept"
+    app.include_router(runtime_router)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(ALLOWED_DESKTOP_ORIGINS),

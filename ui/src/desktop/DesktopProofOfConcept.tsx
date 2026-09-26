@@ -1,13 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { AlertTriangle, CheckCircle2, LoaderCircle, RefreshCw } from 'lucide-react';
-import { ApiError, createApiClient } from '../api/client';
-
-interface DesktopRuntimeConfig {
-  baseUrl: string;
-  bearerToken: string;
-  mode: string;
-}
+import { ApiError } from '../api/client';
+import { connectDesktop, type RuntimeInfo } from '../platform/runtime';
+import { tauriHost } from '../platform/tauriHost';
 
 interface DesktopHealth {
   status: string;
@@ -22,7 +17,7 @@ interface DesktopHealth {
 
 type StartupState =
   | { status: 'starting' }
-  | { status: 'connected'; config: DesktopRuntimeConfig; health: DesktopHealth }
+  | { status: 'connected'; config: { baseUrl: string; mode: string }; health: DesktopHealth; info: RuntimeInfo }
   | { status: 'failed'; message: string };
 
 const readinessAttempts = 75;
@@ -36,19 +31,13 @@ export function DesktopProofOfConcept() {
     setStartup({ status: 'starting' });
 
     try {
-      const config =
-        attempt === 0
-          ? await invoke<DesktopRuntimeConfig>('desktop_runtime_config')
-          : await invoke<DesktopRuntimeConfig>('restart_desktop_backend');
-      const client = createApiClient({
-        baseUrl: config.baseUrl,
-        bearerToken: config.bearerToken
-      });
+      const { config, runtime } = await connectDesktop(tauriHost, attempt !== 0);
 
       for (let readinessAttempt = 0; readinessAttempt < readinessAttempts; readinessAttempt += 1) {
         try {
-          const health = await client.request<DesktopHealth>('/api/desktop/health');
-          setStartup({ status: 'connected', config, health });
+          const health = await runtime.api.request<DesktopHealth>('/api/desktop/health');
+          const info = await runtime.readInfo();
+          setStartup({ status: 'connected', config, health, info });
           return;
         } catch (error) {
           if (error instanceof ApiError && error.status === 401) {
@@ -142,7 +131,7 @@ export function DesktopProofOfConcept() {
             </div>
 
             <p className="desktop-poc-footnote">
-              Phase 0 deliberately stops here. Application data migration and the full scanner workflow begin in the next phases.
+              Runtime API v{startup.info.schema_version} connected. This packaging proof does not yet expose the full scanner workflow or native file dialogs.
             </p>
           </>
         ) : null}

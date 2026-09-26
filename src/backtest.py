@@ -17,6 +17,7 @@ from scanner.data.market_data import (
     get_market_data_cache_stats,
 )
 from scanner.config.settings import settings
+from scanner.data.ownership import owned_application
 from scanner.services.price_filter import filter_tickers_by_price
 from scanner.strategies.strategy_registry import StrategyRegistry
 from scanner.universe.universe_provider import UniverseProvider
@@ -32,6 +33,7 @@ def export_trades(result, output_file: str):
     print(f"Exported {len(result.trades)} trades to {output_file}")
 
 
+@owned_application
 def main():
     parser = argparse.ArgumentParser()
 

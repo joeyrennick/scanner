@@ -1,6 +1,7 @@
 import argparse
 
 from scanner.config.settings import settings
+from scanner.data.ownership import owned_application
 from scanner.data.market_data import (
     configure_market_data_cache,
     configure_market_data_provider,
@@ -18,6 +19,7 @@ from scanner.utils.worker_tuner import (
 )
 
 
+@owned_application
 def main():
     parser = argparse.ArgumentParser(
         description="Find a stable worker count for concurrent market data downloads.",

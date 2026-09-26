@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiClient } from './client';
+import { useApplicationApi } from '../platform/PlatformProvider';
 import { queryKeys } from './queryKeys';
 import type {
   CandidateTradeLevelsRequest,
@@ -13,6 +13,7 @@ import type {
 } from './types';
 
 export function useLatestWatchlist() {
+  const apiClient = useApplicationApi();
   return useQuery({
     queryKey: queryKeys.latestWatchlist,
     queryFn: () => apiClient.request<WatchlistResponse>('/api/watchlist/latest'),
@@ -21,6 +22,7 @@ export function useLatestWatchlist() {
 }
 
 export function useWatchlistRun(runId: number | null) {
+  const apiClient = useApplicationApi();
   return useQuery({
     queryKey: queryKeys.watchlistRun(runId),
     queryFn: () => apiClient.request<WatchlistResponse>(`/api/watchlist/runs/${runId}`),
@@ -34,6 +36,7 @@ export function useMarketDataHistory(
   period = '1y',
   interval = '1d'
 ) {
+  const apiClient = useApplicationApi();
   return useQuery({
     queryKey: queryKeys.marketDataHistory(ticker, provider, period, interval),
     enabled: Boolean(ticker),
@@ -45,6 +48,7 @@ export function useMarketDataHistory(
 }
 
 export function useStartScan() {
+  const apiClient = useApplicationApi();
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -61,6 +65,7 @@ export function useStartScan() {
 }
 
 export function useRefreshWatchlistPrices() {
+  const apiClient = useApplicationApi();
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -76,6 +81,7 @@ export function useRefreshWatchlistPrices() {
 }
 
 export function useUpdateCandidateTradeLevels() {
+  const apiClient = useApplicationApi();
   const queryClient = useQueryClient();
 
   return useMutation({

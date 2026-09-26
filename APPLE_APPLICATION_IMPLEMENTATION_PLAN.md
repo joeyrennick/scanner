@@ -1,9 +1,9 @@
 # Apple Application Implementation Plan
 
 - Finalized: 2026-09-04
-- Last updated: 2026-09-07
+- Last updated: 2026-09-13
 - Repository: `/Users/joe.rennick/scanner`
-- Status: Approved plan; Phase 0 complete; Phase 1 has not started
+- Status: Approved plan; Phase 0 complete; Phase 1 backup/import, browser switch, runtime/file adapters and SEC setup implementation verified; user contact selection and packaged acceptance pending
 - Plan revision: First audit improvements accepted on 2026-09-06; six second-audit
   corrections and three third-audit refinements accepted on 2026-09-07.
   Requirements below are planned work, not completed implementation
@@ -11,6 +11,113 @@
   companion second
 
 ## Current implementation status
+
+Latest increment (2026-09-13): **SEC Contact Setup** is implemented in browser
+Settings with a versioned, revision-checked local application configuration and
+`/api/v1/setup`. Reads create nothing; saves use existing ownership and durable
+atomic replacement. No archived developer identity or repository path is applied
+live. Explicit code/launcher overrides take precedence; invalid launcher identity
+blocks fallback. New SEC provider instances use saved changes without restarting.
+The form explains contact disclosure, makes no provider request on save, and
+retains drafts on conflict/ambiguous failures. Credentials remain separate.
+See `docs/PHASE_1_APPLICATION_SETUP.md`. Current verification: **402 Python tests
+passed / 1 skipped** (one existing warning), **122 frontend tests**, build passed.
+The backend was restarted with user confirmation that jobs were stopped. All
+four live browser-record hashes are unchanged; setup GET succeeds with revision
+0 and source `missing`. The user still needs to choose and save their contact
+email. No real setup write, provider request, backup change or native build/install
+was performed. Remaining path/installed/no-repository/relaunch acceptance stays
+open; this is not a claim of full persisted configuration or Phase 1 completion.
+
+Previous checkpoint:
+
+Latest checkpoint (2026-09-13): first-import staging, external activation journal,
+startup recovery, version-1 business/credential/browser stores, idempotent import
+receipts and `/api/v1/business-records` are implemented. 368 Python tests pass
+(1 skipped, 1 existing dependency warning), including process death at eight
+activation boundaries; 110 frontend tests and frontend build pass. This supports
+unused destination slots only: replacing/upgrading nonempty stores is not yet
+implemented. Browser UI business state now uses this API, and the user confirmed
+completing the original-browser reconciliation/resume step.
+
+The typed runtime/API/file adapter boundary is now implemented. Existing API
+hooks and business state use an injectable connection; report/PDF/job downloads
+use API IDs and authenticated fetch rather than path-derived browser links.
+`/api/v1/runtime` advertises capabilities/paths without exposing credentials or
+initializing stores, and Settings shows the runtime information. Versioned file
+routes restrict managed roots/types and use no-follow descriptor access, with
+tests for traversal, symlinks, nonregular files and post-open path replacement.
+Old report IDs and `/api` compatibility consumers remain supported. Native file
+dialogs, Keychain and full scanner capabilities remain unavailable in the proof.
+
+The backend was restarted after the user confirmed there were no running jobs.
+Live record checksums were unchanged (8 / 37 / 48 / 4), and an existing PDF
+download was verified byte-for-byte. No business writes, provider calls, backup
+changes or new native build/install were performed in this increment.
+
+The shared UI provider gates page loading, serializes revision-checked saves,
+honors deletion tombstones, and stops on conflicts or ambiguous save failures.
+Unconfirmed drafts can be downloaded before an explicit discard/reload; no
+mutation is automatically retried. Legacy browser business keys remain unchanged;
+chart/fundamentals preferences use new versioned keys. Exact import/origin checks
+guard the initial browser switch, while the old export is labeled archival.
+Rendered-page tests and a TypeScript-to-real-Python/SQLite restart test pass.
+Live read-only GET checks through the browser proxy match all 8 / 37 / 48 / 4
+imported browser records. No real business edits or provider calls were made.
+
+The replacement backup passed verification at `2026-09-12T23:47:45.520088+00:00`,
+ID `2d2cf0e78c1a4434b537d758d4f947cc`, using the newly saved recovery password.
+All six files, saved/browser records and one credential reconcile. Original data
+and both backups remain intact. The tested `select-verified-backup` command
+atomically reassociated the unused destination's pending gate with this verified
+backup, preserving the previous marker and keeping startup blocked.
+
+The real import completed at `2026-09-14T01:25:46.881544+00:00` (September 13 PDT),
+import ID `22085cefcf09428e9e68186e9fcfeb6e`. Independent checks reconciled the
+active receipt, all saved/browser records, CSV/PDF files and the imported credential
+key. Original business records/files and both backups remain intact. The pending
+gate and activation journal have been retired successfully. No further backup or
+import password step is needed now.
+
+Phase 1 remains incomplete: finish configuration/setup, remaining path
+independence and packaged acceptance. The original-browser switch is confirmed;
+no more migration/password steps are needed for normal browser use.
+The native app still shows its Phase 0 proof screen. See `SESSION_HANDOFF.md`
+before using any runner; no repeat import is needed.
+Earlier progress details below are historical where superseded by this checkpoint.
+
+Phase 1 started on 2026-09-11 with a read-only filesystem/schema inventory,
+explicit original-browser export, and tested standalone backup/isolated-restore
+tools. See `docs/PHASE_1_DATA_MIGRATION.md` for the inventory, procedures, and
+remaining work. The user supplied the original-browser export on 2026-09-12;
+validation passed for 8 Planned Trades, 37 candidate edits, 48 valuation-assumption
+records and 4 settings groups. Repository/source inspection found no additional
+custom data paths; backups now preserve typed effective settings as well as saved
+per-run configuration. The original-data backup/isolated-restore gate passed on
+2026-09-12 at `19:08:41.737966+00:00`, backup ID
+`21177866cdb84b968fc65b590cf9fbad`: six files verified, all business/browser counts
+and digests reconciled, one credential decrypted using the separately re-entered
+recovery passphrase. This passes the prerequisite recovery exercise in Section
+7.2, not its later active-store activation/rollback requirements.
+
+Runtime defaults now use centralized platform paths, separating business data,
+credentials, reports, logs and rebuildable caches. Backend/sidecar lifespans,
+CLI entry points, queued/running jobs and all SQLite stores share ownership
+protection. Unsupported database versions and pending recovery/import markers
+stop normal startup; missing legacy credential keys are never replaced on reads
+or writes to populated stores. The hard-coded personal SEC identity was removed;
+SEC requests require a configured `SEC_USER_AGENT`.
+
+Production source records remain unchanged, and **no active-store import has
+run**. A `migration-pending.json` guard in the selected Application Support root
+prevents opening an empty store at the new defaults. Do not bypass that guard.
+Staged activation/recovery, versioned production browser-business repositories,
+idempotent import, `/api/v1`/platform adapters and packaged acceptance remain open.
+305 Python tests and 58 frontend tests pass (one Python skip and one dependency
+deprecation warning); frontend build and offline locked Rust check pass. The
+historical date-dependent intraday fixture was stabilized without changing API
+behavior. No native bundle rebuild/install was performed in this increment.
+Phase 1 is not complete.
 
 Phase 0 completed on 2026-09-06 on the target Apple Silicon Mac. The native
 application remains a packaging proof of concept; the full scanner workflow
@@ -906,6 +1013,15 @@ Exit criteria:
   environment being available at runtime.
 
 ### Phase 1 — Filesystem and configuration readiness
+
+Progress as of 2026-09-13: the real coordinated backup/isolated restore and staged
+first import have passed. Centralized runtime paths, shared backend/CLI/store
+ownership, schema refusal, missing-key protection, database-backed browser UI,
+runtime/API/file adapters, SEC contact setup and the original-browser switch are
+implemented and tested/confirmed. User contact selection, remaining path readiness
+and packaged migration acceptance remain open; see
+`docs/PHASE_1_DATA_MIGRATION.md`. Requirements below include both completed and
+remaining work; they are not a claim that Phase 1 exit criteria all pass.
 
 - Complete the coordinated snapshot, browser export, protected credential
   recovery backup, and restore gate in Section 7.2 before changing existing

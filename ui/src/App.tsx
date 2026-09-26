@@ -105,6 +105,14 @@ import { FundamentalAnalysisPage } from './features/fundamentals/FundamentalAnal
 import { WatchlistsPage } from './features/watchlists/WatchlistsPage';
 import { SavedWatchlistButton } from './features/watchlists/SavedWatchlistButton';
 import { MultiSelectFilter } from './components/MultiSelectFilter';
+import { useBusinessCollection, useSavedSetting } from './features/business/BusinessRecordsProvider';
+import { useCandidateEdits, type CandidateTradeEdits } from './features/business/useCandidateEdits';
+import type { PlannedTrade } from './lib/businessRecords';
+import { FileActionButton } from './components/FileActionButton';
+import { RuntimeReadiness } from './features/settings/RuntimeReadiness';
+import { SECContactSetup } from './features/settings/SECContactSetup';
+import { usePlatform } from './platform/PlatformProvider';
+import type { FileActions } from './platform/files';
 
 const universes = ['all', 'sp500', 'djia', 'nasdaq', 'nyse'];
 const historyPeriods = ['6mo', '1y', '5y'];
@@ -308,6 +316,8 @@ function DashboardPage() {
 }
 
 function DailyScannerPage() {
+  const { files } = usePlatform();
+  const [csvError, setCsvError] = useState('');
   const navigate = useNavigate();
   const cacheOverview = useCacheOverview();
   const strategies = useStrategies();
@@ -317,7 +327,7 @@ function DailyScannerPage() {
   const refreshPrices = useRefreshWatchlistPrices();
   const generateDailyReport = useGenerateDailyScannerReport();
   const [displaySettings] = useScannerDisplaySettings();
-  const [marketDataSettings] = useLocalStorage<MarketDataSettings>(
+  const [marketDataSettings] = useSavedSetting<MarketDataSettings>(
     'swing-scanner.market-data-settings.v2',
     defaultMarketDataSettings
   );
@@ -588,9 +598,11 @@ function DailyScannerPage() {
     });
   }
 
-  function exportCsv() {
+  async function exportCsv() {
+    setCsvError('');
     const rowsToExport = selectedCandidates.length > 0 ? selectedCandidates : sortedCandidates;
-    downloadCandidatesCsv(rowsToExport);
+    try { await downloadCandidatesCsv(rowsToExport, files); }
+    catch (error) { setCsvError(error instanceof Error ? error.message : 'CSV export failed.'); }
   }
 
   async function generateReport() {
@@ -1074,6 +1086,7 @@ function DailyScannerPage() {
           </div>
         )}
 
+        {csvError && <div className="alert alert-danger" role="alert">{csvError}</div>}
         {generateDailyReport.isError && (
           <div className="alert alert-danger">
             <AlertTriangle size={18} />
@@ -1086,9 +1099,9 @@ function DailyScannerPage() {
             <CheckCircle2 size={18} />
             <span>
               Generated {generateDailyReport.data.report.name}.{' '}
-              <a href={`/api/reports/${generateDailyReport.data.report.id}/download`}>
+              <FileActionButton reportId={generateDailyReport.data.report.id}>
                 Download report
-              </a>
+              </FileActionButton>
             </span>
           </div>
         )}
@@ -1525,7 +1538,7 @@ function CandidatesPage() {
   const cacheOverview = useCacheOverview();
   const candidateResultsTableRef = useRef<HTMLTableElement | null>(null);
   const [displaySettings] = useScannerDisplaySettings();
-  const [marketDataSettings] = useLocalStorage<MarketDataSettings>(
+  const [marketDataSettings] = useSavedSetting<MarketDataSettings>(
     'swing-scanner.market-data-settings.v2',
     defaultMarketDataSettings
   );
@@ -1660,10 +1673,7 @@ function CandidatesPage() {
   const selected =
     chartCandidates.find((candidate) => candidate.ticker === selectedTicker) ??
     chartCandidates[0];
-  const [edits, setEdits] = useLocalStorage<Record<string, CandidateTradeEdits>>(
-    'swing-scanner.candidates.chart-state',
-    {}
-  );
+  const [edits, setEdits] = useCandidateEdits();
   const selectedEdits = selected ? edits[selected.ticker] : undefined;
   const [chartFrequency, setChartFrequency] = useLocalStorage<ChartFrequency>(
     'swing-scanner.candidates.chart-frequency',
@@ -2884,7 +2894,7 @@ function JournalPage() {
       ),
     [selectedWatchlist.data?.items]
   );
-  const [plannedTrades, setPlannedTrades] = useLocalStorage<PlannedTrade[]>('planned-trades', []);
+  const [plannedTrades, setPlannedTrades] = useBusinessCollection('plannedTrades');
   const [selectedPlannedTradeIds, setSelectedPlannedTradeIds] = useLocalStorage<string[]>(
     'swing-scanner.journal.selected-planned-trades.v1',
     [],
@@ -3128,7 +3138,7 @@ function ReportsPage() {
 function CacheWarmupPage() {
   const cacheOverview = useCacheOverview();
   const startWarmup = useStartCacheWarmup();
-  const [marketDataSettings] = useLocalStorage<MarketDataSettings>(
+  const [marketDataSettings] = useSavedSetting<MarketDataSettings>(
     'swing-scanner.market-data-settings.v2',
     defaultMarketDataSettings
   );
@@ -4824,13 +4834,13 @@ function ReportsTable({ reports }: { reports: ReportMetadata[] }) {
               <td>{report.path}</td>
               <td>
                 {(report.type === 'fundamental_analysis' || report.type === 'saved_watchlist') && (
-                  <a className="link-button" href={`/api/reports/${report.id}/view`} target="_blank" rel="noreferrer">
+                  <FileActionButton reportId={report.id} preview>
                     View
-                  </a>
+                  </FileActionButton>
                 )}{' '}
-                <a className="link-button" href={`/api/reports/${report.id}/download`}>
+                <FileActionButton reportId={report.id}>
                   Download
-                </a>
+                </FileActionButton>
               </td>
             </tr>
           ))}
@@ -4852,19 +4862,19 @@ function SettingsPage() {
   const deleteMassiveCredential = useDeleteMassiveCredential();
   const strategies = useStrategies();
   const [displaySettings, setDisplaySettings] = useScannerDisplaySettings();
-  const [recommendationSettings, setRecommendationSettings] = useLocalStorage<RecommendationSettings>(
+  const [recommendationSettings, setRecommendationSettings] = useSavedSetting<RecommendationSettings>(
     'swing-scanner.recommendation-settings',
     defaultRecommendationSettings
   );
-  const [cacheSettings, setCacheSettings] = useLocalStorage<CacheSettings>(
+  const [cacheSettings, setCacheSettings] = useSavedSetting<CacheSettings>(
     'swing-scanner.cache-settings',
     defaultCacheSettings
   );
-  const [marketDataSettings, setMarketDataSettings] = useLocalStorage<MarketDataSettings>(
+  const [marketDataSettings, setMarketDataSettings] = useSavedSetting<MarketDataSettings>(
     'swing-scanner.market-data-settings.v2',
     defaultMarketDataSettings
   );
-  const [appearanceSettings, setAppearanceSettings] = useLocalStorage<AppearanceSettings>(
+  const [appearanceSettings, setAppearanceSettings] = useSavedSetting<AppearanceSettings>(
     'swing-scanner.appearance-settings',
     defaultAppearanceSettings
   );
@@ -4895,6 +4905,15 @@ function SettingsPage() {
 
   return (
     <div className="settings-grid">
+      <RuntimeReadiness />
+      <SECContactSetup />
+      <section className="panel" aria-labelledby="browser-backup-title">
+        <div className="panel-header"><div>
+          <h2 id="browser-backup-title">Original Browser Recovery Data</h2>
+          <p>Saved trades, trade levels, assumptions, and settings now use the database. The original browser export is retained for migration recovery, not for backing up new edits.</p>
+        </div></div>
+        <div className="settings-form"><a className="secondary-button" href="/migration">Review migration and original browser export</a></div>
+      </section>
       <section className="panel" aria-labelledby="scanner-display-settings-title">
         <div className="panel-header">
           <div>
@@ -5555,11 +5574,11 @@ function JobProgressPanel({ job, percent }: { job?: JobResponse; percent: number
 
       {outputPaths.length > 0 && (
         <div className="output-path-list">
-          {outputPaths.map(([label, path]) => (
-            <a key={label} className="output-path-link" href={downloadHrefForOutputPath(path)}>
+          {outputPaths.map(([label]) => job && (
+            <FileActionButton key={label} className="output-path-link" jobId={job.job_id} outputName={label}>
               <Download size={15} />
               {label.replaceAll('_', ' ')}
-            </a>
+            </FileActionButton>
           ))}
         </div>
       )}
@@ -5596,19 +5615,6 @@ function scanRunIdFromJob(job?: JobResponse): number | null {
   return typeof runId === 'number' ? runId : null;
 }
 
-type CandidateTradeEdits = {
-  entry: string;
-  stop: string;
-  target: string;
-  chartHeight: number;
-  chartZoom?: number;
-  chartPanBars?: number;
-  chartPricePan?: number;
-  maximizedChartHeight?: number;
-  maximizedChartWidth?: number;
-  previousChartHeight?: number;
-};
-
 type ChartLevelKey = 'entry' | 'stop' | 'target';
 
 type ScannerBacktestState = {
@@ -5631,17 +5637,6 @@ type CandidateDetailState = {
   ticker: string;
   maximized?: boolean;
   savedWatchlistId?: number | null;
-};
-
-type PlannedTrade = {
-  id: string;
-  ticker: string;
-  strategy: string;
-  plannedAt: string;
-  entry: string;
-  stop: string;
-  target: string;
-  status: 'planned';
 };
 
 type RecommendationSettings = {
@@ -5817,19 +5812,6 @@ function formatUnknown(value: unknown): string {
   return String(value);
 }
 
-function downloadHrefForOutputPath(path: string): string {
-  const normalized = path.replace(/\\/g, '/');
-  const relative = normalized.startsWith('output/')
-    ? normalized.slice('output/'.length)
-    : normalized;
-  const encoded = window
-    .btoa(relative)
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_');
-
-  return `/api/reports/${encoded}/download`;
-}
-
 function parseDisplayNumber(value: string): number | null {
   const parsed = Number(value.replace(/[$,%"]/g, '').replace(/,/g, '').trim());
   return Number.isFinite(parsed) ? parsed : null;
@@ -5846,21 +5828,6 @@ function plannedTradeFromCandidate(candidate: DisplayCandidate): PlannedTrade {
     target: candidate.targetExit,
     status: 'planned'
   };
-}
-
-function readPlannedTradesFromStorage(): PlannedTrade[] {
-  const stored = window.localStorage.getItem('planned-trades');
-
-  if (!stored) {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(stored);
-    return Array.isArray(parsed) ? (parsed as PlannedTrade[]) : [];
-  } catch {
-    return [];
-  }
 }
 
 function parseTickerList(value: string): string[] {
@@ -5988,7 +5955,7 @@ function equityBarHeight(value: unknown, rows: Record<string, unknown>[]): numbe
   return 12 + ((numeric - min) / (max - min)) * 82;
 }
 
-function downloadCandidatesCsv(candidates: DisplayCandidate[]) {
+function downloadCandidatesCsv(candidates: DisplayCandidate[], files: FileActions) {
   const header = [
     'Ticker',
     'Strategy',
@@ -6037,12 +6004,7 @@ function downloadCandidatesCsv(candidates: DisplayCandidate[]) {
   ]);
   const csv = [header, ...rows].map((row) => row.map(csvCell).join(',')).join('\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = 'scanner_candidates.csv';
-  anchor.click();
-  URL.revokeObjectURL(url);
+  return files.save(blob, 'scanner_candidates.csv');
 }
 
 function csvCell(value: string): string {

@@ -1,11 +1,13 @@
 import argparse
 
 from scanner.config.settings import settings
+from scanner.data.ownership import owned_application
 from scanner.data.market_data import check_market_data_connectivity
 from scanner.data.market_data import configure_market_data_cache
 from scanner.data.market_data import configure_market_data_provider
 
 
+@owned_application
 def main():
     parser = argparse.ArgumentParser(
         description="Check live Yahoo/yfinance connectivity with a small market-data download.",

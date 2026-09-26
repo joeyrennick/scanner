@@ -4,6 +4,7 @@ from math import isinf
 import pandas as pd
 
 from scanner.analysis.trade_analyzer import TradeAnalyzer
+from scanner.data.ownership import owned_application
 
 
 def format_value(value):
@@ -49,6 +50,7 @@ def print_table(title: str, table: pd.DataFrame, rows: int | None = None):
     print(table.to_string(index=False))
 
 
+@owned_application
 def main():
     parser = argparse.ArgumentParser(
         description="Analyze exported swing scanner backtest trades.",

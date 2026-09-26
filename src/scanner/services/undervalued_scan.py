@@ -251,7 +251,7 @@ class UndervaluedScanService:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         dataframe.to_csv(output_path, index=False)
         scanner_run_id = SQLiteScannerResultStore(
-            self.context.settings.market_data_cache_path
+            self.context.settings.business_database_path
         ).save_scan_results(
             dataframe,
             universe=config.universe,

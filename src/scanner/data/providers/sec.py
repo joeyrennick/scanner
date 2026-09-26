@@ -3,7 +3,6 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import date
 import math
-import os
 from threading import Lock
 import time
 from typing import Any
@@ -16,7 +15,6 @@ from scanner.fundamentals.sec_cache import SECFundamentalsCache
 SEC_COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SEC_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 SEC_COMPANY_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
-SEC_DEFAULT_USER_AGENT = "Swing Scanner joe.rennick@servicenow.com"
 _TICKER_MAP_CACHE: dict[str, dict[str, dict[str, Any]]] = {}
 _SEC_REQUEST_LOCK = Lock()
 _SEC_LAST_REQUEST_AT = 0.0
@@ -142,9 +140,8 @@ class SECFundamentalsProvider:
         include_submissions: bool = True,
         max_requests_per_second: float = 8,
     ):
-        self.user_agent = (
-            user_agent or os.environ.get("SEC_USER_AGENT") or SEC_DEFAULT_USER_AGENT
-        ).strip()
+        from scanner.config.application import effective_sec_identity
+        self.user_agent = effective_sec_identity(user_agent).user_agent
         self.timeout = timeout
         self.cache = (
             SECFundamentalsCache(cache_path, ttl_hours=cache_ttl_hours)
@@ -271,6 +268,10 @@ class SECFundamentalsProvider:
         )
 
     def _get_json(self, url: str) -> dict[str, Any]:
+        if not self.user_agent:
+            raise RuntimeError(
+                "Complete SEC Contact Setup in Settings, or Set SEC_USER_AGENT to your application/organization and contact email before using SEC EDGAR."
+            )
         try:
             _wait_for_sec_request_slot(self.minimum_request_interval)
             response = requests.get(

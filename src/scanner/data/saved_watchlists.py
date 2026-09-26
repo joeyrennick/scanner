@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 import json
 from pathlib import Path
+from scanner.data.ownership import acquire_database, connect
 import sqlite3
 from typing import Any
 
@@ -31,6 +32,7 @@ class SQLiteSavedWatchlistStore:
 
     def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path)
+        self._ownership = acquire_database(self.db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_schema()
 
@@ -254,7 +256,7 @@ class SQLiteSavedWatchlistStore:
             )
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.db_path, timeout=30)
+        connection = connect(self.db_path, timeout=30, kind="business")
         connection.execute("PRAGMA busy_timeout = 30000")
         connection.execute("PRAGMA foreign_keys = ON")
         return connection

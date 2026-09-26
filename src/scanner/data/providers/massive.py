@@ -24,7 +24,7 @@ class MassiveMarketDataProvider(MarketDataProvider):
             api_key
             or os.environ.get("MASSIVE_API_KEY")
             or os.environ.get("POLYGON_API_KEY")
-            or SQLiteSecretStore(settings.market_data_cache_path).get_secret(
+            or SQLiteSecretStore(settings.credential_database_path).get_secret(
                 MASSIVE_API_KEY_SECRET
             )
         )

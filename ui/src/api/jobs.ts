@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiClient } from './client';
+import { useApplicationApi } from '../platform/PlatformProvider';
 import { queryKeys } from './queryKeys';
 import type { JobResponse } from './types';
 
 export function useJob(jobId: string | null) {
+  const apiClient = useApplicationApi();
   return useQuery({
     queryKey: queryKeys.job(jobId),
     enabled: Boolean(jobId),
@@ -16,6 +17,7 @@ export function useJob(jobId: string | null) {
 }
 
 export function useCancelJob() {
+  const apiClient = useApplicationApi();
   const queryClient = useQueryClient();
 
   return useMutation({

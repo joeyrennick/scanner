@@ -456,7 +456,7 @@ class ScanService:
         config: ScanConfig,
     ) -> int:
         return SQLiteScannerResultStore(
-            self.context.settings.market_data_cache_path
+            self.context.settings.business_database_path
         ).save_scan_results(
             dataframe,
             universe=config.universe,

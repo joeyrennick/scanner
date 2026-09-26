@@ -7,6 +7,9 @@ from threading import Lock
 from typing import Any, Callable
 from uuid import uuid4
 
+from scanner.config.paths import ApplicationPaths
+from scanner.data.ownership import OwnershipLease, acquire_root
+
 
 JobStatus = str
 ProgressUpdater = Callable[..., None]
@@ -104,12 +107,13 @@ class JobRegistry:
         job_type: str,
         work: Callable[[ProgressUpdater, CancelChecker], dict[str, Any]],
     ) -> JobRecord:
+        ownership = acquire_root(ApplicationPaths.resolve().root)
         job = JobRecord(job_id=str(uuid4()), job_type=job_type)
 
         with self._lock:
             self._jobs[job.job_id] = job
 
-        self._executor.submit(self._run, job.job_id, work)
+        self._executor.submit(self._run, job.job_id, work, ownership)
         return job
 
     def get(self, job_id: str) -> JobRecord | None:
@@ -133,6 +137,7 @@ class JobRegistry:
         self,
         job_id: str,
         work: Callable[[ProgressUpdater, CancelChecker], dict[str, Any]],
+        _ownership: OwnershipLease,
     ) -> None:
         self._update(
             job_id,

@@ -24,6 +24,7 @@ import { clampScannerColumnWidth } from '../../lib/scannerColumns';
 import { rememberRecentTicker } from '../../lib/recentTicker';
 import { MultiSelectFilter } from '../../components/MultiSelectFilter';
 import { useGenerateSavedWatchlistReport } from '../../api/reports';
+import { usePlatform } from '../../platform/PlatformProvider';
 
 type WatchlistColumnKey =
   | 'select'
@@ -153,6 +154,9 @@ export function WatchlistsPage() {
   const addItem = useAddSavedWatchlistItem();
   const removeItem = useRemoveSavedWatchlistItem();
   const exportPdf = useGenerateSavedWatchlistReport();
+  const { files } = usePlatform();
+  const [downloadError, setDownloadError] = useState<Error | null>(null);
+  const [downloading, setDownloading] = useState(false);
   const [state, setState] = useState(loadWatchlistPageState);
   const [newListName, setNewListName] = useState('');
   const [tickerDraft, setTickerDraft] = useState('');
@@ -208,7 +212,7 @@ export function WatchlistsPage() {
   const selectedSet = new Set(state.selectedTickers);
   const activeRow = displayRows.find((row) => row.candidate.ticker === state.activeTicker) ?? null;
   const mutationError =
-    createList.error ?? renameList.error ?? deleteList.error ?? addItem.error ?? removeItem.error ?? exportPdf.error;
+    createList.error ?? renameList.error ?? deleteList.error ?? addItem.error ?? removeItem.error ?? exportPdf.error ?? downloadError;
   const busy =
     createList.isPending ||
     renameList.isPending ||
@@ -218,8 +222,14 @@ export function WatchlistsPage() {
 
   async function exportCurrentWatchlist() {
     if (activeWatchlistId === null) return;
-    const response = await exportPdf.mutateAsync(activeWatchlistId);
-    window.location.assign(`/api/reports/${response.report.id}/download`);
+    setDownloading(true);
+    setDownloadError(null);
+    try {
+      const response = await exportPdf.mutateAsync(activeWatchlistId);
+      await files.downloadReport(response.report.id);
+    } catch (error) {
+      setDownloadError(error instanceof Error ? error : new Error('PDF download failed. The generated report remains in Reports.'));
+    } finally { setDownloading(false); }
   }
 
   function updateState(changes: Partial<WatchlistPageState>) {
@@ -406,7 +416,7 @@ export function WatchlistsPage() {
           <button
             className="secondary-button"
             type="button"
-            disabled={!activeList || busy || exportPdf.isPending}
+            disabled={!activeList || busy || exportPdf.isPending || downloading}
             onClick={() => void exportCurrentWatchlist()}
           >
             <Download size={16} />

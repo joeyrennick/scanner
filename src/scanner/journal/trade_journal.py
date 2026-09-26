@@ -4,6 +4,8 @@ from pathlib import Path
 from uuid import uuid4
 
 import pandas as pd
+from scanner.config.paths import ApplicationPaths
+from scanner.data.ownership import acquire_database
 
 
 class TradeJournal:
@@ -23,8 +25,9 @@ class TradeJournal:
         "Exit Notes",
     ]
 
-    def __init__(self, journal_path: str = "output/trade_journal.csv"):
-        self.journal_path = Path(journal_path)
+    def __init__(self, journal_path: str | None = None):
+        self.journal_path = Path(journal_path) if journal_path else ApplicationPaths.resolve().journal
+        self._ownership = acquire_database(self.journal_path)
         self.trades = self._load_trades()
 
     def add_trade(

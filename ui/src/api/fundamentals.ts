@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { apiClient } from './client';
+import { useApplicationApi } from '../platform/PlatformProvider';
 import { queryKeys } from './queryKeys';
 import type {
   FundamentalAnalysis,
@@ -9,6 +9,7 @@ import type {
 } from './types';
 
 export function useAnalyzeFundamentals() {
+  const apiClient = useApplicationApi();
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ ticker, assumptions, runId }: { ticker: string; assumptions: Record<string, number>; runId: number | null }) =>
@@ -26,6 +27,7 @@ export function useAnalyzeFundamentals() {
 }
 
 export function useGenerateFundamentalReport() {
+  const apiClient = useApplicationApi();
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({
@@ -48,6 +50,7 @@ export function useGenerateFundamentalReport() {
 }
 
 export function useClassifyWatchlistRisk() {
+  const apiClient = useApplicationApi();
   return useMutation({
     mutationFn: (request: WatchlistRiskClassificationRequest) =>
       apiClient.request<JobResponse>('/api/watchlist/classify-risk', {
